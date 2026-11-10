@@ -1,5 +1,6 @@
 // Studio: everything beyond the everyday surfaces. Sidebar shell plus Trusted and Apps.
 // Logs and Advanced live in studio-more.js.
+import * as projects from './projects.js';
 import { invoke } from './api.js';
 import { $, $$, esc, on, patch, errText, fmtBytes, fmtCount, cleanHost } from './util.js';
 import { icon, appTile } from './icons.js';
@@ -98,7 +99,7 @@ const trusted = {
 
 const apps = {
   busy: new Map(), errors: new Map(),
-  show() { this.render(); },
+  show() { this.render(); for (const a of ctx.status().apps) if (a.kind === 'agent' && a.canStart) projects.load(a.id); },
   onStatus() { this.render(); },
   onEvent() {},
 
@@ -142,6 +143,7 @@ const apps = {
         <label class="ap-protect"><span>Protected</span><span class="switch green"><input type="checkbox" role="switch" data-protect data-key="p-${esc(a.id)}" aria-label="Protect ${esc(a.name)}"${a.protected ? ' checked' : ''}${a.installed ? '' : ' disabled'}><i></i></span></label></div>
       <div class="ap-row">${controls}</div>
       ${a.workspace ? `<div class="ap-meta">Works only inside <span class="mono sel">${esc(a.workspace)}</span></div>` : ''}
+      ${a.kind === 'agent' && a.canStart ? projects.section(a) : ''}
       ${err ? `<div class="notice error" role="alert">${icon('alert')}<span>${esc(err)}</span></div>` : ''}
       <div class="ap-meta num">Today: ${fmtCount(t.allowed)} allowed · ${fmtCount(t.blocked)} blocked · ${esc(fmtBytes(t.bytesOut))} sent</div>
     </section>`;
@@ -175,8 +177,10 @@ export function init(el, context) {
     else if (what === 'app-stop') apps.run(appId, 'app_stop', {}, true);
     else if (what === 'app-terminal') apps.run(appId, 'app_open_terminal');
     else if (what === 'app-workspace') apps.run(appId, 'app_open_workspace');
+    else if (what.startsWith('proj-')) { const it = b.closest('.pj-item'); projects.act(what, appId, it && it.dataset.project); }
     else if (VIEWS[pane].act) VIEWS[pane].act(what, b);
   });
+  projects.init(() => { if (visible && pane === 'apps') apps.render(); });
   [logs, advanced].forEach((v) => v.init({ ctx, isShown: (name) => visible && pane === name, body: () => body }));
 }
 

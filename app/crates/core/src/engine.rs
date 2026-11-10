@@ -10,6 +10,7 @@ use crate::feed::{FeedIndex, Row};
 use crate::fence::{self, Health};
 use crate::fields;
 use crate::hostname;
+use crate::projects;
 use crate::ledger::{self, Ledger};
 use crate::model::*;
 use crate::{now_iso, parse_iso, paths};
@@ -23,7 +24,11 @@ use tokio::sync::{broadcast, watch, Notify};
 pub const ASK_TIMEOUT: Duration = Duration::from_secs(30);
 const ONCE_GRANT: Duration = Duration::from_secs(5 * 60);
 const QUIET_AFTER_NO: Duration = Duration::from_secs(10 * 60);
+const DEFAULT_WATCH_MINUTES: u64 = 60;
+const MAX_WATCH_MINUTES: u64 = 7 * 24 * 60;
 const REPEAT_WINDOW: Duration = Duration::from_secs(60);
+/// Attempts to go around the gate tend to come in bursts on every start; fold them for longer.
+const AROUND_WINDOW: Duration = Duration::from_secs(600);
 const BLOCKED_INDICATOR: Duration = Duration::from_secs(60);
 
 #[derive(Clone, Debug, Serialize)]
@@ -67,6 +72,10 @@ struct Inner {
     recent_denies: Mutex<HashMap<String, (Instant, u64)>>,
     /// Serialises refusals so two identical ones arriving together are counted on one row.
     deny_order: Mutex<()>,
+    /// Repeats counted on a row in memory but not yet written down (row id -> how many).
+    unsaved_repeats: Mutex<HashMap<u64, u64>>,
+    /// Flipped at shutdown so background helpers (the system-log follower) stop too.
+    stop: watch::Sender<bool>,
     health: Mutex<HashMap<String, Health>>,
     running: Mutex<HashSet<String>>,
     listen_errors: Mutex<Vec<String>>,
@@ -109,6 +118,8 @@ impl Engine {
             quiet: Mutex::new(HashMap::new()),
             recent_denies: Mutex::new(HashMap::new()),
             deny_order: Mutex::new(()),
+            unsaved_repeats: Mutex::new(HashMap::new()),
+            stop: watch::channel(false).0,
             health: Mutex::new(HashMap::new()),
             running: Mutex::new(HashSet::new()),
             listen_errors: Mutex::new(Vec::new()),
@@ -139,16 +150,59 @@ impl Engine {
         let e = engine.clone();
         tokio::spawn(async move {
             let mut last = String::new();
+            let mut flushed = Instant::now();
             loop {
                 tokio::select! {
                     _ = e.0.dirty.notified() => { tokio::time::sleep(Duration::from_millis(150)).await; }
                     _ = tokio::time::sleep(Duration::from_secs(5)) => {}
+                }
+                e.watch_tick();
+                if flushed.elapsed() >= Duration::from_secs(60) {
+                    flushed = Instant::now();
+                    e.flush_repeats();
                 }
                 let s = e.status();
                 let ser = serde_json::to_string(&s).unwrap_or_default();
                 if ser != last {
                     last = ser;
                     let _ = e.0.tx.send(Event::Status(s));
+                }
+            }
+        });
+
+        // Attempts that go around the gate: the fence refuses them, the system log records the
+        // refusal, and this brings it into the Feed. If the log cannot be followed (it needs an
+        // administrator account) the fence still holds; the attempts are just not shown.
+        let e = engine.clone();
+        tokio::spawn(async move {
+            use tokio::io::AsyncBufReadExt;
+            let mut stop = e.0.stop.subscribe();
+            loop {
+                if let Ok(mut child) = crate::fence::violation_stream() {
+                    if let Some(out) = child.stdout.take() {
+                        let mut lines = tokio::io::BufReader::new(out).lines();
+                        loop {
+                            tokio::select! {
+                                line = lines.next_line() => match line {
+                                    Ok(Some(line)) => {
+                                        if let Some(v) = crate::fence::violation_in(&line) {
+                                            e.record_around(&v);
+                                        }
+                                    }
+                                    _ => break,
+                                },
+                                _ = stop.changed() => {
+                                    let _ = child.kill().await;
+                                    return;
+                                }
+                            }
+                        }
+                    }
+                    let _ = child.kill().await;
+                }
+                tokio::select! {
+                    _ = tokio::time::sleep(Duration::from_secs(300)) => {}
+                    _ = stop.changed() => return,
                 }
             }
         });
@@ -293,13 +347,15 @@ impl Engine {
         *self.0.last_blocked.lock().unwrap() = Some(Instant::now());
         let _in_order = self.0.deny_order.lock().unwrap();
         let k = format!("{app_id}|{host}|{port}|{}|{detail}|{other}", reason.as_str());
+        let window = if reason == Reason::AroundGate { AROUND_WINDOW } else { REPEAT_WINDOW };
         let repeat_of = {
             let mut recent = self.0.recent_denies.lock().unwrap();
-            recent.retain(|_, (t, _)| t.elapsed() < REPEAT_WINDOW);
-            recent.get(&k).map(|(_, id)| *id)
+            recent.retain(|_, (t, _)| t.elapsed() < AROUND_WINDOW);
+            recent.get(&k).filter(|(t, _)| t.elapsed() < window).map(|(_, id)| *id)
         };
         if let Some(id) = repeat_of {
             if self.0.feed.lock().unwrap().add_repeat(id) {
+                *self.0.unsaved_repeats.lock().unwrap().entry(id).or_default() += 1;
                 if let Some(ev) = self.feed_event(id) {
                     let _ = self.0.tx.send(Event::Feed(ev));
                 }
@@ -336,6 +392,32 @@ impl Engine {
             f.insert("unreachable".into(), json!(true));
         }
         self.append("end", f);
+    }
+
+    /// Write down the repeats counted since the last call, one record per row, so the counts
+    /// survive a restart without a record for every retry of an app that hammers once a second.
+    /// The Feed already shows them, so these records are not folded in again while running.
+    fn flush_repeats(&self) {
+        let pending: Vec<(u64, u64)> = self.0.unsaved_repeats.lock().unwrap().drain().collect();
+        if pending.is_empty() {
+            return;
+        }
+        let mut ledger = self.0.ledger.lock().unwrap();
+        for (id, count) in pending {
+            if let Err(e) = ledger.append("repeat", fields! { "of" => id, "count" => count }) {
+                eprintln!("sandbox-ai: could not write to the log: {e}");
+            }
+        }
+    }
+
+    /// The fence refused something that did not go through the gate. See `fence::parse_violation`.
+    pub fn record_around(&self, v: &crate::fence::Violation) {
+        if self.0.cfg.lock().unwrap().app(&v.app).is_none() {
+            return;
+        }
+        for _ in 0..v.count.min(20) {
+            self.record_deny_detail(&v.app, "", v.port, Reason::AroundGate, v.what, &v.process);
+        }
     }
 
     /// A name that passed the rules but points at this computer or the local network.
@@ -522,24 +604,118 @@ impl Engine {
     // Mode
     // -----------------------------------------------------------------------------------------
 
-    fn set_mode(&self, mode: Mode) {
+    /// Switch mode. `minutes` applies to Watch: how long until it switches itself back to
+    /// Private (0: until switched off; not given: an hour). Asking for Watch while it is already
+    /// on only moves the end time.
+    fn set_mode_for(&self, mode: Mode, minutes: Option<u64>, why: &str) {
+        let now = now_iso();
+        let until = match minutes.unwrap_or(DEFAULT_WATCH_MINUTES) {
+            0 => None,
+            m => Some((chrono::Utc::now() + chrono::Duration::minutes(m.min(MAX_WATCH_MINUTES) as i64)).to_rfc3339_opts(chrono::SecondsFormat::Millis, true)),
+        };
         let from = {
             let mut cfg = self.0.cfg.lock().unwrap();
             if cfg.mode == mode {
+                if mode == Mode::Watch && minutes.is_some() && cfg.watch_until != until {
+                    cfg.watch_until = until;
+                    drop(cfg);
+                    self.save_cfg();
+                    self.touch();
+                }
                 return;
             }
             let from = cfg.mode;
-            let now = now_iso();
+            if from == Mode::Watch {
+                cfg.watch_review = Some(crate::config::WatchWindow { since: cfg.mode_since.clone(), until: now.clone() });
+            }
             cfg.mode = mode;
             cfg.mode_since = now.clone();
             cfg.private_since = if mode == Mode::Private { Some(now) } else { None };
+            cfg.watch_until = if mode == Mode::Watch { until } else { None };
+            if mode == Mode::Watch {
+                cfg.watch_review = None;
+            }
             from
         };
+        // A Watch in which nothing new was contacted leaves nothing to review.
+        if from == Mode::Watch && self.watch_review().map(|r| r.items.is_empty()).unwrap_or(true) {
+            self.0.cfg.lock().unwrap().watch_review = None;
+        }
         self.save_cfg();
-        self.append("mode", fields! { "from" => from.as_str(), "to" => mode.as_str() });
+        self.append("mode", fields! { "from" => from.as_str(), "to" => mode.as_str(), "why" => why });
         if mode != Mode::Private {
             self.cancel_asks();
         }
+    }
+
+    /// Switch Watch back to Private once its time is up. Called on a slow tick.
+    fn watch_tick(&self) {
+        let due = {
+            let cfg = self.0.cfg.lock().unwrap();
+            cfg.mode == Mode::Watch && cfg.watch_until.as_deref().map(|u| u <= now_iso().as_str()).unwrap_or(false)
+        };
+        if due {
+            self.set_mode_for(Mode::Private, None, "watch ended");
+        }
+    }
+
+    /// Places contacted under Watch between two times that have no rule yet, busiest first.
+    fn watch_items(&self, since: &str, until: Option<&str>) -> Vec<WatchItem> {
+        let cfg = self.0.cfg.lock().unwrap().clone();
+        let mut found: Vec<WatchItem> = Vec::new();
+        let feed = self.0.feed.lock().unwrap();
+        for row in feed.rows().iter().rev().take_while(|r| r.ts.as_str() >= since) {
+            if row.reason != Reason::Watching || until.map(|u| row.ts.as_str() > u).unwrap_or(false) || !hostname::valid_pattern(&row.host) {
+                continue;
+            }
+            let Some(app) = cfg.app(&row.app) else { continue };
+            if app.rule_for(&row.host).is_some() {
+                continue;
+            }
+            match found.iter_mut().find(|i| i.app_id == row.app && i.host == row.host) {
+                Some(i) => {
+                    i.times += 1;
+                    i.bytes_out += row.bytes_out.unwrap_or(0);
+                }
+                None => {
+                    let (label, purpose) = catalog::describe(&row.host);
+                    found.push(WatchItem { app_id: row.app.clone(), app_name: app.name.clone(), app_icon: app.icon.clone(), host: row.host.clone(), label, purpose, times: 1, bytes_out: row.bytes_out.unwrap_or(0) });
+                }
+            }
+        }
+        found.sort_by(|a, b| a.app_name.cmp(&b.app_name).then(b.times.cmp(&a.times)).then(a.host.cmp(&b.host)));
+        found
+    }
+
+    /// What Watch has seen: so far while it is on, otherwise the finished Watch awaiting review.
+    pub fn watch_review(&self) -> Option<WatchReview> {
+        let (mode, since, until, review) = {
+            let cfg = self.0.cfg.lock().unwrap();
+            (cfg.mode, cfg.mode_since.clone(), cfg.watch_until.clone(), cfg.watch_review.clone())
+        };
+        if mode == Mode::Watch {
+            return Some(WatchReview { items: self.watch_items(&since, None), since, until, active: true });
+        }
+        let w = review?;
+        Some(WatchReview { items: self.watch_items(&w.since, Some(&w.until)), since: w.since, until: Some(w.until), active: false })
+    }
+
+    /// Trust the chosen places and put the review away. Places left out stay undecided, so the
+    /// app asks about them the first time they come up again.
+    fn finish_watch_review(&self, trust: &[(String, String)]) -> Result<(), String> {
+        let offered = self.watch_review().filter(|r| !r.active).map(|r| r.items).unwrap_or_default();
+        for (app, host) in trust {
+            if !offered.iter().any(|i| &i.app_id == app && &i.host == host) {
+                return Err(format!("{host} was not among the places seen."));
+            }
+        }
+        for (app, host) in trust {
+            self.set_trust_inner(app, host, true, "watch")?;
+        }
+        self.0.cfg.lock().unwrap().watch_review = None;
+        self.save_cfg();
+        self.touch();
+        Ok(())
     }
 
     fn set_lockdown(&self, on: bool) {
@@ -593,12 +769,24 @@ impl Engine {
                 _ => "This was not an ordinary destination name, so it was blocked.".into(),
             },
             Reason::LocalAddress => "This name points at your own computer or network, so it was blocked.".into(),
+            Reason::AroundGate => {
+                let who = if row.other.is_empty() { "A program" } else { row.other.as_str() };
+                let tried = match row.detail.as_str() {
+                    "direct" => format!("tried to connect straight to the internet on port {}, without going through the gate", row.port),
+                    "lookup" => "tried to look up a name by itself instead of going through the gate".to_string(),
+                    "listen" => "tried to accept connections from other computers".to_string(),
+                    "gate" => "tried to use another app's gate".to_string(),
+                    _ => "tried a kind of network access that protected apps do not get".to_string(),
+                };
+                format!("{who}, started by {app_name}, {tried}. The fence refused it, so nothing left this computer.")
+            }
         };
         if row.unreachable {
             s.push_str(" The destination did not answer.");
         }
         if row.repeats > 0 {
-            s.push_str(&format!(" Tried {} more time{} within a minute.", row.repeats, if row.repeats == 1 { "" } else { "s" }));
+            let within = if row.reason == Reason::AroundGate { "over the next ten minutes" } else { "within a minute" };
+            s.push_str(&format!(" Tried {} more time{} {within}.", row.repeats, if row.repeats == 1 { "" } else { "s" }));
         }
         s
     }
@@ -606,7 +794,18 @@ impl Engine {
     fn to_event(row: &Row, cfg: &Config) -> FeedEvent {
         let app = cfg.app(&row.app);
         let app_name = app.map(|a| a.name.clone()).unwrap_or_else(|| row.app.clone());
-        let (label, purpose) = catalog::describe(&row.host);
+        let (label, purpose) = if row.reason == Reason::AroundGate {
+            let label = match row.detail.as_str() {
+                "direct" => "Direct connection",
+                "lookup" => "Name lookup",
+                "listen" => "Incoming connections",
+                "gate" => "Another app's gate",
+                _ => "Network access",
+            };
+            (label.to_string(), "Went around the gate".to_string())
+        } else {
+            catalog::describe(&row.host)
+        };
         let trusted = app.and_then(|a| a.rule_for(&row.host)).map(|r| r.enabled).unwrap_or(false);
         FeedEvent {
             id: row.id,
@@ -766,6 +965,11 @@ impl Engine {
             }
         };
 
+        let review = self.watch_review();
+        let places = review.as_ref().map(|r| r.items.len() as u64).unwrap_or(0);
+        let watch = review.as_ref().filter(|r| r.active).map(|r| WatchStatus { since: r.since.clone(), until: r.until.clone(), places });
+        let watch_review = review.as_ref().filter(|r| !r.active && places > 0).map(|r| WatchStatus { since: r.since.clone(), until: r.until.clone(), places });
+
         Status {
             version: crate::VERSION.to_string(),
             mode: cfg.mode,
@@ -780,6 +984,8 @@ impl Engine {
             today,
             apps,
             pending,
+            watch,
+            watch_review,
         }
     }
 
@@ -884,6 +1090,16 @@ impl Engine {
         Ok(path.to_string_lossy().into_owned())
     }
 
+    /// The whole log, exactly as written, with one signed line in front saying what it is.
+    /// `sai verify <file>` (or anyone's own code) can check it without this computer.
+    fn export_log(&self) -> Result<String, String> {
+        let name = format!("Sandbox-ai log {}.jsonl", chrono::Local::now().format("%Y-%m-%d %H.%M"));
+        let path = paths::downloads_dir().join(name);
+        let out = self.0.ledger.lock().unwrap().export().map_err(|e| format!("The log could not be read: {e}"))?;
+        std::fs::write(&path, out).map_err(|e| format!("The log could not be saved: {e}"))?;
+        Ok(path.to_string_lossy().into_owned())
+    }
+
     // -----------------------------------------------------------------------------------------
     // Fence and apps
     // -----------------------------------------------------------------------------------------
@@ -957,6 +1173,10 @@ impl Engine {
         for id in running {
             let _ = self.app_stop(&id).await;
         }
+        self.flush_repeats();
+        let _ = self.0.stop.send(true);
+        // Give the helpers a moment to stop what they started before the process exits.
+        tokio::time::sleep(Duration::from_millis(150)).await;
     }
 
     // -----------------------------------------------------------------------------------------
@@ -972,7 +1192,17 @@ impl Engine {
             "get_status" => ok(&self.status()),
             "set_mode" => {
                 let mode = Mode::parse(&req("mode")?).ok_or("Unknown mode.")?;
-                self.set_mode(mode);
+                self.set_mode_for(mode, args.get("minutes").and_then(Value::as_u64), "you");
+                ok(&self.status())
+            }
+            "get_watch_review" => ok(&self.watch_review()),
+            "finish_watch_review" => {
+                let mut trust = Vec::new();
+                for t in args.get("trust").and_then(Value::as_array).into_iter().flatten() {
+                    let field = |k: &str| t.get(k).and_then(Value::as_str).map(str::to_string).ok_or("Each place needs an app and a name.");
+                    trust.push((field("appId")?, field("host")?));
+                }
+                self.finish_watch_review(&trust)?;
                 ok(&self.status())
             }
             "set_lockdown" => {
@@ -1022,6 +1252,14 @@ impl Engine {
             "export_proof" => {
                 let e = self.clone();
                 let path = tokio::task::spawn_blocking(move || e.export_proof()).await.map_err(|e| e.to_string())??;
+                if args.get("reveal").and_then(Value::as_bool).unwrap_or(true) {
+                    fence::reveal(&path, true).await;
+                }
+                Ok(json!({ "path": path }))
+            }
+            "export_log" => {
+                let e = self.clone();
+                let path = tokio::task::spawn_blocking(move || e.export_log()).await.map_err(|e| e.to_string())??;
                 if args.get("reveal").and_then(Value::as_bool).unwrap_or(true) {
                     fence::reveal(&path, true).await;
                 }
@@ -1087,8 +1325,72 @@ impl Engine {
             }
             "app_open_terminal" => {
                 let app = self.app_if_ready(&req("appId")?)?;
-                fence::open_terminal(&app).await?;
+                let dir = match s("project") {
+                    Some(name) => {
+                        app.projects.iter().find(|p| p.name == name).ok_or("Unknown project.")?;
+                        let d = projects::copy_dir(&app, &name).filter(|d| d.is_dir()).ok_or("That project's copy is missing.")?;
+                        Some(d.to_string_lossy().into_owned())
+                    }
+                    None => None,
+                };
+                fence::open_terminal(&app, dir.as_deref()).await?;
                 Ok(Value::Null)
+            }
+            // Projects: bring a folder in for an agent, review what it changed, apply it back.
+            "get_projects" => {
+                let cfg = self.0.cfg.lock().unwrap();
+                let app = cfg.app(&req("appId")?).ok_or("Unknown app.")?;
+                ok(&app.projects.iter().map(|p| projects::info(app, p)).collect::<Vec<_>>())
+            }
+            "project_import" => {
+                let app = self.app_if_ready(&req("appId")?)?;
+                let ws = app.workspace.clone().ok_or("This app does not work on folders.")?;
+                let source = projects::validate_source(&req("path")?, std::path::Path::new(&ws))?;
+                if app.projects.iter().any(|p| std::path::Path::new(&p.source) == source) {
+                    return Err("That folder has already been brought in. Remove its copy first to bring it in again.".into());
+                }
+                let (a, src) = (app.clone(), source.clone());
+                let project = tokio::task::spawn_blocking(move || projects::import(&a, &src)).await.map_err(|e| e.to_string())??;
+                {
+                    let mut cfg = self.0.cfg.lock().unwrap();
+                    cfg.app_mut(&app.id).ok_or("Unknown app.")?.projects.push(project.clone());
+                }
+                self.save_cfg();
+                self.append("project", fields! { "app" => app.id, "action" => "brought_in", "name" => project.name, "source" => project.source });
+                let cfg = self.0.cfg.lock().unwrap();
+                let app = cfg.app(&app.id).ok_or("Unknown app.")?;
+                ok(&projects::info(app, &project))
+            }
+            "project_changes" | "project_apply" | "project_remove" => {
+                let app = self.0.cfg.lock().unwrap().app(&req("appId")?).cloned().ok_or("Unknown app.")?;
+                let name = req("name")?;
+                let project = app.projects.iter().find(|p| p.name == name).cloned().ok_or("Unknown project.")?;
+                let copy = projects::copy_dir(&app, &name).ok_or("This app does not work on folders.")?;
+                let (base, source) = (projects::base_dir(&app.id, &name), std::path::PathBuf::from(&project.source));
+                match cmd {
+                    "project_changes" => {
+                        let set = tokio::task::spawn_blocking(move || projects::change_set(&copy, &base, &source)).await.map_err(|e| e.to_string())??;
+                        ok(&set)
+                    }
+                    "project_apply" => {
+                        let overwrite = args.get("overwrite").and_then(Value::as_bool).unwrap_or(false);
+                        let result = tokio::task::spawn_blocking(move || projects::apply(&copy, &base, &source, overwrite)).await.map_err(|e| e.to_string())??;
+                        self.append("project", fields! { "app" => app.id, "action" => "applied", "name" => name, "files" => result.applied, "left" => result.skipped.len() });
+                        ok(&result)
+                    }
+                    _ => {
+                        let a = app.clone();
+                        let n = name.clone();
+                        tokio::task::spawn_blocking(move || projects::remove(&a, &n)).await.map_err(|e| e.to_string())??;
+                        {
+                            let mut cfg = self.0.cfg.lock().unwrap();
+                            cfg.app_mut(&app.id).ok_or("Unknown app.")?.projects.retain(|p| p.name != name);
+                        }
+                        self.save_cfg();
+                        self.append("project", fields! { "app" => app.id, "action" => "removed", "name" => name });
+                        Ok(Value::Null)
+                    }
+                }
             }
             "app_open_workspace" => {
                 let app = self.0.cfg.lock().unwrap().app(&req("appId")?).cloned().ok_or("Unknown app.")?;

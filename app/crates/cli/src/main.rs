@@ -21,9 +21,17 @@ const HELP: &str = "sai — Sandbox-ai command line
   sai untrust <app> <host>        block a destination for an app
   sai trusted [app]               list trusted and blocked destinations
   sai proof                       the proof statement
-  sai verify                      check the log has not been altered
+  sai verify [file]               check the log (or an exported log file) has not been altered
+  sai export-log                  save the whole signed log to Downloads
+  sai mode watch [minutes]        Watch for a while (default 60; 0 = until switched off)
+  sai watched                     places contacted under Watch that are not decided yet
   sai start|stop <app>            start or stop a protected model
-  sai terminal <app>              open a protected terminal for an agent
+  sai terminal <app> [project]    open a protected terminal for an agent, optionally in a project
+  sai project list <app>          projects brought in for an agent
+  sai project add <app> <folder>  bring a folder in: the agent works on a copy
+  sai project changes <app> <name>   what the agent changed in its copy
+  sai project apply <app> <name> [--replace-mine]   put those changes into your folder
+  sai project remove <app> <name>    delete the copy (your folder is not touched)
   sai run <app> -- <command...>   run a command protected, in this terminal
   sai open [feed|proof|studio|glance]   show a window of the running app
   sai check                       re-check protection now
@@ -55,7 +63,7 @@ fn print_event_line(e: &Value) {
         other => other,
     };
     let bytes = e.get("bytesOut").and_then(Value::as_u64).map(|b| format!("  {} out", human_bytes(b))).unwrap_or_default();
-    let label = if s(e, "label") == s(e, "host") { s(e, "host").to_string() } else { format!("{} ({})", s(e, "label"), s(e, "host")) };
+    let label = if s(e, "label") == s(e, "host") || s(e, "host").is_empty() { s(e, "label").to_string() } else { format!("{} ({})", s(e, "label"), s(e, "host")) };
     println!("{}  {}  {:<12} {}{}  — {}", s(e, "ts").get(11..19).unwrap_or(""), verb, s(e, "appName"), label, bytes, s(e, "explanation"));
 }
 
@@ -113,7 +121,12 @@ async fn main() {
                 std::process::exit(1);
             }
             eprintln!("sai daemon running. Ctrl-C to stop.");
-            let _ = tokio::signal::ctrl_c().await;
+            // Stop cleanly however we are asked to: Ctrl-C, or a plain kill, logout or shutdown.
+            let mut term = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()).expect("signal handler");
+            tokio::select! {
+                _ = tokio::signal::ctrl_c() => {}
+                _ = term.recv() => {}
+            }
             engine.shutdown().await;
             let _ = std::fs::remove_file(sai_core::paths::control_socket());
         }
@@ -146,7 +159,20 @@ async fn main() {
                 std::process::exit(1);
             }
         }
-        "mode" => print_status(&call("set_mode", json!({ "mode": a(1) })).await),
+        "mode" => {
+            let minutes = a(2).parse::<u64>().ok();
+            print_status(&call("set_mode", json!({ "mode": a(1), "minutes": minutes })).await)
+        }
+        "watched" => {
+            let r = call("get_watch_review", Value::Null).await;
+            let items = r["items"].as_array().cloned().unwrap_or_default();
+            if r.is_null() || items.is_empty() {
+                println!("Nothing new was contacted under Watch.");
+            }
+            for i in &items {
+                println!("{:<12} {:<44} {} time(s), {} sent  {}", s(i, "appName"), s(i, "host"), i["times"], human_bytes(i["bytesOut"].as_u64().unwrap_or(0)), s(i, "purpose"));
+            }
+        }
         "lockdown" => print_status(&call("set_lockdown", json!({ "on": a(1) == "on" })).await),
         "asks" => {
             let st = call("get_status", Value::Null).await;
@@ -179,6 +205,24 @@ async fn main() {
             println!("private for: {}   blocked: {}   allowed: {}", s(&p, "streakText"), p["blockedTotal"], p["allowedTotal"]);
             println!("log key: {}", s(&p, "publicKey"));
         }
+        "verify" if !a(1).is_empty() => {
+            // A file exported with "Export": checked here, without the running app.
+            let (c, key) = sai_core::ledger::verify_export(std::path::Path::new(a(1)));
+            if let Some(k) = key {
+                println!("signed with key: {k}");
+            }
+            if c.ok {
+                println!("OK: {} records, chain intact, all signatures valid.", c.count);
+                println!("Compare the key above with the one on the Proof screen (or `sai proof`) to know whose log this is.");
+            } else {
+                println!("FAILED after {} records: {}", c.count, c.error.unwrap_or_default());
+                std::process::exit(2);
+            }
+        }
+        "export-log" => {
+            let r = call("export_log", json!({ "reveal": false })).await;
+            println!("{}", s(&r, "path"));
+        }
         "verify" => {
             let c = call("verify_chain", Value::Null).await;
             if c["ok"].as_bool() == Some(true) {
@@ -191,8 +235,43 @@ async fn main() {
         "start" => print_status(&call("app_start", json!({ "appId": a(1) })).await),
         "stop" => print_status(&call("app_stop", json!({ "appId": a(1) })).await),
         "terminal" => {
-            call("app_open_terminal", json!({ "appId": a(1) })).await;
+            let project = if a(2).is_empty() { Value::Null } else { json!(a(2)) };
+            call("app_open_terminal", json!({ "appId": a(1), "project": project })).await;
         }
+        "project" => match a(1) {
+            "list" | "" => {
+                let app = if a(2).is_empty() { "claude-code" } else { a(2) };
+                let list = call("get_projects", json!({ "appId": app })).await;
+                let list = list.as_array().cloned().unwrap_or_default();
+                if list.is_empty() {
+                    println!("No projects brought in for {app}.");
+                }
+                for p in &list {
+                    println!("{:<24} from {}\n{:<24} copy {}", s(p, "name"), s(p, "source"), "", s(p, "copy"));
+                }
+            }
+            "add" => {
+                let folder = std::fs::canonicalize(a(3)).map(|p| p.to_string_lossy().into_owned()).unwrap_or_else(|_| a(3).to_string());
+                let p = call("project_import", json!({ "appId": a(2), "path": folder })).await;
+                println!("Brought in as \"{}\". The agent works in {}", s(&p, "name"), s(&p, "copy"));
+            }
+            "changes" => print_changes(&call("project_changes", json!({ "appId": a(2), "name": a(3) })).await),
+            "apply" => {
+                let r = call("project_apply", json!({ "appId": a(2), "name": a(3), "overwrite": args.iter().any(|x| x == "--replace-mine") })).await;
+                println!("{} applied to your folder.", r["applied"]);
+                for path in r["skipped"].as_array().into_iter().flatten() {
+                    println!("  left alone (you changed it too): {}", path.as_str().unwrap_or(""));
+                }
+            }
+            "remove" => {
+                call("project_remove", json!({ "appId": a(2), "name": a(3) })).await;
+                println!("Copy removed. Your own folder was not touched.");
+            }
+            other => {
+                eprintln!("Unknown project command: {other}\n\n{HELP}");
+                std::process::exit(1);
+            }
+        },
         "open" => {
             let (window, tab) = match a(1) {
                 "glance" => ("glance", None),
@@ -238,6 +317,23 @@ async fn main() {
             std::process::exit(1);
         }
     }
+}
+
+fn print_changes(set: &Value) {
+    let total = set["total"].as_u64().unwrap_or(0);
+    if total == 0 {
+        println!("No changes waiting.");
+        return;
+    }
+    for c in set["items"].as_array().into_iter().flatten() {
+        let link = c.get("link").and_then(Value::as_str).map(|l| format!("  -> {l}")).unwrap_or_default();
+        let conflict = if c["conflict"].as_bool() == Some(true) { "  (you changed this too)" } else { "" };
+        println!("{:<9} {}{}{}", s(c, "kind"), s(c, "path"), link, conflict);
+    }
+    if set["truncated"].as_bool() == Some(true) {
+        println!("… showing the first {} of {total}", set["items"].as_array().map(Vec::len).unwrap_or(0));
+    }
+    println!("{total} waiting, {} also changed by you", set["conflicts"]);
 }
 
 fn print_trust(list: &Value) {

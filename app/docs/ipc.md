@@ -37,6 +37,8 @@ interface Status {
   today: Counters;
   apps: AppStatus[];
   pending: Ask[];               // unanswered prompts, oldest first
+  watch: WatchStatus | null;        // present while Watch is on
+  watchReview: WatchStatus | null;  // a finished Watch has places waiting to be reviewed
 }
 
 interface AppStatus {
@@ -66,7 +68,9 @@ type Reason =
   | "protection_off"     // mode off: allowed and recorded
   | "lockdown"           // panic button active
   | "malformed"          // not a valid destination name (raw IP address, odd characters)
-  | "local_address";     // name resolves to this computer or the local network
+  | "local_address"      // name resolves to this computer or the local network
+  | "around_gate";       // did not go through the gate; refused by the fence. host is "" and
+                         // label says what was tried ("Direct connection", "Name lookup", …)
 
 interface FeedEvent {
   id: number;                   // stable id (ledger sequence number)
@@ -108,6 +112,38 @@ interface TrustEntry {
 
 interface ChainCheck { ok: boolean; count: number; checkedAt: string; error: string | null; }
 
+// Watch: on (Status.watch) or finished and waiting for a review (Status.watchReview).
+interface WatchStatus {
+  since: string;
+  until: string | null;         // while on: when it switches itself back to Private (null: no timer).
+                                // for a review: when it ended
+  places: number;               // places contacted that are neither trusted nor blocked yet
+}
+interface WatchItem {
+  appId: string; appName: string; appIcon: string;
+  host: string; label: string; purpose: string;
+  times: number; bytesOut: number;
+}
+interface WatchReview { since: string; until: string | null; active: boolean; items: WatchItem[]; }
+
+// Projects: a folder brought in for an agent. The agent works on a copy inside its workspace;
+// the original changes only on project_apply.
+interface ProjectInfo {
+  name: string;                 // folder name inside the workspace
+  source: string;               // the user's original folder
+  copy: string;                 // where the agent works
+  importedAt: string;
+  sourceExists: boolean; copyExists: boolean;
+}
+interface Change {
+  path: string;                 // relative to the project
+  kind: "added" | "modified" | "deleted";
+  conflict: boolean;            // the user changed the same path since bringing the project in
+  link: string | null;          // for a symbolic link: where it points
+}
+interface ChangeSet { total: number; conflicts: number; items: Change[]; truncated: boolean; }  // items capped at 500
+interface ApplyResult { applied: number; skipped: string[]; }   // skipped: conflicting paths left alone
+
 interface Proof {
   mode: Mode;
   privateSince: string | null;
@@ -134,7 +170,9 @@ interface SetupResult { ok: boolean; message: string; }
 | Command | Args | Returns | Notes |
 |---|---|---|---|
 | `get_status` | — | `Status` | |
-| `set_mode` | `{ mode }` | `Status` | switching away from Private ends the streak |
+| `set_mode` | `{ mode, minutes?: number }` | `Status` | switching away from Private ends the streak. `minutes` is for Watch: how long until it returns to Private by itself (default 60, 0 = until switched off); sending it while Watch is on moves the end time |
+| `get_watch_review` | — | `WatchReview \| null` | what Watch has seen so far (active), or the finished Watch waiting for review |
+| `finish_watch_review` | `{ trust: { appId, host }[] }` | `Status` | trusts the chosen places (only ones that were offered) and puts the review away; the rest stay undecided |
 | `set_lockdown` | `{ on }` | `Status` | panic button |
 | `get_feed` | `{ limit?: number, beforeId?: number, appId?: string, verb?: Verb }` | `FeedEvent[]` | newest first, default limit 200 |
 | `decide` | `{ askId, choice: "once" \| "always" \| "block" }` | `null` | answers a prompt |
@@ -144,6 +182,7 @@ interface SetupResult { ok: boolean; message: string; }
 | `get_proof` | — | `Proof` | |
 | `verify_chain` | — | `ChainCheck` | may take a moment on a large log |
 | `export_proof` | — | `{ path: string }` | writes a signed proof file to Downloads and reveals it |
+| `export_log` | `{ reveal?: boolean }` | `{ path: string }` | writes the whole log to Downloads: one signed header line, then every record as written. `sai verify <file>` checks it without the app |
 | `get_receipts` | `{ limit?: number }` | `string[]` | raw log lines, newest last (Studio → Logs) |
 | `get_policy_text` | — | `string` | raw settings as pretty JSON (Studio → Advanced, read-only) |
 | `run_setup` | — | `SetupResult` | one-time setup; the OS asks for the admin password |
@@ -152,7 +191,13 @@ interface SetupResult { ok: boolean; message: string; }
 | `app_set_protected` | `{ appId, protected }` | `Status` | |
 | `app_start` | `{ appId }` | `Status` | model apps: start the protected instance |
 | `app_stop` | `{ appId }` | `Status` | |
-| `app_open_terminal` | `{ appId }` | `null` | agents: open a protected terminal in the workspace |
+| `app_open_terminal` | `{ appId, project?: string }` | `null` | agents: open a protected terminal in the workspace, or in a project's copy |
+| `get_projects` | `{ appId }` | `ProjectInfo[]` | |
+| `project_import` | `{ appId, path }` | `ProjectInfo` | copies the folder into the workspace (instant, copy-on-write) and keeps a private baseline to compare against |
+| `project_changes` | `{ appId, name }` | `ChangeSet` | what differs between the agent's copy and the baseline; `.git` is never compared |
+| `project_apply` | `{ appId, name, overwrite?: boolean }` | `ApplyResult` | writes the changes into the original folder as the user. Conflicts are skipped unless `overwrite` |
+| `project_remove` | `{ appId, name }` | `null` | deletes the copy and baseline; the original is not touched |
+| `pick_folder` | — | `string \| null` | shell only: the system folder chooser; null when cancelled |
 | `app_open_workspace` | `{ appId }` | `null` | reveal the workspace folder |
 | `open_main` | `{ tab?: "feed" \| "proof" \| "studio" }` | `null` | show and focus the main window |
 | `hide_window` | — | `null` | hides the calling window (Glance, prompt) |

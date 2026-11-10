@@ -165,6 +165,26 @@ impl Ledger {
     }
 
     /// Sign arbitrary bytes with the ledger key (proof exports).
+    /// The whole log exactly as written, with one signed line in front saying what it is.
+    /// See [`verify_export`]. Takes `&self`, so nothing can be appended while it is read.
+    pub fn export(&self) -> std::io::Result<Vec<u8>> {
+        let (count, head) = self.head();
+        let mut header = serde_json::json!({
+            "format": EXPORT_FORMAT,
+            "exportedAt": crate::now_iso(),
+            "publicKey": self.public_key_b64(),
+            "records": count,
+            "head": head,
+            "howToCheck": "Each following line is one record. hash = SHA-256 of the record's canonical JSON (sorted keys, no spaces) without hash and sig; prev = the hash of the record before; sig = Ed25519 over the hash bytes, made with publicKey. This line is signed the same way over its canonical JSON without sig.",
+        });
+        let sig = self.sign(canonical(&header).as_bytes());
+        header["sig"] = Value::String(sig);
+        let mut out = serde_json::to_vec(&header).unwrap_or_default();
+        out.push(b'\n');
+        out.extend(std::fs::read(self.path())?);
+        Ok(out)
+    }
+
     pub fn sign(&self, bytes: &[u8]) -> String {
         b64().encode(self.key.sign(bytes).to_bytes())
     }
@@ -191,12 +211,52 @@ pub fn verify(path: &Path, public_key_b64: &str) -> ChainCheck {
         Ok(f) => f,
         Err(_) => return ChainCheck { ok: true, count: 0, checked_at, error: None },
     };
+    verify_lines(BufReader::new(f), &vk, 0, checked_at)
+}
 
+/// The first line of an exported log: says what the file is and carries the key to check it with.
+pub const EXPORT_FORMAT: &str = "sandboxai-log-v1";
+
+/// Check a log exported with "Export" (a header line, then the records exactly as written).
+/// The key is read from the file itself, so a pass means "unchanged since it was signed by the
+/// holder of this key"; compare the key with the one on the Proof screen to know whose it is.
+pub fn verify_export(path: &Path) -> (ChainCheck, Option<String>) {
+    let checked_at = crate::now_iso();
+    let fail = |msg: &str| (ChainCheck { ok: false, count: 0, checked_at: checked_at.clone(), error: Some(msg.to_string()) }, None);
+    let Ok(f) = File::open(path) else { return fail("The file could not be opened.") };
+    let mut reader = BufReader::new(f);
+    let mut first = String::new();
+    if reader.read_line(&mut first).is_err() {
+        return fail("The file could not be read.");
+    }
+    let header: Value = serde_json::from_str(first.trim()).unwrap_or(Value::Null);
+    if header.get("format").and_then(Value::as_str) != Some(EXPORT_FORMAT) {
+        return fail("This is not a Sandbox-ai log export.");
+    }
+    let Some(key) = header.get("publicKey").and_then(Value::as_str).map(str::to_string) else { return fail("The export does not say which key signed it.") };
+    let Some(vk) = b64().decode(&key).ok().and_then(|b| <[u8; 32]>::try_from(b).ok()).and_then(|k| VerifyingKey::from_bytes(&k).ok()) else { return fail("The public key is not valid.") };
+    // The header is signed too, so the record count it promises cannot be edited to hide a cut.
+    let mut unsigned = header.clone();
+    let sig = unsigned.as_object_mut().and_then(|o| o.remove("sig")).and_then(|v| v.as_str().map(str::to_string)).unwrap_or_default();
+    let header_ok = b64().decode(&sig).ok().and_then(|b| Signature::from_slice(&b).ok()).map(|sg| vk.verify(canonical(&unsigned).as_bytes(), &sg).is_ok()).unwrap_or(false);
+    if !header_ok {
+        return (ChainCheck { ok: false, count: 0, checked_at, error: Some("The first line of the export was changed after it was written.".into()) }, Some(key));
+    }
+    let mut check = verify_lines(reader, &vk, 1, checked_at);
+    if check.ok && header.get("records").and_then(Value::as_u64) != Some(check.count) {
+        check.ok = false;
+        check.error = Some(format!("The export says it holds {} records but {} were found: part of it is missing.", header["records"], check.count));
+    }
+    (check, Some(key))
+}
+
+fn verify_lines(reader: impl BufRead, vk: &VerifyingKey, line_offset: usize, checked_at: String) -> ChainCheck {
+    let fail = |count: u64, msg: String| ChainCheck { ok: false, count, checked_at: checked_at.clone(), error: Some(msg) };
     let mut prev = ZERO_HASH.to_string();
     let mut expected_seq = 1u64;
     let mut count = 0u64;
-    for (i, line) in BufReader::new(f).lines().enumerate() {
-        let n = i + 1;
+    for (i, line) in reader.lines().enumerate() {
+        let n = i + 1 + line_offset;
         let Ok(line) = line else { return fail(count, format!("Line {n} could not be read.")) };
         if line.trim().is_empty() {
             continue;
@@ -310,6 +370,54 @@ mod tests {
         l.append("conn", fields! { "host" => "c.example.com", "decision" => "deny" }).unwrap();
         let (p, k) = (l.path().to_path_buf(), l.public_key_b64());
         (dir, p, k)
+    }
+
+    fn exported(dir: &Path) -> PathBuf {
+        let (mut l, _) = open(dir);
+        for i in 0..3 {
+            l.append("conn", fields! { "host" => format!("h{i}.example.com") }).unwrap();
+        }
+        let out = dir.join("export.jsonl");
+        std::fs::write(&out, l.export().unwrap()).unwrap();
+        out
+    }
+
+    #[test]
+    fn an_exported_log_checks_out_on_its_own() {
+        let dir = tempfile::tempdir().unwrap();
+        let out = exported(dir.path());
+        let (check, key) = verify_export(&out);
+        assert!(check.ok, "{:?}", check.error);
+        assert_eq!(check.count, 3);
+        assert!(key.is_some());
+    }
+
+    #[test]
+    fn an_exported_log_that_was_cut_or_edited_fails() {
+        let dir = tempfile::tempdir().unwrap();
+        let out = exported(dir.path());
+        let original = std::fs::read_to_string(&out).unwrap();
+        let lines: Vec<&str> = original.lines().collect();
+
+        // The last record removed: every remaining record is still valid, but the count is not.
+        std::fs::write(&out, lines[..3].join("\n") + "\n").unwrap();
+        let (check, _) = verify_export(&out);
+        assert!(!check.ok && check.error.unwrap().contains("missing"));
+
+        // The same cut, with the header's count edited to match: the header's signature fails.
+        let header = lines[0].replace("\"records\":3", "\"records\":2");
+        assert_ne!(header, lines[0]);
+        std::fs::write(&out, format!("{header}\n{}\n{}\n", lines[1], lines[2])).unwrap();
+        let (check, _) = verify_export(&out);
+        assert!(!check.ok && check.error.unwrap().contains("first line"));
+
+        // A record edited.
+        std::fs::write(&out, original.replace("h1.example.com", "h9.example.com")).unwrap();
+        assert!(!verify_export(&out).0.ok);
+
+        // Not an export at all.
+        std::fs::write(&out, lines[1..].join("\n")).unwrap();
+        assert!(verify_export(&out).0.error.unwrap().contains("not a Sandbox-ai log export"));
     }
 
     #[test]

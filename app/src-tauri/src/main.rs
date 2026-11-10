@@ -47,8 +47,25 @@ async fn sai(app: AppHandle, window: WebviewWindow, shell: tauri::State<'_, Shel
             app.exit(0);
             Ok(Value::Null)
         }
+        "pick_folder" => tokio::task::spawn_blocking(pick_folder).await.map_err(|e| e.to_string())?,
         _ => shell.engine.dispatch(&cmd, args).await,
     }
+}
+
+/// The system's own folder chooser. Returns null when the user cancels.
+/// Uses the chooser built into macOS rather than a dialog library, to keep the app small.
+fn pick_folder() -> Result<Value, String> {
+    let out = std::process::Command::new("/usr/bin/osascript")
+        .args(["-e", "tell me to activate", "-e", "POSIX path of (choose folder with prompt \"Choose a project folder to bring in\")"])
+        .output()
+        .map_err(|e| format!("The folder chooser could not be opened: {e}"))?;
+    if !out.status.success() {
+        let err = String::from_utf8_lossy(&out.stderr);
+        // -128 is "user cancelled".
+        return if err.contains("-128") { Ok(Value::Null) } else { Err(format!("The folder chooser failed: {}", err.trim())) };
+    }
+    let path = String::from_utf8_lossy(&out.stdout).trim().trim_end_matches('/').to_string();
+    Ok(if path.is_empty() { Value::Null } else { Value::String(path) })
 }
 
 fn tray_icon(ind: Indicator) -> Image<'static> {
@@ -264,6 +281,21 @@ fn main() {
                 if let Err(e) = sai_core::control::serve(control_engine).await {
                     eprintln!("sandbox-ai: control socket: {e}");
                 }
+            });
+
+            // Asked to stop from outside (kill, logout, shutdown): stop protected apps we started
+            // and leave nothing behind, exactly as Quit does.
+            let stopping = handle.clone();
+            tauri::async_runtime::spawn(async move {
+                use tokio::signal::unix::{signal, SignalKind};
+                let (Ok(mut term), Ok(mut int), Ok(mut hup)) = (signal(SignalKind::terminate()), signal(SignalKind::interrupt()), signal(SignalKind::hangup())) else { return };
+                tokio::select! {
+                    _ = term.recv() => {}
+                    _ = int.recv() => {}
+                    _ = hup.recv() => {}
+                }
+                stopping.state::<Shell>().engine.shutdown().await;
+                stopping.exit(0);
             });
 
             // First run, or protection needs attention: open the main window so it is not missed.

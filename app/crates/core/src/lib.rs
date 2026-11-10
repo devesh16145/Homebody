@@ -9,6 +9,7 @@
 //! - [`ledger`]:   the append-only, hash-chained, signed record of every decision
 //! - [`proxy`]:    the local gate each protected app must go through
 //! - [`engine`]:   the state machine tying it together, and the command surface in docs/ipc.md
+//! - [`projects`]: bring a folder in for an agent to work on, review, apply back
 //! - [`fence`]:    OS-level enforcement: private users, seatbelt profile, packet filter, launchers
 //! - [`control`]:  a local socket so the CLI and scripts can drive a running engine
 
@@ -22,6 +23,7 @@ pub mod hostname;
 pub mod ledger;
 pub mod model;
 pub mod paths;
+pub mod projects;
 pub mod proxy;
 
 pub use engine::{Engine, Event};

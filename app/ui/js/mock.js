@@ -19,6 +19,10 @@ function bytesText(n) {
   return (v >= 10 ? Math.round(v) : Math.round(v * 10) / 10) + ' ' + u[i];
 }
 
+const mockProjects = [];
+const mockApplied = new Set();
+const local = (v) => JSON.parse(JSON.stringify(v));
+
 export function createMock(scenarioName) {
   const scenario = SCENARIOS.includes(scenarioName) ? scenarioName : 'private';
   const s = seed(scenario);
@@ -98,7 +102,20 @@ export function createMock(scenarioName) {
         today: counters(todays.filter((e) => e.appId === a.id)),
       })),
       pending,
+      watch: s.mode === 'watch' ? { since: s.modeSince, until: s.watchUntil || null, places: watchItems(s.modeSince).length } : null,
+      watchReview: s.mode !== 'watch' && s.watchReview && watchItems(s.watchReview.since, s.watchReview.until).length
+        ? { since: s.watchReview.since, until: s.watchReview.until, places: watchItems(s.watchReview.since, s.watchReview.until).length } : null,
     };
+  }
+  function watchItems(since, until) {
+    const out = [];
+    for (const e of s.events) {
+      if (e.reason !== 'watching' || e.ts < since || (until && e.ts > until) || findTrust(e.appId, e.host)) continue;
+      const hit = out.find((i) => i.appId === e.appId && i.host === e.host);
+      if (hit) { hit.times++; hit.bytesOut += e.bytesOut || 0; }
+      else out.push({ appId: e.appId, appName: e.appName, appIcon: e.appIcon, host: e.host, label: e.label, purpose: e.purpose, times: 1, bytesOut: e.bytesOut || 0 });
+    }
+    return out.sort((a, b) => a.appName.localeCompare(b.appName) || b.times - a.times);
   }
   function proof() {
     const priv = s.mode === 'private' && s.setupDone;
@@ -238,10 +255,24 @@ export function createMock(scenarioName) {
   // ---------- commands ----------
   const commands = {
     async get_status() { return status(); },
-    async set_mode({ mode } = {}) {
+    async get_watch_review() {
+      if (s.mode === 'watch') return { since: s.modeSince, until: s.watchUntil || null, active: true, items: watchItems(s.modeSince) };
+      if (!s.watchReview) return null;
+      return { since: s.watchReview.since, until: s.watchReview.until, active: false, items: watchItems(s.watchReview.since, s.watchReview.until) };
+    },
+    async finish_watch_review({ trust = [] } = {}) {
+      trust.forEach((t) => upsertTrust(t.appId, t.host, true));
+      s.watchReview = null;
+      queueStatus();
+      return status();
+    },
+    async set_mode({ mode, minutes } = {}) {
       if (!['private', 'watch', 'off'].includes(mode)) throw 'That mode does not exist.';
       if (!s.setupDone && mode !== 'off') throw 'Finish setup first, then you can turn this on.';
+      if (mode === 'watch') s.watchUntil = minutes === 0 ? null : iso(Date.now() + (minutes || 60) * 60000);
       if (mode !== s.mode) {
+        if (s.mode === 'watch') s.watchReview = { since: s.modeSince, until: iso() };
+        if (mode === 'watch') s.watchReview = null;
         s.mode = mode; s.modeSince = iso();
         s.privateSince = mode === 'private' ? s.modeSince : null;
         if (mode !== 'private') resolveAll('once');
@@ -288,6 +319,12 @@ export function createMock(scenarioName) {
       chain = { ok: true, count: s.events.length ? s.seq : 1, checkedAt: iso(), error: null };
       return chain;
     },
+    async export_log() {
+      await wait(500);
+      const path = `~/Downloads/Sandbox-ai log ${iso().slice(0, 16).replace('T', ' ').replace(':', '.')}.jsonl`;
+      host('note', { text: 'Wrote and revealed ' + path });
+      return { path };
+    },
     async export_proof() {
       await wait(500);
       const stamp = iso().slice(0, 16).replace(/[-:]/g, '').replace('T', '-');
@@ -300,6 +337,25 @@ export function createMock(scenarioName) {
       return lines.length ? lines : [JSON.stringify({ seq: 1, ts: s.modeSince, event: 'protection_on', sig: '5f1c0e9a77b2d4c3a1e06b8d' })];
     },
     async get_policy_text() { return policyText(s); },
+    async pick_folder() { return '/Users/you/Documents/Projects/recipe-site'; },
+    async get_projects() { return local(mockProjects); },
+    async project_import({ path }) {
+      const name = String(path).split('/').filter(Boolean).pop() || 'project';
+      const p = { name, source: path, copy: '/Users/Shared/SandboxAI/claude-code/' + name, importedAt: new Date().toISOString(), sourceExists: true, copyExists: true };
+      mockProjects.push(p); return local(p);
+    },
+    async project_changes({ name }) {
+      const applied = mockApplied.has(name);
+      const items = applied ? [{ path: 'README.md', kind: 'modified', conflict: true, link: null }] : [
+        { path: 'README.md', kind: 'modified', conflict: true, link: null },
+        { path: 'src/app.py', kind: 'modified', conflict: false, link: null },
+        { path: 'src/recipes/soup.py', kind: 'added', conflict: false, link: null },
+        { path: 'src/old_helpers.py', kind: 'deleted', conflict: false, link: null },
+        { path: 'config', kind: 'added', conflict: false, link: '/etc/hosts' }];
+      return { total: items.length, conflicts: 1, items, truncated: false };
+    },
+    async project_apply({ name, overwrite }) { const first = !mockApplied.has(name); mockApplied.add(name); return { applied: (first ? 4 : 0) + (overwrite ? 1 : 0), skipped: overwrite ? [] : ['README.md'] }; },
+    async project_remove({ name }) { const i = mockProjects.findIndex((p) => p.name === name); if (i >= 0) mockProjects.splice(i, 1); return null; },
     async get_setup_script() { return '#!/bin/bash\n# Sandbox-ai one-time setup (mock).\n# The real app shows the exact script here.\n'; },
     async run_setup() {
       await wait(1600);

@@ -19,6 +19,25 @@ pub struct TrustRule {
     pub recommended: bool,
 }
 
+/// A folder brought in for an agent to work on. See `projects`.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectConfig {
+    /// Folder name inside the workspace.
+    pub name: String,
+    /// Your original folder.
+    pub source: String,
+    pub imported_at: String,
+}
+
+/// A stretch of Watch mode: from when it was switched on to when it ended.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct WatchWindow {
+    pub since: String,
+    pub until: String,
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct AppConfig {
@@ -37,6 +56,8 @@ pub struct AppConfig {
     pub loopback_all: bool,
     pub protected: bool,
     pub workspace: Option<String>,
+    #[serde(default)]
+    pub projects: Vec<ProjectConfig>,
     pub trust: Vec<TrustRule>,
 }
 
@@ -76,6 +97,12 @@ pub struct Config {
     /// Ask about destinations that are neither trusted nor blocked. Off means block them quietly.
     #[serde(default = "yes")]
     pub ask: bool,
+    /// When Watch switches itself back to Private. None: it stays on until switched off.
+    #[serde(default)]
+    pub watch_until: Option<String>,
+    /// The last finished Watch whose results have not been reviewed yet.
+    #[serde(default)]
+    pub watch_review: Option<WatchWindow>,
     pub apps: Vec<AppConfig>,
 }
 
@@ -86,7 +113,7 @@ fn yes() -> bool {
 impl Config {
     pub fn fresh() -> Config {
         let now = crate::now_iso();
-        let mut c = Config { version: 1, mode: Mode::Private, mode_since: now.clone(), private_since: Some(now), lockdown: false, ask: true, apps: vec![] };
+        let mut c = Config { version: 1, mode: Mode::Private, mode_since: now.clone(), private_since: Some(now), lockdown: false, ask: true, watch_until: None, watch_review: None, apps: vec![] };
         c.merge_presets();
         c
     }
@@ -112,6 +139,7 @@ impl Config {
                         loopback_all: p.loopback_all,
                         protected: true,
                         workspace: if p.kind == "agent" { Some(format!("/Users/Shared/SandboxAI/{}", p.id)) } else { None },
+                        projects: vec![],
                         trust: vec![],
                     });
                     changed = true;

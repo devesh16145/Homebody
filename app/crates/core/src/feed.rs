@@ -102,6 +102,13 @@ impl FeedIndex {
                 }
                 Some(seq)
             }
+            // Repeats counted during an earlier run. While running they are counted directly
+            // (`add_repeat`) and this record is written later, so it is only folded in on replay.
+            "repeat" => {
+                let idx = *self.by_id.get(&n("of")?)?;
+                self.rows[idx].repeats += n("count").unwrap_or(0);
+                Some(self.rows[idx].id)
+            }
             "end" => {
                 let idx = self.by_conn.remove(&n("conn")?)?;
                 let row = &mut self.rows[idx];
@@ -185,6 +192,16 @@ mod tests {
         assert!(!f.get(1).unwrap().open);
         assert_eq!(f.get(2).unwrap().verb, Verb::Seen);
         assert!(f.get(2).unwrap().open);
+    }
+
+    #[test]
+    fn repeats_survive_a_restart() {
+        let mut f = FeedIndex::default();
+        f.apply(&json!({"seq":1,"kind":"conn","ts":"t","app":"a","host":"x.example.com","port":443,"decision":"deny","reason":"not_trusted"}));
+        f.apply(&json!({"seq":2,"kind":"repeat","of":1,"count":7}));
+        f.apply(&json!({"seq":3,"kind":"repeat","of":1,"count":2}));
+        assert_eq!(f.get(1).unwrap().repeats, 9);
+        assert_eq!(f.apply(&json!({"seq":4,"kind":"repeat","of":99,"count":2})), None);
     }
 
     #[test]

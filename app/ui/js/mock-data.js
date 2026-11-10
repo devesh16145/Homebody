@@ -53,13 +53,14 @@ export function explain(reason, app, label, pending = false) {
     case 'lockdown': return 'Everything is blocked right now, so this was stopped. Nothing was sent.';
     case 'malformed': return `${app} tried to reach a bare number address instead of a named place. That is always blocked.`;
     case 'local_address': return 'This name points back to this computer or your home network, so it was blocked.';
+    case 'around_gate': return `curl, started by ${app}, tried to connect straight to the internet on port 443, without going through the gate. The fence refused it, so nothing left this computer.`;
     default: return '';
   }
 }
 
 function ev(apps, t, appId, host, verb, reason, out = null, inn = null, ms = null) {
   const app = apps.find((a) => a.id === appId);
-  const [label, purpose] = describe(host);
+  const [label, purpose] = reason === 'around_gate' ? ['Direct connection', 'Went around the gate'] : describe(host);
   return {
     id: 0, ts: iso(t), appId, appName: app.name, appIcon: app.icon, host, port: 443, label, purpose,
     verb, reason, explanation: explain(reason, app.name, label), open: false,
@@ -87,6 +88,7 @@ function history(apps, now) {
   add(now - 130 * MIN, cc, 'api.anthropic.com', A, 'trusted', 16400, 102000, 2700);
   add(now - 100 * MIN, cc, 'github.com', A, 'trusted', 6100, 310000, 1100);
   add(now - 58 * MIN, cc, 'sentry.io', B, 'not_trusted');
+  add(now - 44 * MIN, cc, '', B, 'around_gate');
   add(now - 31 * MIN, 'ollama', 'registry.ollama.ai', A, 'trusted', 4100, 1900000000, 48000);
   add(now - 14 * MIN, cc, 'api.anthropic.com', A, 'trusted', 22300, 140000, 3300);
   add(now - 9 * MIN, cc, 'statsig.anthropic.com', B, 'not_trusted');

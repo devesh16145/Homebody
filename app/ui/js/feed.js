@@ -151,6 +151,9 @@ function actionsHtml(e) {
     return `<span class="ev-state">Waiting for your answer</span><span data-ask="${esc(ask.id)}" class="row">`
       + btn('once', 'Allow once') + btn('always', 'Always allow') + btn('block', 'Block') + '</span>' + errHtml;
   }
+  if (e.reason === 'around_gate') {
+    return '<span class="ev-state">Refused by the fence. Protected apps can only reach the network through the gate.</span>';
+  }
   if (e.reason === 'malformed' || e.reason === 'local_address') {
     return '<span class="ev-state">This kind of address is always blocked.</span>';
   }
@@ -164,7 +167,8 @@ function actionsHtml(e) {
 }
 
 function detailHtml(e) {
-  const meta = [`<span class="mono sel">${esc(e.host)}:${esc(e.port)}</span>`, `<span>${esc(fullTime(e.ts))}</span>`];
+  const where = e.host ? `${e.host}:${e.port}` : e.port ? `port ${e.port}, address not reported by macOS` : '';
+  const meta = [where ? `<span class="mono sel">${esc(where)}</span>` : '', `<span>${esc(fullTime(e.ts))}</span>`];
   if (e.bytesOut != null) meta.push(`<span class="num">Sent ${esc(fmtBytes(e.bytesOut))}${e.bytesIn != null ? ' · received ' + esc(fmtBytes(e.bytesIn)) : ''}${e.durationMs != null ? ' · ' + esc(fmtDuration(e.durationMs)) : ''}</span>`);
   return `<div class="ev-detail"><p class="sel">${esc(e.explanation)}</p>
     <div class="ev-meta">${meta.join('')}</div>

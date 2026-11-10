@@ -43,7 +43,7 @@ export const logs = {
       <p class="lead">Every decision is written down as a signed receipt, each one linked to the one before. Newest at the bottom. Nothing here leaves this computer unless you export it.</p>
       <div class="log-bar">
         <button class="btn" data-do="lg-verify" data-key="lg-verify"${busy ? ' disabled' : ''}>${this.state === 'verifying' ? 'Verifying…' : 'Verify'}</button>
-        <button class="btn" data-do="lg-export" data-key="lg-export"${busy ? ' disabled' : ''}>${this.state === 'saving' ? 'Exporting…' : 'Export'}</button>
+        <button class="btn" data-do="lg-export" data-key="lg-export"${busy ? ' disabled' : ''}>${this.state === 'saving' ? 'Exporting…' : 'Export the whole log'}</button>
         ${status}</div>
       ${content}</div>`);
   },
@@ -56,7 +56,7 @@ export const logs = {
     this.render();
     try {
       if (what === 'lg-verify') this.check = await invoke('verify_chain');
-      else this.saved = (await invoke('export_proof')).path;
+      else this.saved = (await invoke('export_log')).path;
     } catch (e) { this.check = { ok: false, count: 0, checkedAt: '', error: errText(e) }; }
     this.state = 'idle';
     if (this.env.isShown('logs')) this.render();

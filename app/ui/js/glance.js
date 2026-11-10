@@ -59,9 +59,12 @@ function switchHtml() {
   return `<div class="g-card">
     <label class="g-private"><div class="grow"><h1>Private</h1><p>${sub}</p></div>
       <span class="switch lg green"><input type="checkbox" role="switch" data-mode="private" data-key="private" aria-label="Private"${priv ? ' checked' : ''}><i></i></span></label>
-    <label class="g-watch"><span class="grow"><b>Watch:</b> allow everything for now and show me what my AI contacts</span>
+    <label class="g-watch"><span class="grow">${watch && status.watch
+      ? `<b>Watching</b> ${status.watch.until ? `until ${esc(new Date(status.watch.until).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }))}` : 'until you switch it off'}. ${status.watch.places ? `${status.watch.places} new ${status.watch.places === 1 ? 'place' : 'places'} so far.` : 'Nothing new so far.'}`
+      : '<b>Watch:</b> allow everything for an hour and show me what my AI contacts'}</span>
       <span class="switch sm"><input type="checkbox" role="switch" data-mode="watch" data-key="watch" aria-label="Watch"${watch ? ' checked' : ''}><i></i></span></label>
-  </div>${error ? `<div class="notice error g-err" role="alert">${icon('alert')}<span>${esc(error)}</span></div>` : ''}`;
+  </div>${status.watchReview && !watch ? `<div class="g-card g-review"><span class="grow"><b>Watch finished.</b> ${status.watchReview.places} new ${status.watchReview.places === 1 ? 'place was' : 'places were'} contacted.</span>
+      <button class="btn sm primary" data-act="watch-review">Review</button></div>` : ''}${error ? `<div class="notice error g-err" role="alert">${icon('alert')}<span>${esc(error)}</span></div>` : ''}`;
 }
 
 function setupHtml() {
@@ -138,6 +141,7 @@ on(document, 'click', '[data-open]', (ev, btn) => { invoke('open_main', { tab: b
 on(document, 'click', '[data-act]', (ev, btn) => {
   const act = btn.dataset.act;
   if (act === 'setup') invoke('open_main', {}).catch(() => {});
+  if (act === 'watch-review') invoke('open_main', { tab: 'feed' }).catch(() => {});
   if (act === 'panic') run(() => invoke('set_lockdown', { on: true }));
   if (act === 'release') run(() => invoke('set_lockdown', { on: false }));
 });

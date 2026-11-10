@@ -74,6 +74,44 @@ pub struct Status {
     pub today: Counters,
     pub apps: Vec<AppStatus>,
     pub pending: Vec<Ask>,
+    /// Present while Watch is on.
+    pub watch: Option<WatchStatus>,
+    /// Present when a finished Watch has results waiting to be reviewed.
+    pub watch_review: Option<WatchStatus>,
+}
+
+#[derive(Serialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct WatchStatus {
+    pub since: String,
+    /// When Watch ends by itself (while on), or when it ended (for a review). None: no timer.
+    pub until: Option<String>,
+    /// Places contacted that are neither trusted nor blocked yet.
+    pub places: u64,
+}
+
+/// One place an app contacted during Watch that has no rule yet.
+#[derive(Serialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct WatchItem {
+    pub app_id: String,
+    pub app_name: String,
+    pub app_icon: String,
+    pub host: String,
+    pub label: String,
+    pub purpose: String,
+    pub times: u64,
+    pub bytes_out: u64,
+}
+
+#[derive(Serialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct WatchReview {
+    pub since: String,
+    pub until: Option<String>,
+    /// Watch is still on: this is what has been seen so far.
+    pub active: bool,
+    pub items: Vec<WatchItem>,
 }
 
 #[derive(Serialize, Clone, Debug)]
@@ -115,6 +153,8 @@ pub enum Reason {
     Lockdown,
     Malformed,
     LocalAddress,
+    /// Tried to reach the network without going through the gate; refused by the fence.
+    AroundGate,
 }
 
 impl Reason {
@@ -131,6 +171,7 @@ impl Reason {
             Reason::Lockdown => "lockdown",
             Reason::Malformed => "malformed",
             Reason::LocalAddress => "local_address",
+            Reason::AroundGate => "around_gate",
         }
     }
     pub fn parse(s: &str) -> Option<Reason> {
@@ -146,6 +187,7 @@ impl Reason {
             "lockdown" => Reason::Lockdown,
             "malformed" => Reason::Malformed,
             "local_address" => Reason::LocalAddress,
+            "around_gate" => Reason::AroundGate,
             _ => return None,
         })
     }

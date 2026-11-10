@@ -5,6 +5,7 @@ import { icon, appTile, mark } from './icons.js';
 import * as feed from './feed.js';
 import * as proof from './proof.js';
 import * as studio from './studio.js';
+import * as watch from './watch.js';
 
 initPage();
 
@@ -79,7 +80,8 @@ function applyStatus() {
   el.pill.title = status.sentence;
   patch(el.banner, status.lockdown && !status.setupNeeded
     ? `<div class="lockbar" role="alert">${icon('lock')}<span><b>Everything is blocked.</b> Nothing can leave until you release it.</span>
-       <button class="btn sm" data-act="release">Release</button></div>` : '');
+       <button class="btn sm" data-act="release">Release</button></div>` : status.setupNeeded ? '' : watch.barHtml(status));
+  watch.onStatus(status);
   if (status.setupNeeded) renderSetup();
   syncTabs();
   Object.values(TABS).forEach((m) => m.onStatus(status));
@@ -145,6 +147,7 @@ on(el.setup, 'change', 'input[data-protect]', async (ev, input) => {
 // ---------- boot ----------
 
 Object.entries(TABS).forEach(([name, m]) => m.init($('#tab-' + name), ctx));
+watch.init(ctx);
 if (params.get('pane')) studio.open(params.get('pane'));
 
 onEvent((evt) => {

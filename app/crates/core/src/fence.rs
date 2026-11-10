@@ -98,16 +98,100 @@ pub fn real_home() -> String {
     dirs::home_dir().map(|p| p.to_string_lossy().into_owned()).unwrap_or_else(|| "/var/empty".into())
 }
 
+const VIOLATION_TAG: &str = "sai-app=";
+
+/// One refused attempt to reach the network without going through the gate.
+#[derive(Debug, PartialEq, Clone)]
+pub struct Violation {
+    pub app: String,
+    /// Name of the program that tried, as the system reports it.
+    pub process: String,
+    /// "direct" (straight to an address), "lookup" (asked the system to resolve a name),
+    /// "listen" (accept connections from other computers), "gate" (another app's gate), "other".
+    pub what: &'static str,
+    /// The port, for "direct" and "gate". macOS does not report the address.
+    pub port: u16,
+    /// How many attempts this report stands for (macOS folds rapid duplicates into one).
+    pub count: u64,
+}
+
+/// Read one seatbelt refusal as macOS logs it, for example:
+///
+/// ```text
+/// Sandbox: curl(40242) deny(1) network-outbound remote:*:443
+/// sai-app=claude-code;net
+/// ```
+///
+/// Returns nothing for refusals that do not carry our tag. The program name comes from the
+/// program itself, so it is reduced to plain characters before it is shown anywhere.
+pub fn parse_violation(message: &str) -> Option<Violation> {
+    let mut lines = message.lines();
+    let first = lines.next()?;
+    let tag = lines.find_map(|l| l.trim().strip_prefix(VIOLATION_TAG))?;
+    let (app, hint) = tag.split_once(';').unwrap_or((tag, "net"));
+    if app.is_empty() || !app.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') {
+        return None;
+    }
+    // "3 duplicate reports for Sandbox: …" stands for that many more attempts.
+    let (count, rest) = match first.split_once(" duplicate report") {
+        Some((n, rest)) => (n.trim().parse::<u64>().unwrap_or(1).max(1), rest.split_once("Sandbox: ")?.1),
+        None => (1, first.strip_prefix("Sandbox: ")?),
+    };
+    let (who, rest) = rest.split_once(" deny(")?;
+    let process: String = who.rsplit_once('(').map(|(name, _)| name).unwrap_or(who).chars().filter(|c| c.is_ascii_alphanumeric() || "-_.+ ".contains(*c)).take(32).collect();
+    let rest = rest.split_once(") ")?.1;
+    let (op, target) = rest.split_once(' ').unwrap_or((rest, ""));
+    let port = target.rsplit_once(':').and_then(|(_, p)| p.trim().parse::<u16>().ok()).unwrap_or(0);
+    let what = match (hint, op) {
+        ("dns", _) => "lookup",
+        ("gate", _) => "gate",
+        (_, "network-outbound") if target.contains("mDNSResponder") => "lookup",
+        (_, "network-outbound") if target.starts_with('/') => "other",
+        (_, "network-outbound") => "direct",
+        (_, "network-bind") | (_, "network-inbound") => "listen",
+        _ => "other",
+    };
+    Some(Violation { app: app.to_string(), process: if process.trim().is_empty() { "A program".into() } else { process.trim().to_string() }, what, port: if matches!(what, "direct" | "gate") { port } else { 0 }, count })
+}
+
+/// Follow the system log for refusals carrying our tag. Each line of the child's output is one
+/// JSON record; hand `eventMessage` to [`parse_violation`]. Only records written by the kernel
+/// are accepted, because any program can write to the log under any name.
+pub fn violation_stream() -> std::io::Result<tokio::process::Child> {
+    tokio::process::Command::new("/usr/bin/log")
+        .args(["stream", "--style", "ndjson", "--predicate"])
+        .arg(format!("process == \"kernel\" AND sender == \"Sandbox\" AND eventMessage CONTAINS \"{VIOLATION_TAG}\""))
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .kill_on_drop(true)
+        .spawn()
+}
+
+/// The refusal in one record of [`violation_stream`]'s output, if it is one of ours.
+pub fn violation_in(line: &str) -> Option<Violation> {
+    let rec: serde_json::Value = serde_json::from_str(line.trim()).ok()?;
+    if rec.get("processImagePath").and_then(|v| v.as_str()) != Some("/kernel") || rec.get("processID").and_then(|v| v.as_u64()) != Some(0) {
+        return None;
+    }
+    parse_violation(rec.get("eventMessage")?.as_str()?)
+}
+
 /// Home folder of a protected app's OS user.
 pub fn home_for(os_user: &str) -> String {
     format!("/var/sai/{}", os_user.trim_start_matches("_sai").trim_start_matches('_'))
 }
 
 /// The seatbelt profile for one app. Later rules win over earlier ones.
+///
+/// Every network refusal carries a tag naming the app and what was refused. macOS writes refusals
+/// to the system log with that tag, which is how attempts to go around the gate reach the Feed
+/// (see [`parse_violation`]).
 pub fn seatbelt_profile(app: &AppConfig) -> String {
+    let tag = |what: &str| format!("(with message \"{VIOLATION_TAG}{};{what}\")", app.id);
     let mut p = String::from("(version 1)\n(allow default)\n");
     // Network: nothing, then exactly the local gate and the listed local services.
-    p.push_str("(deny network*)\n");
+    p.push_str(&format!("(deny network* {})\n", tag("net")));
     p.push_str(&format!("(allow network-outbound (remote ip \"localhost:{}\"))\n", app.proxy_port));
     for port in &app.local_ports {
         p.push_str(&format!("(allow network-outbound (remote ip \"localhost:{port}\"))\n"));
@@ -117,16 +201,16 @@ pub fn seatbelt_profile(app: &AppConfig) -> String {
         // Any local port, then, except another app's gate.
         p.push_str("(allow network-outbound (remote ip \"localhost:*\"))\n");
         for port in crate::catalog::GATE_PORTS.filter(|g| *g != app.proxy_port) {
-            p.push_str(&format!("(deny network-outbound (remote ip \"localhost:{port}\"))\n"));
+            p.push_str(&format!("(deny network-outbound (remote ip \"localhost:{port}\") {})\n", tag("gate")));
         }
     }
     // Serving on this computer only (a local model's port, an agent's dev server).
     p.push_str("(allow network-bind (local ip \"localhost:*\"))\n");
     p.push_str("(allow network-inbound (local ip \"localhost:*\"))\n");
     // No name lookups: they are a way to send data out through the system resolver.
-    p.push_str("(deny mach-lookup (global-name \"com.apple.dnssd.service\"))\n");
-    p.push_str("(deny mach-lookup (global-name \"com.apple.mDNSResponder\"))\n");
-    p.push_str("(deny network-outbound (remote unix-socket (path-literal \"/private/var/run/mDNSResponder\")))\n");
+    p.push_str(&format!("(deny mach-lookup (global-name \"com.apple.dnssd.service\") {})\n", tag("dns")));
+    p.push_str(&format!("(deny mach-lookup (global-name \"com.apple.mDNSResponder\") {})\n", tag("dns")));
+    p.push_str(&format!("(deny network-outbound (remote unix-socket (path-literal \"/private/var/run/mDNSResponder\")) {})\n", tag("dns")));
     // Nothing under the real user's home, whatever the file permissions say.
     let home = real_home();
     if home.starts_with("/Users/") && !home.contains('"') {
@@ -199,6 +283,17 @@ async fn run_owned(argv: Vec<String>, timeout: Duration) -> Option<(bool, String
 }
 
 /// Check every layer for one app. Cheap enough to run every half minute.
+/// The health check deliberately tries to go around the gate, to see that it is refused. Those
+/// attempts are ours, not the app's, so they must not carry the tag that puts refusals in the Feed.
+fn untagged(mut argv: Vec<String>) -> Vec<String> {
+    for a in &mut argv {
+        if a.contains(VIOLATION_TAG) {
+            *a = a.replace(VIOLATION_TAG, "sai-check=");
+        }
+    }
+    argv
+}
+
 pub async fn probe(app: &AppConfig, expected_rules: &str) -> Health {
     let t = Duration::from_secs(6);
     let mut h = Health { checked: true, ..Default::default() };
@@ -218,10 +313,10 @@ pub async fn probe(app: &AppConfig, expected_rules: &str) -> Health {
         let control = run_owned(fenced_argv(app, "/usr/bin/true", &[], &[], Some("/")), t).await.map(|r| r.0).unwrap_or(false);
         // The real test: a direct connection to the internet must be refused by the profile itself,
         // which reads the same online or offline.
-        let direct = run_owned(fenced_argv(app, "/usr/bin/nc", &["-v".into(), "-z".into(), "-G".into(), "2".into(), "1.1.1.1".into(), "443".into()], &[], Some("/")), t).await;
+        let direct = run_owned(untagged(fenced_argv(app, "/usr/bin/nc", &["-v".into(), "-z".into(), "-G".into(), "2".into(), "1.1.1.1".into(), "443".into()], &[], Some("/"))), t).await;
         let refused = matches!(&direct, Some((false, out)) if out.contains("not permitted"));
         // And a name lookup must fail.
-        let lookup = run_owned(fenced_argv(app, "/usr/bin/dscacheutil", &["-q".into(), "host".into(), "-a".into(), "name".into(), "example.com".into()], &[], Some("/")), t).await;
+        let lookup = run_owned(untagged(fenced_argv(app, "/usr/bin/dscacheutil", &["-q".into(), "host".into(), "-a".into(), "name".into(), "example.com".into()], &[], Some("/"))), t).await;
         let no_lookup = matches!(&lookup, Some((_, out)) if !out.contains("ip_address") && !out.contains("ipv6_address"));
         h.seatbelt_ok = control && refused && no_lookup;
     }
@@ -273,9 +368,9 @@ fn sh_quote(s: &str) -> String {
 }
 
 /// The script a protected terminal runs: a short banner, then the agent, fenced.
-pub fn terminal_script(app: &AppConfig, binary: &str) -> String {
-    let argv = fenced_argv(app, binary, &[], &[], None);
-    let workspace = app.workspace.clone().unwrap_or_default();
+pub fn terminal_script(app: &AppConfig, binary: &str, dir: Option<&str>) -> String {
+    let argv = fenced_argv(app, binary, &[], &[], dir);
+    let workspace = dir.map(str::to_string).or_else(|| app.workspace.clone()).unwrap_or_default();
     format!(
         "#!/bin/zsh\ncd /\nclear\nprintf '\\033[1m%s, protected by Sandbox-ai\\033[0m\\n' {name}\nprintf 'It can only reach places you trust, and can only write in:\\n  %s\\n\\n' {ws}\n{cmd}\nprintf '\\n\\033[2mProtected session ended. You can close this window.\\033[0m\\n'\n",
         name = sh_quote(&app.name),
@@ -285,12 +380,12 @@ pub fn terminal_script(app: &AppConfig, binary: &str) -> String {
 }
 
 /// Open a Terminal window running the agent protected, in its workspace.
-pub async fn open_terminal(app: &AppConfig) -> Result<(), String> {
+pub async fn open_terminal(app: &AppConfig, dir: Option<&str>) -> Result<(), String> {
     let binary = crate::catalog::find_binary(&app.binary).ok_or_else(|| format!("{} is not installed on this computer.", app.name))?;
-    let dir = crate::paths::data_dir().join("run");
-    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-    let script = dir.join(format!("{}.command", app.id));
-    std::fs::write(&script, terminal_script(app, &binary)).map_err(|e| e.to_string())?;
+    let run_dir = crate::paths::data_dir().join("run");
+    std::fs::create_dir_all(&run_dir).map_err(|e| e.to_string())?;
+    let script = run_dir.join(format!("{}.command", app.id));
+    std::fs::write(&script, terminal_script(app, &binary, dir)).map_err(|e| e.to_string())?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -579,11 +674,51 @@ mod tests {
     }
 
     #[test]
+    fn refusals_are_read_from_the_system_log() {
+        let v = parse_violation("Sandbox: curl(40242) deny(1) network-outbound remote:*:443\nsai-app=claude-code;net").unwrap();
+        assert_eq!(v, Violation { app: "claude-code".into(), process: "curl".into(), what: "direct", port: 443, count: 1 });
+        let v = parse_violation("Sandbox: node(7) deny(1) network-outbound /private/var/run/mDNSResponder\nsai-app=claude-code;dns").unwrap();
+        assert_eq!((v.what, v.port), ("lookup", 0));
+        let v = parse_violation("Sandbox: x(7) deny(1) mach-lookup com.apple.dnssd.service\nsai-app=ollama;dns").unwrap();
+        assert_eq!((v.app.as_str(), v.what), ("ollama", "lookup"));
+        let v = parse_violation("Sandbox: python3.12(9) deny(1) network-bind local:*:8080\nsai-app=claude-code;net").unwrap();
+        assert_eq!((v.process.as_str(), v.what, v.port), ("python3.12", "listen", 0));
+        let v = parse_violation("Sandbox: ollama(9) deny(1) network-outbound remote:*:47110\nsai-app=ollama;gate").unwrap();
+        assert_eq!((v.what, v.port), ("gate", 47110));
+        let v = parse_violation("4 duplicate reports for Sandbox: curl(1) deny(1) network-outbound remote:*:80\nsai-app=claude-code;net").unwrap();
+        assert_eq!((v.count, v.port), (4, 80));
+        let v = parse_violation("1 duplicate report for Sandbox: curl(1) deny(1) network-outbound remote:*:80\nsai-app=claude-code;net").unwrap();
+        assert_eq!(v.count, 1);
+    }
+
+    #[test]
+    fn refusals_without_our_tag_or_with_odd_names_are_handled() {
+        assert!(parse_violation("Sandbox: curl(1) deny(1) network-outbound remote:*:443").is_none());
+        assert!(parse_violation("Sandbox: curl(1) deny(1) network-outbound remote:*:443\nsai-app=../x;net").is_none());
+        assert!(parse_violation("sai-app=claude-code;net").is_none());
+        // A program chooses its own name; nothing but plain characters survives.
+        let v = parse_violation("Sandbox: <b>evil\u{1b}[31m(1) deny(1) network-outbound remote:*:443\nsai-app=claude-code;net").unwrap();
+        assert_eq!(v.process, "bevil31m");
+        let long = format!("Sandbox: {}(1) deny(1) network-outbound remote:*:443\nsai-app=claude-code;net", "a".repeat(200));
+        assert_eq!(parse_violation(&long).unwrap().process.len(), 32);
+    }
+
+    #[test]
+    fn only_kernel_records_count() {
+        let msg = "Sandbox: curl(1) deny(1) network-outbound remote:*:443\nsai-app=claude-code;net";
+        let kernel = serde_json::json!({ "processImagePath": "/kernel", "processID": 0, "eventMessage": msg }).to_string();
+        assert!(violation_in(&kernel).is_some());
+        let forged = serde_json::json!({ "processImagePath": "/usr/bin/logger", "processID": 500, "eventMessage": msg }).to_string();
+        assert!(violation_in(&forged).is_none());
+        assert!(violation_in("Filtering the log data using …").is_none());
+    }
+
+    #[test]
     fn seatbelt_profile_denies_network_then_allows_only_the_gate() {
         let cfg = Config::fresh();
         let app = cfg.app("claude-code").unwrap();
         let p = seatbelt_profile(app);
-        let deny = p.find("(deny network*)").unwrap();
+        let deny = p.find("(deny network* ").unwrap();
         let allow = p.find(&format!("localhost:{}", app.proxy_port)).unwrap();
         assert!(deny < allow, "the allow must come after the deny so it wins");
         assert!(p.contains("com.apple.dnssd.service"));
@@ -596,9 +731,9 @@ mod tests {
         let (ollama, claude) = (cfg.app("ollama").unwrap(), cfg.app("claude-code").unwrap());
         let p = seatbelt_profile(ollama);
         let allow_all = p.find("(allow network-outbound (remote ip \"localhost:*\"))").expect("loopback allowance");
-        let deny_other = p.find(&format!("(deny network-outbound (remote ip \"localhost:{}\"))", claude.proxy_port)).expect("other gate denied");
+        let deny_other = p.find(&format!("(deny network-outbound (remote ip \"localhost:{}\") ", claude.proxy_port)).expect("other gate denied");
         assert!(allow_all < deny_other, "the deny must come after the allow so it wins");
-        assert!(!p.contains(&format!("(deny network-outbound (remote ip \"localhost:{}\"))", ollama.proxy_port)), "its own gate stays reachable");
+        assert!(!p.contains(&format!("(deny network-outbound (remote ip \"localhost:{}\")", ollama.proxy_port)), "its own gate stays reachable");
         // An agent gets no such allowance.
         assert!(!seatbelt_profile(claude).contains("localhost:*\"))\n(deny network-outbound (remote ip"));
         assert!(!seatbelt_profile(claude).contains("(allow network-outbound (remote ip \"localhost:*\"))"));
@@ -624,14 +759,14 @@ mod tests {
     fn terminal_script_is_valid_zsh_and_runs_the_agent_fenced() {
         let cfg = Config::fresh();
         let app = cfg.app("claude-code").unwrap();
-        let script = terminal_script(app, "/opt/homebrew/bin/claude");
+        let script = terminal_script(app, "/opt/homebrew/bin/claude", None);
         let dir = tempfile::tempdir().unwrap();
         let p = dir.path().join("t.command");
         std::fs::write(&p, &script).unwrap();
         assert!(std::process::Command::new("/bin/zsh").arg("-n").arg(&p).status().unwrap().success(), "syntax error in:\n{script}");
         assert!(script.contains("/usr/bin/sandbox-exec"));
         assert!(script.contains("-u' '_saiagent'") || script.contains("'-u' '_saiagent'"));
-        assert!(script.contains("(deny network*)"));
+        assert!(script.contains("(deny network*"));
     }
 
     #[test]
