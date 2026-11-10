@@ -1,0 +1,101 @@
+/* Glance: the menu-bar popover. 340 wide, content-sized (designed to fit 480).
+   In the app the body is transparent and native vibrancy shows through.
+   In a plain browser a translucent material stands in for it. */
+
+html, body { background: transparent; }
+
+.glance {
+  display: flex; flex-direction: column;
+  width: 100%; padding: 12px 12px 10px;
+}
+.in-browser .glance {
+  min-height: 100%; height: 100%;
+  background: var(--material);
+  -webkit-backdrop-filter: blur(30px) saturate(180%); backdrop-filter: blur(30px) saturate(180%);
+  border-radius: var(--r-xl);
+}
+.in-browser:not(.embedded) body { background: var(--fill-3); }
+.in-browser:not(.embedded) .glance { box-shadow: var(--shadow-pop); }
+
+.g-body { flex: 1; min-height: 0; display: flex; flex-direction: column; margin: 0 -12px; padding: 0 12px; }
+.g-body > section:empty { display: none; }
+.g-body > section { margin-bottom: 10px; }
+.g-body > #g-recent { margin-bottom: 0; }
+
+/* status line */
+.g-status { display: flex; align-items: flex-start; gap: 9px; padding: 2px 4px 10px; font-weight: 600; line-height: 1.3; }
+.g-status .dot { margin-top: 4px; }
+.g-status .skel { width: 180px; margin-top: 4px; }
+
+/* cards */
+.g-card { border-radius: var(--r-lg); background: var(--fill-1); box-shadow: inset 0 0 0 .5px var(--hairline); }
+
+/* the switch */
+.g-private { display: flex; align-items: center; gap: 12px; padding: 10px 12px 10px 14px; }
+.g-private h1 { font: 600 var(--fs-large)/1.2 var(--font-display); letter-spacing: -.01em; }
+.g-private p { margin-top: 2px; font-size: var(--fs-small); color: var(--text-2); }
+.g-watch {
+  display: flex; align-items: center; gap: 12px; padding: 7px 12px 8px 14px;
+  border-top: .5px solid var(--hairline); font-size: var(--fs-cap); line-height: 1.35; color: var(--text-2);
+}
+.g-watch b { font-weight: 600; color: var(--text); }
+.g-err { margin-top: 8px; }
+
+/* setup call to action */
+.g-setup { padding: 13px 14px 14px; }
+.g-setup h1 { font: 600 var(--fs-title)/1.25 var(--font-display); }
+.g-setup p { margin: 3px 0 12px; font-size: var(--fs-small); color: var(--text-2); }
+
+/* lockdown banner */
+.g-lock {
+  display: flex; align-items: center; gap: 10px; padding: 9px 10px 9px 12px; border-radius: var(--r-lg);
+  background: var(--red-bg); color: var(--red-text); box-shadow: inset 0 0 0 .5px var(--red-bg);
+}
+.g-lock b { display: block; font-weight: 600; }
+.g-lock span { font-size: var(--fs-cap); }
+.g-lock + .g-ask { margin-top: 10px; }
+
+/* inline prompt */
+.g-ask { padding: 10px 10px 0; overflow: hidden; background: var(--amber-bg); box-shadow: inset 0 0 0 .5px var(--amber-bg); }
+.g-ask-top { display: flex; gap: 9px; align-items: flex-start; }
+.g-ask-top .tile { margin-top: 1px; }
+.g-ask-title { font-weight: 600; line-height: 1.3; overflow-wrap: anywhere; }
+.g-ask-body { font-size: var(--fs-small); color: var(--text-2); }
+.g-ask-more { margin-left: 4px; color: var(--text-3); font-size: var(--fs-cap); }
+.g-ask-btns { display: grid; grid-template-columns: 1fr 1.15fr 1fr; gap: 6px; margin-top: 9px; }
+.g-ask-btns .btn { padding: 3px 4px; font-size: var(--fs-small); }
+.g-ask-bar { height: 2px; margin: 9px -10px 0; background: var(--fill-2); }
+.g-ask-bar i { display: block; height: 100%; background: var(--amber); transform-origin: left; }
+
+/* protected apps */
+.g-apps { display: flex; align-items: center; gap: 6px; padding: 0 4px; }
+.g-head { font-size: var(--fs-cap); font-weight: 600; color: var(--text-3); letter-spacing: .02em; }
+.g-apps .g-head { margin-right: auto; }
+.g-app {
+  display: inline-flex; align-items: center; gap: 6px; height: 26px; padding: 0 8px 0 4px; border-radius: 13px;
+  background: var(--fill-1); font-size: var(--fs-small); max-width: 128px;
+}
+.g-app .tile { border-radius: 50%; width: 18px; height: 18px; font-size: 9.5px; }
+.g-app .state { width: 6px; height: 6px; border-radius: 50%; flex: none; background: var(--text-3); }
+.g-app .state.on { background: var(--green); }
+.g-app .state.idle { background: transparent; box-shadow: inset 0 0 0 1.5px var(--green); }
+.g-app .state.warn { background: var(--amber); }
+
+/* recent */
+.g-recent-head { padding: 0 4px 3px; }
+.g-ev { display: flex; align-items: center; gap: 8px; height: 25px; padding: 0 4px; font-size: var(--fs-small); }
+.g-ev .verb { min-width: 54px; font-size: var(--fs-micro); padding: 1px 4px; }
+.g-ev .what { flex: 1; min-width: 0; }
+.g-ev .what span { color: var(--text-2); }
+.g-ev time { color: var(--text-3); font-size: var(--fs-cap); }
+.g-empty { padding: 6px 4px 8px; font-size: var(--fs-small); color: var(--text-3); line-height: 1.45; }
+.g-skel { display: flex; flex-direction: column; gap: 14px; padding: 8px 4px; }
+
+/* footer */
+.g-foot { padding-top: 10px; border-top: .5px solid var(--hairline); margin-top: auto; }
+.g-foot-row { display: flex; gap: 6px; }
+.g-foot-row .btn { flex: 1; }
+.g-foot-row .iconbtn { box-shadow: var(--shadow-control); background: var(--control); border: .5px solid var(--control-border); }
+.g-panic { display: flex; justify-content: center; padding-top: 7px; }
+.g-panic .link { font-size: var(--fs-cap); color: var(--text-3); }
+.g-panic .link:hover { color: var(--red-text); text-decoration: none; }

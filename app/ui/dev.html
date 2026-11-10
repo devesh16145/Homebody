@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>UI review harness</title>
+<link rel="stylesheet" href="css/tokens.css">
+<link rel="stylesheet" href="css/base.css">
+<link rel="stylesheet" href="css/dev.css">
+</head>
+<body>
+<!-- Browser-only review harness. Never loaded by the app. All three windows share one mock. -->
+<header class="dev-bar">
+  <strong>UI review</strong>
+  <label class="dev-field">Scenario
+    <select id="scenario" class="dev-select"></select>
+  </label>
+  <div class="dev-seg" id="theme" role="group" aria-label="Theme">
+    <button data-theme-set="auto">Auto</button><button data-theme-set="light">Light</button><button data-theme-set="dark">Dark</button>
+  </div>
+  <div class="dev-seg" id="size" role="group" aria-label="Main window size">
+    <button data-size="980x680">980 × 680</button><button data-size="760x520">760 × 520</button>
+  </div>
+  <span class="dev-sep"></span>
+  <span class="dev-label">Simulate</span>
+  <button class="btn sm" data-sim="ask">Ask</button>
+  <button class="btn sm" data-sim="allowed">Allowed</button>
+  <button class="btn sm" data-sim="blocked">Blocked</button>
+  <button class="btn sm" data-sim="download">Download</button>
+  <button class="btn sm" data-sim="odd">Odd address</button>
+  <label class="dev-check"><input type="checkbox" id="live"> Live traffic</label>
+  <label class="dev-check"><input type="checkbox" id="fail"> Setup fails</label>
+  <button class="btn sm" id="reset">Reset</button>
+</header>
+
+<div class="dev-stage">
+  <div class="dev-col">
+    <figure class="dev-frame" id="f-glance">
+      <figcaption>Glance · 340 × 480 <button class="link" data-show="glance" hidden>Show again</button></figcaption>
+      <div class="dev-win dev-glance"><iframe title="Glance" data-src="glance.html" width="340" height="480"></iframe></div>
+    </figure>
+    <figure class="dev-frame" id="f-prompt">
+      <figcaption>Prompt · 380 × 148 <span class="dev-hint" data-hint="prompt" hidden>hidden, no question waiting</span></figcaption>
+      <div class="dev-win dev-prompt"><iframe title="Prompt" data-src="prompt.html" width="380" height="148"></iframe></div>
+    </figure>
+  </div>
+  <figure class="dev-frame" id="f-main">
+    <figcaption>Main · <span id="size-label">980 × 680</span> <span class="dev-hint">grey dots mark where the real window buttons sit</span></figcaption>
+    <div class="dev-win dev-main">
+      <span class="dev-lights" aria-hidden="true"><i></i><i></i><i></i></span>
+      <iframe title="Main window" data-src="main.html" width="980" height="680"></iframe>
+    </div>
+  </figure>
+</div>
+<div id="dev-note" class="dev-note" role="status" aria-live="polite"></div>
+<script type="module" src="js/dev.js"></script>
+</body>
+</html>

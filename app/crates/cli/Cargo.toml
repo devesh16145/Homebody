@@ -1,0 +1,15 @@
+[package]
+name = "sai"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Sandbox-ai command line: talk to the running app, or run the engine headless"
+
+[[bin]]
+name = "sai"
+path = "src/main.rs"
+
+[dependencies]
+sai-core = { path = "../core" }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "io-util", "sync", "time", "signal"] }
+serde_json = "1"

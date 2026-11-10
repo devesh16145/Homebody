@@ -1,0 +1,195 @@
+#cloud-config
+# Sandbox-ai Box guest setup (cloud-init NoCloud). Applied on first boot of the Debian cloud image.
+hostname: box
+manage_etc_hosts: true
+
+# Spike convenience: root login on the serial console with password "box". Not for the product.
+chpasswd:
+  expire: false
+  users:
+    - name: root
+      password: box
+      type: text
+ssh_pwauth: false
+disable_root: false
+
+write_files:
+  - path: /usr/local/bin/sai-forward.py
+    permissions: "0755"
+    encoding: b64
+    content: @SAI_FORWARD_B64@
+
+  - path: /etc/systemd/system/sai-forward.service
+    permissions: "0644"
+    content: |
+      [Unit]
+      Description=Sandbox-ai guest forwarder (127.0.0.1:3128 -> host vsock)
+      After=local-fs.target
+      [Service]
+      ExecStart=/usr/bin/python3 /usr/local/bin/sai-forward.py
+      Restart=always
+      RestartSec=1
+      [Install]
+      WantedBy=multi-user.target
+
+  # Everything that honours proxy variables goes through the forwarder.
+  - path: /etc/profile.d/sai-proxy.sh
+    permissions: "0644"
+    content: |
+      export http_proxy=http://127.0.0.1:3128
+      export https_proxy=http://127.0.0.1:3128
+      export HTTP_PROXY=$http_proxy HTTPS_PROXY=$https_proxy
+      export no_proxy=localhost,127.0.0.1
+  - path: /etc/environment
+    permissions: "0644"
+    content: |
+      http_proxy=http://127.0.0.1:3128
+      https_proxy=http://127.0.0.1:3128
+      HTTP_PROXY=http://127.0.0.1:3128
+      HTTPS_PROXY=http://127.0.0.1:3128
+      no_proxy=localhost,127.0.0.1
+  - path: /etc/apt/apt.conf.d/99sai-proxy
+    permissions: "0644"
+    content: |
+      Acquire::http::Proxy "http://127.0.0.1:3128";
+      Acquire::https::Proxy "http://127.0.0.1:3128";
+
+  # Shared folder from the host (virtiofs tag "sai") at /work.
+  - path: /etc/systemd/system/work.mount
+    permissions: "0644"
+    content: |
+      [Unit]
+      Description=Sandbox-ai shared folder
+      [Mount]
+      What=sai
+      Where=/work
+      Type=virtiofs
+      [Install]
+      WantedBy=multi-user.target
+
+  # Self-test: proves the Box's properties from inside and writes a report into the shared folder.
+  - path: /usr/local/bin/sai-selftest.sh
+    permissions: "0755"
+    content: |
+      #!/bin/sh
+      R=/work/spike/box/build/guest-report.txt
+      [ -d /work/spike/box/build ] || R=/var/tmp/guest-report.txt
+      : > "$R"
+      P=http://127.0.0.1:3128
+      echo "== interfaces (expect lo only)" >> "$R"; ip -brief link >> "$R" 2>&1
+      echo "== direct connect without proxy (expect failure: no NIC)" >> "$R"
+      curl --noproxy '*' -sS -m 5 https://example.com/ >> "$R" 2>&1 || echo "no-nic ok: exit $?" >> "$R"
+      echo "== DNS from guest (expect failure: no resolver)" >> "$R"
+      getent hosts example.com >> "$R" 2>&1 || echo "no-dns ok: exit $?" >> "$R"
+      echo "== denied host via proxy, https (expect 403 tunnel refusal)" >> "$R"
+      curl -x $P -sS -m 10 https://webhook.site/sai-test >> "$R" 2>&1 || echo "denied ok: exit $?" >> "$R"
+      echo "== denied host via proxy, plain http (expect 403 body)" >> "$R"
+      curl -x $P -sS -m 10 http://webhook.site/sai-test >> "$R" 2>&1 || true
+      echo "== allowed host via proxy (expect http 200)" >> "$R"
+      curl -x $P -sS -m 20 -o /dev/null -w 'http %{http_code}\n' http://deb.debian.org/debian/dists/trixie/Release >> "$R" 2>&1 || echo "allowed FAILED: exit $?" >> "$R"
+      echo "== apt-get update through proxy (expect success)" >> "$R"
+      S=$(date +%s)
+      if apt-get update -qq >> "$R" 2>&1; then echo "apt ok in $(( $(date +%s) - S ))s" >> "$R"; else echo "apt FAILED: exit $?" >> "$R"; fi
+      echo "== vsock stress: 3 x 30 MB download through the proxy" >> "$R"
+      for i in 1 2 3; do
+        curl -x $P -sS -m 120 -o /dev/null -w "pass $i: %{size_download} bytes in %{time_total}s\n" http://deb.debian.org/debian/dists/bookworm/main/Contents-arm64.gz >> "$R" 2>&1 || echo "stress pass $i FAILED" >> "$R"
+      done
+      echo "== done $(date -u +%FT%TZ)" >> "$R"
+
+  # Install Node.js and Claude Code through the proxy. Needs *.debian.org and registry.npmjs.org allowed.
+  - path: /usr/local/bin/sai-install-claude.sh
+    permissions: "0755"
+    content: |
+      #!/bin/sh
+      L=/var/tmp/claude-install.log
+      export http_proxy=http://127.0.0.1:3128 https_proxy=http://127.0.0.1:3128
+      export HTTP_PROXY=$http_proxy HTTPS_PROXY=$https_proxy DEBIAN_FRONTEND=noninteractive
+      if command -v claude >/dev/null 2>&1; then
+        echo "claude already installed: $(claude --version 2>&1)" > /dev/hvc0; exit 0
+      fi
+      echo "installing nodejs npm git (apt, via proxy)..." > /dev/hvc0
+      apt-get install -y -qq nodejs npm git ca-certificates > "$L" 2>&1 || { echo "apt install FAILED, see $L" > /dev/hvc0; exit 1; }
+      echo "installing @anthropic-ai/claude-code (npm, via proxy)..." > /dev/hvc0
+      npm install -g @anthropic-ai/claude-code >> "$L" 2>&1 || { echo "npm install FAILED, see $L" > /dev/hvc0; exit 1; }
+      V="$(claude --version 2>&1 | head -1)"
+      echo "claude-code installed: $V (node $(node --version))" > /dev/hvc0
+      [ -d /work/spike/box/build ] && echo "claude-code installed: $V (node $(node --version))" >> /work/spike/box/build/guest-report.txt
+      mkdir -p /work/spike/box/playground
+
+  # SSH over vsock: sai-box tunnels a host port to guest vsock:22; this hands the stream to sshd on loopback.
+  # (Debian 12's systemd 252 predates the built-in sshd-vsock socket that systemd 256+ provides.)
+  - path: /usr/local/bin/sai-vsock-ssh.py
+    permissions: "0755"
+    content: |
+      #!/usr/bin/env python3
+      import socket, threading
+      def pump(a, b):
+          try:
+              while True:
+                  d = a.recv(65536)
+                  if not d: break
+                  b.sendall(d)
+          except OSError: pass
+          finally:
+              try: b.shutdown(socket.SHUT_WR)
+              except OSError: pass
+      def handle(c):
+          try: up = socket.create_connection(("127.0.0.1", 22), timeout=10)
+          except OSError: c.close(); return
+          t = threading.Thread(target=pump, args=(up, c), daemon=True); t.start()
+          pump(c, up); t.join(); c.close(); up.close()
+      srv = socket.socket(socket.AF_VSOCK, socket.SOCK_STREAM)
+      srv.bind((socket.VMADDR_CID_ANY, 22)); srv.listen(16)
+      while True:
+          c, _ = srv.accept()
+          threading.Thread(target=handle, args=(c,), daemon=True).start()
+  - path: /etc/systemd/system/sai-vsock-ssh.service
+    permissions: "0644"
+    content: |
+      [Unit]
+      Description=Sandbox-ai SSH over vsock (vsock:22 -> sshd on loopback)
+      After=ssh.service
+      [Service]
+      ExecStart=/usr/bin/python3 /usr/local/bin/sai-vsock-ssh.py
+      Restart=always
+      RestartSec=1
+      [Install]
+      WantedBy=multi-user.target
+  - path: /root/.ssh/authorized_keys
+    permissions: "0600"
+    content: |
+      @SSH_PUBKEY@
+
+  # Kernel messages and a login prompt on the virtio console (hvc0), which is what sai-box attaches.
+  # The cloud image defaults to ttyAMA0, which does not exist in this VM.
+  - path: /etc/default/grub.d/90-sai-console.cfg
+    permissions: "0644"
+    content: |
+      # apparmor=0: Debian's 6.12 cloud kernel oopsed in AppArmor find_attach() when apt-get spawned its
+      # sandboxed methods inside this VM (NULL deref, "reboot is needed"). The product ships its own
+      # guest image; for the spike we turn AppArmor off in the guest.
+      GRUB_CMDLINE_LINUX_DEFAULT="console=tty0 console=hvc0 consoleblank=0 systemd.mask=systemd-networkd-wait-online.service apparmor=0 arm64.nopauth"
+      GRUB_TERMINAL=console
+
+runcmd:
+  # No NIC: do not wait for a network that will never come.
+  - systemctl disable --now systemd-networkd-wait-online.service || true
+  - systemctl mask systemd-networkd-wait-online.service || true
+  - systemctl daemon-reload
+  - systemctl enable --now sai-forward.service
+  - chmod 700 /root/.ssh
+  - systemctl enable --now sai-vsock-ssh.service
+  - systemctl enable --now serial-getty@hvc0.service || true
+  - update-grub || true
+  - mkdir -p /work
+  - systemctl enable --now work.mount || true
+  # Boot beacon: one request through the proxy so the host gets a receipt, plus a marker in the share.
+  - sleep 1
+  - env http_proxy=http://127.0.0.1:3128 curl -fsS -m 20 -o /dev/null http://deb.debian.org/debian/dists/trixie/Release && echo "beacon ok" > /dev/hvc0 || echo "beacon failed" > /dev/hvc0
+  - sh -c 'date -u +%FT%TZ > /work/spike/box/build/guest-ready' || true
+  # Self-test battery; results land in the shared folder as guest-report.txt.
+  - /usr/local/bin/sai-selftest.sh || true
+  - /usr/local/bin/sai-install-claude.sh || true
+  - echo "sai-ready" > /dev/hvc0
+
+final_message: "sai-ready: Box guest configured in $UPTIME seconds"

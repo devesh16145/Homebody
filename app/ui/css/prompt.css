@@ -1,0 +1,50 @@
+/* Prompt banner: 380 x 148, frameless, transparent, always on top.
+   The card draws its own material and a tight shadow inside --prompt-inset.
+   If the window gets a native shadow, set --prompt-inset to 0. */
+
+:root { --prompt-inset: 6px; }
+
+html, body { background: transparent; }
+.in-browser:not(.embedded) body { background: var(--fill-3); }
+
+.prompt { position: absolute; inset: var(--prompt-inset); }
+
+.p-card {
+  position: absolute; inset: 0; display: flex; flex-direction: column;
+  padding: 12px 12px 0; border-radius: 16px; overflow: hidden;
+  background: var(--material-solid); box-shadow: var(--shadow-float);
+  -webkit-backdrop-filter: blur(30px) saturate(180%); backdrop-filter: blur(30px) saturate(180%);
+  animation: p-in var(--t-med) var(--ease);
+}
+@keyframes p-in { from { opacity: 0; transform: translateY(-6px) scale(.985); } }
+
+.p-top { display: flex; gap: 10px; align-items: flex-start; flex: 1; min-height: 0; }
+.p-text { flex: 1; min-width: 0; }
+.p-title {
+  font-weight: 600; line-height: 1.3;
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; overflow-wrap: anywhere;
+}
+.p-body {
+  margin-top: 1px; color: var(--text-2); font-size: var(--fs-small); line-height: 1.35;
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden;
+}
+.p-side { display: flex; flex-direction: column; align-items: flex-end; gap: 2px; font-size: var(--fs-cap); color: var(--text-3); white-space: nowrap; }
+.p-more { font-size: var(--fs-micro); }
+
+.p-btns { display: grid; grid-template-columns: 1fr 1.1fr 1fr; gap: 7px; }
+.p-btns .btn { padding: 3px 6px; }
+
+.p-bar { height: 3px; margin: 9px -12px 0; background: var(--fill-2); }
+.p-bar i { display: block; height: 100%; background: var(--amber); transform-origin: left; }
+
+/* outcome line shown briefly after a timeout */
+.p-done { display: flex; align-items: center; gap: 10px; flex: 1; padding-bottom: 12px; }
+.p-done .p-title { font-weight: 600; }
+.p-done .p-body { -webkit-line-clamp: 3; }
+
+.p-idle { position: absolute; inset: 0; display: grid; place-items: center; color: var(--text-3); font-size: var(--fs-small); }
+.in-app .p-idle, .embedded .p-idle { display: none; }
+
+/* In the app the window itself is the card: native material, native corner radius, native shadow. */
+.in-app { --prompt-inset: 0px; }
+.in-app .p-card { background: transparent; box-shadow: none; border-radius: 0; -webkit-backdrop-filter: none; backdrop-filter: none; animation: none; }

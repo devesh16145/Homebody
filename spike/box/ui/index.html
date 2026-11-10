@@ -1,0 +1,157 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sandbox-ai Console</title>
+<style>
+  :root { color-scheme: light dark;
+    --bg:#f5f5f7; --card:#fff; --fg:#1d1d1f; --muted:#6e6e73; --line:#e5e5ea; --accent:#0a84ff;
+    --ok:#34c759; --bad:#ff3b30; --warn:#ff9f0a; --mono: ui-monospace, SFMono-Regular, Menlo, monospace; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#1c1c1e; --card:#2c2c2e; --fg:#f5f5f7; --muted:#98989d; --line:#3a3a3c; } }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg); font: 13px/1.45 -apple-system, BlinkMacSystemFont, "SF Pro Text", Helvetica, Arial, sans-serif; }
+  header { display:flex; align-items:center; gap:12px; padding:14px 20px; border-bottom:1px solid var(--line); background:var(--card); position:sticky; top:0; }
+  header h1 { font-size:15px; margin:0; font-weight:600; }
+  .dot { width:10px; height:10px; border-radius:50%; background:var(--muted); display:inline-block; }
+  .dot.on { background:var(--ok); } .dot.off { background:var(--bad); }
+  main { display:grid; grid-template-columns: 300px 1fr 1fr; gap:16px; padding:16px 20px; max-width:1500px; margin:0 auto; }
+  @media (max-width: 1100px) { main { grid-template-columns: 1fr; } }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:14px 16px; }
+  .card h2 { font-size:12px; text-transform:uppercase; letter-spacing:.04em; color:var(--muted); margin:0 0 10px; font-weight:600; }
+  .big { font-size:26px; font-weight:700; letter-spacing:-.01em; }
+  .muted { color:var(--muted); }
+  ul.plain { list-style:none; margin:0; padding:0; } ul.plain li { padding:6px 0; border-top:1px solid var(--line); display:flex; justify-content:space-between; gap:8px; }
+  ul.plain li:first-child { border-top:0; }
+  .tag { font-size:11px; padding:2px 7px; border-radius:999px; background:var(--line); color:var(--fg); white-space:nowrap; }
+  .tag.allow { background:rgba(52,199,89,.18); color:#1f8f3e; } .tag.deny { background:rgba(255,59,48,.16); color:#c92a20; }
+  @media (prefers-color-scheme: dark) { .tag.allow { color:#5fd37b; } .tag.deny { color:#ff6b61; } }
+  textarea, input { width:100%; font: inherit; padding:9px 10px; border:1px solid var(--line); border-radius:8px; background:var(--bg); color:var(--fg); }
+  textarea { min-height:70px; resize:vertical; }
+  button { font: inherit; padding:8px 12px; border-radius:8px; border:1px solid var(--line); background:var(--card); color:var(--fg); cursor:pointer; }
+  button.primary { background:var(--accent); border-color:var(--accent); color:#fff; }
+  button.danger { border-color: rgba(255,59,48,.5); color:#c92a20; }
+  button:disabled { opacity:.5; cursor:default; }
+  .row { display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-top:8px; }
+  pre { font-family: var(--mono); font-size:12px; background:var(--bg); border:1px solid var(--line); border-radius:8px; padding:10px; white-space:pre-wrap; word-break:break-word; max-height:360px; overflow:auto; margin:10px 0 0; }
+  .feed { max-height: 70vh; overflow:auto; }
+  .feed li { font-family: var(--mono); font-size:12px; align-items:center; }
+  .feed .host { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .feed .time { color:var(--muted); font-size:11px; }
+  label { display:block; font-size:12px; color:var(--muted); margin:10px 0 4px; }
+  .hint { font-size:12px; color:var(--muted); margin-top:8px; }
+</style>
+</head>
+<body>
+<header>
+  <span id="vmdot" class="dot"></span>
+  <h1>Sandbox-ai Console</h1>
+  <span id="status" class="muted">checking…</span>
+  <span style="flex:1"></span>
+  <button id="verify">Verify receipts</button>
+</header>
+<main>
+  <section>
+    <div class="card">
+      <h2>Proof</h2>
+      <div class="big" id="bytesOut">0 bytes</div>
+      <div class="muted">left this Mac to untrusted destinations</div>
+      <ul class="plain" style="margin-top:10px">
+        <li><span>Allowed connections</span><span id="nAllow" class="tag allow">0</span></li>
+        <li><span>Blocked attempts</span><span id="nDeny" class="tag deny">0</span></li>
+        <li><span>Receipt chain</span><span id="chain" class="tag">not checked</span></li>
+      </ul>
+    </div>
+    <div class="card" style="margin-top:16px">
+      <h2>Trusted destinations</h2>
+      <ul class="plain" id="allow"></ul>
+      <div class="hint">Everything else is blocked. The fenced agent can only reach the local proxy, and the proxy only reaches this list.</div>
+    </div>
+  </section>
+
+  <section>
+    <div class="card">
+      <h2>Run Claude Code, fenced</h2>
+      <label for="key">Anthropic API key (stays on this Mac; handed to the fenced process in memory only)</label>
+      <input id="key" type="password" placeholder="sk-ant-…" autocomplete="off">
+      <label for="task">Task for Claude Code</label>
+      <textarea id="task">Write primes.py that prints the first 20 prime numbers, run it with python3, and show me the output.</textarea>
+      <div class="row">
+        <button class="primary" id="run">Run Claude Code</button>
+        <button class="danger" id="exfil">Try to exfiltrate (webhook.site)</button>
+        <button id="allowedTest">Reach an allowed host</button>
+      </div>
+      <div class="hint">Claude Code runs as a separate macOS user with permission prompts off. It cannot see your home folder, can only write in /Users/Shared/sandbox-ai/work, and can only reach the trusted list. Every connection becomes a receipt on the right.</div>
+      <pre id="out">(output appears here)</pre>
+    </div>
+  </section>
+
+  <section>
+    <div class="card">
+      <h2>Live feed <span id="feedCount" class="muted"></span></h2>
+      <ul class="plain feed" id="feed"></ul>
+    </div>
+  </section>
+</main>
+<script>
+const $ = (id) => document.getElementById(id);
+let lastSeen = 0;
+
+async function status() {
+  try {
+    const s = await (await fetch('/api/status')).json();
+    $('vmdot').className = 'dot ' + (s.vm && s.ssh ? 'on' : 'off');
+    $('status').textContent = (s.mode === 'agent' ? 'Fenced agent · ' : 'Box · ') + s.detail;
+    $('allow').innerHTML = (s.allow.length ? s.allow : ['(none)']).map(h => `<li><span>${h}</span><span class="tag allow">allowed</span></li>`).join('');
+  } catch (e) { $('status').textContent = 'console server unreachable'; }
+}
+
+async function feed() {
+  try {
+    const rows = await (await fetch('/api/receipts')).json();
+    let nA = 0, nD = 0;
+    $('feed').innerHTML = rows.slice().reverse().map(r => {
+      if (r.decision.endsWith('allow')) nA++; else nD++;
+      const verb = r.decision.endsWith('allow') ? 'Allowed' : 'Blocked';
+      return `<li><span class="tag ${r.decision.endsWith('allow') ? 'allow' : 'deny'}">${verb}</span><span class="host">${r.host}:${r.port}</span><span class="muted">${r.rule}</span><span class="time">${r.ts.slice(11,19)}</span></li>`;
+    }).join('') || '<li class="muted">No connections yet.</li>';
+    $('nAllow').textContent = nA; $('nDeny').textContent = nD; $('feedCount').textContent = rows.length ? `· ${rows.length} receipts` : '';
+  } catch (e) {}
+}
+
+async function runJob(kind) {
+  for (const id of ['run','exfil','allowedTest']) $(id).disabled = true;
+  $('out').textContent = 'running as the fenced user…';
+  try {
+    const r = await (await fetch('/api/run', {method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({kind, text: $('task').value, apiKey: $('key').value})})).json();
+    if (!r.job) { $('out').textContent = 'error: ' + (r.error || 'unknown'); return; }
+    while (true) {
+      const j = await (await fetch('/api/job/' + r.job)).json();
+      $('out').textContent = j.output || 'running as the fenced user…';
+      $('out').scrollTop = $('out').scrollHeight;
+      if (j.done) break;
+      await new Promise(res => setTimeout(res, 800));
+    }
+  } finally {
+    for (const id of ['run','exfil','allowedTest']) $(id).disabled = false;
+    feed();
+  }
+}
+
+$('run').onclick = () => runJob('task');
+$('exfil').onclick = () => runJob('exfil');
+$('allowedTest').onclick = () => runJob('allowed');
+$('verify').onclick = async () => {
+  $('chain').textContent = 'verifying…';
+  const v = await (await fetch('/api/verify')).json();
+  const ok = /^OK/.test(v.output);
+  $('chain').textContent = ok ? v.output.replace(/^OK: /, '') : 'FAILED';
+  $('chain').className = 'tag ' + (ok ? 'allow' : 'deny');
+};
+
+status(); feed();
+setInterval(status, 5000); setInterval(feed, 1500);
+</script>
+</body>
+</html>

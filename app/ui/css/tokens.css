@@ -1,0 +1,201 @@
+/* Design tokens. Every color, size and radius the UI uses is defined here.
+   Light is the default; dark follows the system, and [data-theme] forces either
+   (used by dev.html and by ?theme= on standalone pages). */
+
+:root {
+  color-scheme: light dark;
+
+  /* type */
+  --font: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", Helvetica, Arial, sans-serif;
+  --font-display: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Helvetica Neue", Helvetica, Arial, sans-serif;
+  --mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Monaco, monospace;
+  --fs-micro: 10px;
+  --fs-cap: 11px;
+  --fs-small: 12px;
+  --fs-body: 13px;
+  --fs-title: 15px;
+  --fs-large: 17px;
+  --fs-headline: 26px;
+  --fs-hero: 40px;
+  --lh: 1.4;
+
+  /* space */
+  --s1: 4px;
+  --s2: 8px;
+  --s3: 12px;
+  --s4: 16px;
+  --s5: 20px;
+  --s6: 24px;
+  --s8: 32px;
+  --s10: 40px;
+
+  /* shape */
+  --r-xs: 5px;
+  --r-sm: 6px;
+  --r-md: 8px;
+  --r-lg: 10px;
+  --r-xl: 12px;
+  --toolbar-h: 52px;
+  --lights-w: 78px;
+
+  /* motion */
+  --ease: cubic-bezier(.2, .8, .2, 1);
+  --t-fast: .12s;
+  --t-med: .22s;
+
+  /* surfaces */
+  --window: #ffffff;
+  --toolbar: #f6f6f7;
+  --sidebar: #f5f5f6;
+  --card: #f7f7f8;
+  --card-border: rgba(0, 0, 0, .06);
+  --material: rgba(246, 246, 248, .78);
+  --material-solid: rgba(249, 249, 250, .97);
+  --code-bg: #f4f4f6;
+
+  /* text */
+  --text: #1d1d1f;
+  --text-2: #5d5d64;
+  --text-3: #7b7b83;
+  --on-accent: #ffffff;
+
+  /* lines and fills */
+  --hairline: rgba(0, 0, 0, .09);
+  --hairline-strong: rgba(0, 0, 0, .16);
+  --fill-1: rgba(0, 0, 0, .04);
+  --fill-2: rgba(0, 0, 0, .07);
+  --fill-3: rgba(0, 0, 0, .11);
+  --control: #ffffff;
+  --control-border: rgba(0, 0, 0, .13);
+  --track: rgba(120, 120, 128, .28);
+  --knob: #ffffff;
+  --skeleton: rgba(0, 0, 0, .06);
+
+  /* semantic color: green = Private/Allowed, red = Blocked,
+     amber = Asked/attention, blue = accent and Seen */
+  --green: #2bb256;
+  --green-text: #177a37;
+  --green-bg: rgba(43, 178, 86, .13);
+  --red: #f0443a;
+  --red-text: #c9281e;
+  --red-bg: rgba(240, 68, 58, .10);
+  --amber: #f59e0b;
+  --amber-text: #955800;
+  --amber-bg: rgba(245, 158, 11, .15);
+  --blue: #0a72f5;
+  --blue-text: #0a5fcc;
+  --blue-bg: rgba(10, 114, 245, .10);
+  --accent: var(--blue);
+  --focus: rgba(10, 114, 245, .55);
+  --selected: rgba(10, 114, 245, .10);
+
+  /* app monogram tiles */
+  --tile-ollama: #2c2c2e;
+  --tile-claude: #b8623f;
+  --tile-generic: #8e8e93;
+
+  /* depth */
+  --shadow-control: 0 .5px 1px rgba(0, 0, 0, .10);
+  --shadow-seg: 0 1px 2px rgba(0, 0, 0, .14), 0 0 0 .5px rgba(0, 0, 0, .05);
+  --shadow-float: 0 1px 5px rgba(0, 0, 0, .16), 0 0 0 .5px rgba(0, 0, 0, .14);
+  --shadow-pop: 0 14px 40px rgba(0, 0, 0, .22), 0 0 0 .5px rgba(0, 0, 0, .16);
+  --hero-glow: rgba(43, 178, 86, .13);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --window: #1e1e20;
+    --toolbar: #29292c;
+    --sidebar: #242427;
+    --card: #28282b;
+    --card-border: rgba(255, 255, 255, .07);
+    --material: rgba(38, 38, 41, .78);
+    --material-solid: rgba(44, 44, 47, .97);
+    --code-bg: #161618;
+    --text: #f2f2f4;
+    --text-2: #a9a9b1;
+    --text-3: #81818a;
+    --hairline: rgba(255, 255, 255, .09);
+    --hairline-strong: rgba(255, 255, 255, .17);
+    --fill-1: rgba(255, 255, 255, .05);
+    --fill-2: rgba(255, 255, 255, .08);
+    --fill-3: rgba(255, 255, 255, .13);
+    --control: rgba(255, 255, 255, .10);
+    --control-border: rgba(255, 255, 255, .07);
+    --track: rgba(120, 120, 128, .40);
+    --knob: #f4f4f6;
+    --skeleton: rgba(255, 255, 255, .07);
+    --green: #30c85e;
+    --green-text: #46d873;
+    --green-bg: rgba(48, 200, 94, .16);
+    --red: #ff5046;
+    --red-text: #ff7067;
+    --red-bg: rgba(255, 80, 70, .16);
+    --amber: #f2ae3a;
+    --amber-text: #f6c263;
+    --amber-bg: rgba(242, 174, 58, .16);
+    --blue: #2b8cff;
+    --blue-text: #6cb0ff;
+    --blue-bg: rgba(43, 140, 255, .18);
+    --focus: rgba(60, 150, 255, .7);
+    --selected: rgba(43, 140, 255, .20);
+    --tile-ollama: #55555a;
+    --tile-claude: #c26d49;
+    --tile-generic: #6e6e73;
+    --shadow-control: 0 .5px 1px rgba(0, 0, 0, .30);
+    --shadow-seg: 0 1px 2px rgba(0, 0, 0, .35), 0 0 0 .5px rgba(255, 255, 255, .06);
+    --shadow-float: 0 1px 5px rgba(0, 0, 0, .40), 0 0 0 .5px rgba(255, 255, 255, .12);
+    --shadow-pop: 0 14px 40px rgba(0, 0, 0, .50), 0 0 0 .5px rgba(255, 255, 255, .12);
+    --hero-glow: rgba(48, 200, 94, .12);
+  }
+}
+
+/* Same dark values, forced. Keep in step with the block above. */
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --window: #1e1e20;
+  --toolbar: #29292c;
+  --sidebar: #242427;
+  --card: #28282b;
+  --card-border: rgba(255, 255, 255, .07);
+  --material: rgba(38, 38, 41, .78);
+  --material-solid: rgba(44, 44, 47, .97);
+  --code-bg: #161618;
+  --text: #f2f2f4;
+  --text-2: #a9a9b1;
+  --text-3: #81818a;
+  --hairline: rgba(255, 255, 255, .09);
+  --hairline-strong: rgba(255, 255, 255, .17);
+  --fill-1: rgba(255, 255, 255, .05);
+  --fill-2: rgba(255, 255, 255, .08);
+  --fill-3: rgba(255, 255, 255, .13);
+  --control: rgba(255, 255, 255, .10);
+  --control-border: rgba(255, 255, 255, .07);
+  --track: rgba(120, 120, 128, .40);
+  --knob: #f4f4f6;
+  --skeleton: rgba(255, 255, 255, .07);
+  --green: #30c85e;
+  --green-text: #46d873;
+  --green-bg: rgba(48, 200, 94, .16);
+  --red: #ff5046;
+  --red-text: #ff7067;
+  --red-bg: rgba(255, 80, 70, .16);
+  --amber: #f2ae3a;
+  --amber-text: #f6c263;
+  --amber-bg: rgba(242, 174, 58, .16);
+  --blue: #2b8cff;
+  --blue-text: #6cb0ff;
+  --blue-bg: rgba(43, 140, 255, .18);
+  --focus: rgba(60, 150, 255, .7);
+  --selected: rgba(43, 140, 255, .20);
+  --tile-ollama: #55555a;
+  --tile-claude: #c26d49;
+  --tile-generic: #6e6e73;
+  --shadow-control: 0 .5px 1px rgba(0, 0, 0, .30);
+  --shadow-seg: 0 1px 2px rgba(0, 0, 0, .35), 0 0 0 .5px rgba(255, 255, 255, .06);
+  --shadow-float: 0 1px 5px rgba(0, 0, 0, .40), 0 0 0 .5px rgba(255, 255, 255, .12);
+  --shadow-pop: 0 14px 40px rgba(0, 0, 0, .50), 0 0 0 .5px rgba(255, 255, 255, .12);
+  --hero-glow: rgba(48, 200, 94, .12);
+}
+
+:root[data-theme="light"] { color-scheme: light; }

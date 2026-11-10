@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>en</string>
+	<key>CFBundleDisplayName</key>
+	<string>Sandbox-ai Fence</string>
+	<key>CFBundleExecutable</key>
+	<string>Fence</string>
+	<key>CFBundleIdentifier</key>
+	<string>com.sandboxai.fence</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>Fence</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>0.1.0</string>
+	<key>CFBundleVersion</key>
+	<string>1</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>14.0</string>
+	<key>LSUIElement</key>
+	<true/>
+	<key>NSPrincipalClass</key>
+	<string>NSApplication</string>
+	<key>NSSystemExtensionUsageDescription</key>
+	<string>The Fence extension keeps your local AI apps from sending data off this Mac and records what they try.</string>
+	<key>SAIAppGroup</key>
+	<string>@APP_GROUP@</string>
+	<key>NSHumanReadableCopyright</key>
+	<string>Apache-2.0</string>
+</dict>
+</plist>

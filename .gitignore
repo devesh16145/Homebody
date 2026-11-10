@@ -1,0 +1,18 @@
+# Build output
+target/
+build/
+.build/
+node_modules/
+app/src-tauri/gen/
+
+# Local and generated
+.DS_Store
+*.log
+.claude/
+
+# Never commit keys or VM images (these live under build/ already; listed for safety)
+*.key
+box_ed25519*
+*.raw
+*.raw.pristine
+*.iso

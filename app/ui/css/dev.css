@@ -1,0 +1,47 @@
+/* Review harness only. Not part of the app. */
+
+:root { --desk: #d9dde5; --desk-2: #c9cfdb; --dev-bar: rgba(250, 250, 251, .86); }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --desk: #17181c; --desk-2: #22252d; --dev-bar: rgba(34, 34, 37, .86); } }
+:root[data-theme="dark"] { --desk: #17181c; --desk-2: #22252d; --dev-bar: rgba(34, 34, 37, .86); }
+
+body { overflow: auto; background: linear-gradient(160deg, var(--desk), var(--desk-2)) fixed; display: block; }
+
+.dev-bar {
+  position: sticky; top: 0; z-index: 10; display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
+  padding: 8px 14px; background: var(--dev-bar); border-bottom: 1px solid var(--hairline);
+  -webkit-backdrop-filter: blur(20px); backdrop-filter: blur(20px); font-size: var(--fs-small);
+}
+.dev-bar strong { margin-right: 6px; }
+.dev-field, .dev-check { display: inline-flex; align-items: center; gap: 6px; color: var(--text-2); }
+.dev-select { height: 22px; font: inherit; color: var(--text); border-radius: 5px; border: .5px solid var(--control-border); background: var(--control); }
+.dev-seg { display: inline-flex; padding: 2px; border-radius: 7px; background: var(--fill-2); }
+.dev-seg button { height: 20px; padding: 0 9px; border: 0; border-radius: 5px; background: transparent; color: var(--text-2); font-size: var(--fs-cap); }
+.dev-seg button[aria-pressed="true"] { background: var(--control); color: var(--text); box-shadow: var(--shadow-seg); }
+.dev-sep { width: 1px; height: 16px; margin: 0 4px; background: var(--hairline-strong); }
+.dev-label { color: var(--text-3); }
+
+.dev-stage { display: flex; align-items: flex-start; gap: 28px; padding: 24px 28px 60px; width: max-content; }
+.dev-col { display: flex; flex-direction: column; gap: 24px; }
+.dev-frame { margin: 0; }
+.dev-frame figcaption { display: flex; align-items: center; gap: 8px; height: 20px; margin-bottom: 8px; font-size: var(--fs-cap); font-weight: 600; color: var(--text-2); }
+.dev-hint { font-weight: 400; color: var(--text-3); }
+.dev-win { position: relative; line-height: 0; transition: opacity var(--t-med), box-shadow var(--t-med); }
+.dev-win iframe { display: block; border: 0; background: transparent; }
+
+.dev-glance { width: 340px; border-radius: 12px; box-shadow: var(--shadow-pop); }
+.dev-glance iframe { border-radius: 12px; }
+.dev-prompt { width: 380px; }
+.dev-main { border-radius: 10px; box-shadow: var(--shadow-pop); overflow: hidden; }
+.dev-main.flash { box-shadow: var(--shadow-pop), 0 0 0 3px var(--focus); }
+
+.dev-frame.is-off .dev-win { opacity: .12; pointer-events: none; }
+.dev-frame.is-off .dev-glance { box-shadow: none; outline: 1px dashed var(--hairline-strong); }
+
+.dev-lights { position: absolute; left: 20px; top: 20px; z-index: 2; display: flex; gap: 8px; pointer-events: none; }
+.dev-lights i { width: 12px; height: 12px; border-radius: 50%; background: var(--fill-3); }
+
+.dev-note {
+  position: fixed; left: 50%; bottom: 16px; z-index: 20; transform: translate(-50%, 8px); padding: 6px 12px; border-radius: 8px;
+  background: var(--text); color: var(--window); font-size: var(--fs-small); opacity: 0; pointer-events: none; transition: opacity var(--t-med), transform var(--t-med);
+}
+.dev-note.show { opacity: 1; transform: translate(-50%, 0); }

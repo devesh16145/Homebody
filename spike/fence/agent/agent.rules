@@ -1,0 +1,10 @@
+# Sandbox-ai agent fence — pf anchor rules for the dedicated agent user.
+# Loaded into anchor "com.sandboxai/agent" by agent-fence.sh. @AGENT_USER@ is substituted.
+#
+# The agent may talk only to loopback, where the Sandbox-ai proxy listens. The proxy decides by
+# hostname and writes receipts. Everything else the agent sends is dropped and logged.
+
+pass out quick on lo0 user @AGENT_USER@
+pass in  quick on lo0 user @AGENT_USER@
+block out log quick user @AGENT_USER@
+block in  log quick user @AGENT_USER@

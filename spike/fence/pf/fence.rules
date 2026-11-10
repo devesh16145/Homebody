@@ -1,0 +1,21 @@
+# Sandbox-ai Fence v0 — pf anchor rules for the fenced model daemon.
+# Loaded into anchor "com.sandboxai/fence" by fence.sh. @FENCE_USER@ is substituted.
+#
+# Order matters: pf evaluates top to bottom, "quick" stops at the first match.
+
+# Temporary allowances (model downloads). Managed with `fence.sh allow HOST` / `revoke`.
+table <sai_allow> persist
+
+# 1. Loopback is always fine: the daemon must serve local apps on 127.0.0.1:11434.
+pass out quick on lo0 user @FENCE_USER@
+pass in  quick on lo0 user @FENCE_USER@
+
+# 2. Explicitly allowed download hosts, HTTPS only, logged so they appear as receipts.
+pass out log quick proto tcp from any to <sai_allow> port 443 user @FENCE_USER@
+
+# 3. Everything else the fenced user sends is dropped and logged. This includes DNS,
+#    so the daemon cannot even resolve names: a side door closed by construction.
+block out log quick user @FENCE_USER@
+
+# 4. Nothing from other machines may reach the fenced user's sockets. Localhost-only service.
+block in  log quick user @FENCE_USER@
