@@ -241,7 +241,9 @@ pub struct PipeSecurity {
     descriptor: *mut c_void,
     pub attributes: SECURITY_ATTRIBUTES,
 }
+// The descriptor is written once, when it is made, and only read afterwards.
 unsafe impl Send for PipeSecurity {}
+unsafe impl Sync for PipeSecurity {}
 
 impl PipeSecurity {
     pub fn for_container(sid_text: &str) -> Result<Box<PipeSecurity>, String> {
