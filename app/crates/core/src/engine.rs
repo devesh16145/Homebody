@@ -493,6 +493,46 @@ impl Engine {
         Ok(())
     }
 
+    /// Whether a request for this address inside a trusted place may go (the user's switches).
+    pub(crate) fn inside_allowed(&self, app_id: &str, host: &str, path: &str) -> bool {
+        self.0.cfg.lock().unwrap().app(app_id).map(|a| a.inside_allows(host, path)).unwrap_or(false)
+    }
+
+    pub fn inside_list(&self, app_id: Option<&str>) -> Vec<InsideEntry> {
+        let cfg = self.0.cfg.lock().unwrap();
+        let mut out = Vec::new();
+        for a in cfg.apps.iter().filter(|a| app_id.map(|id| id == a.id).unwrap_or(true)) {
+            for r in &a.inside {
+                let (label, purpose) = catalog::describe_inside(&r.host, &r.path);
+                out.push(InsideEntry { app_id: a.id.clone(), host: r.host.clone(), host_label: catalog::describe(&r.host).0, path: r.path.clone(), label, purpose, enabled: r.enabled, source: r.source.clone() });
+            }
+        }
+        out
+    }
+
+    fn set_inside(&self, app_id: &str, host: &str, path: &str, enabled: Option<bool>) -> Result<(), String> {
+        let host = hostname::canonical(host).ok_or("That is not a place name.")?;
+        if !crate::config::valid_inside_path(path) {
+            return Err("That is not an address inside a place. It should look like /v1/messages.".into());
+        }
+        {
+            let mut cfg = self.0.cfg.lock().unwrap();
+            let app = cfg.app_mut(app_id).ok_or("Unknown app.")?;
+            match (app.inside.iter().position(|r| r.host == host && r.path == path), enabled) {
+                (Some(i), Some(on)) => app.inside[i].enabled = on,
+                (None, Some(on)) => app.inside.push(crate::config::InsideRule { host: host.clone(), path: path.to_string(), enabled: on, source: "you".into() }),
+                (Some(i), None) if app.inside[i].source == "you" => {
+                    app.inside.remove(i);
+                }
+                (Some(_), None) => return Err("Built-in switches can be turned on or off, but not removed.".into()),
+                (None, None) => {}
+            }
+        }
+        self.save_cfg();
+        self.append("trust", fields! { "app" => app_id, "host" => host.as_str(), "path" => path, "enabled" => enabled, "via" => "inside" });
+        Ok(())
+    }
+
     /// The end of a connection that was looked inside: what was asked for in it.
     pub fn record_end_inspected(&self, conn: u64, bytes_out: u64, bytes_in: u64, ms: u64, requests: &[(String, u64)]) {
         let paths: Vec<Value> = requests.iter().map(|(what, n)| json!([what, n])).collect();
@@ -869,6 +909,11 @@ impl Engine {
             Reason::YouAllowedOnce => "You allowed this once.".into(),
             Reason::YouAlwaysAllow => "You chose to always allow this.".into(),
             Reason::YouBlocked => "You blocked this.".into(),
+            Reason::NotTrusted if row.detail == "path" => {
+                let (what, _) = catalog::describe_inside(&row.host, &row.other);
+                let named = if what.is_empty() { row.other.clone() } else { format!("{what} ({})", row.other) };
+                format!("{app_name} asked {label} for {named}, which is switched off, so that request was refused and nothing of it was sent.")
+            }
             Reason::NotTrusted => format!("{label} is switched off for {app_name}, so it was blocked without asking."),
             Reason::NoAnswer => "Nobody answered within 30 seconds, so it was blocked.".into(),
             Reason::Watching => "Watch mode is on, so this was allowed and recorded.".into(),
@@ -947,7 +992,14 @@ impl Engine {
             bytes_in: row.bytes_in,
             duration_ms: row.duration_ms,
             trusted,
-            requests: row.requests.as_ref().map(|r| r.iter().map(|(what, times)| RequestKind { what: what.clone(), times: *times }).collect()),
+            requests: row.requests.as_ref().map(|r| {
+                r.iter()
+                    .map(|(what, times)| {
+                        let path = what.split_once(' ').map(|(_, p)| p).filter(|p| p.starts_with('/')).unwrap_or("").to_string();
+                        RequestKind { what: what.clone(), times: *times, label: catalog::describe_inside(&row.host, &path).0, allowed: app.map(|a| a.inside_allows(&row.host, &path)).unwrap_or(true), path }
+                    })
+                    .collect()
+            }),
         }
     }
 
@@ -1525,6 +1577,15 @@ impl Engine {
                 self.append("app", fields! { "action" => "removed", "app" => id.as_str() });
                 self.check_fence().await;
                 ok(&self.status())
+            }
+            "get_inside_rules" => ok(&self.inside_list(s("appId").as_deref())),
+            "set_inside_rule" => {
+                self.set_inside(&req("appId")?, &req("host")?, &req("path")?, Some(b("enabled")?))?;
+                ok(&self.inside_list(None))
+            }
+            "remove_inside_rule" => {
+                self.set_inside(&req("appId")?, &req("host")?, &req("path")?, None)?;
+                ok(&self.inside_list(None))
             }
             "app_set_inspect" => {
                 self.set_inspect(&req("appId")?, b("on")?)?;

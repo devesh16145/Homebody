@@ -19,6 +19,25 @@ pub struct TrustRule {
     pub recommended: bool,
 }
 
+/// A switch for an address inside a trusted place. Acts only while the app's connections are
+/// being looked inside (see `inspect`).
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct InsideRule {
+    pub host: String,
+    /// Start of the path, matched by whole segments ("/api/event_logging").
+    pub path: String,
+    /// true: allowed. false: requests there are refused.
+    pub enabled: bool,
+    /// "preset" or "you".
+    pub source: String,
+}
+
+/// What a path rule may look like: starts with "/", plain visible characters, not too long.
+pub fn valid_inside_path(path: &str) -> bool {
+    path.starts_with('/') && path.len() <= 200 && path.chars().all(|c| c.is_ascii_graphic() && c != '?' && c != '#')
+}
+
 /// A folder brought in for an agent to work on. See `projects`.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -71,9 +90,20 @@ pub struct AppConfig {
     #[serde(default)]
     pub projects: Vec<ProjectConfig>,
     pub trust: Vec<TrustRule>,
+    #[serde(default)]
+    pub inside: Vec<InsideRule>,
 }
 
 impl AppConfig {
+    /// Whether a request for `path` at `host` may go. The most specific switch decides; with no
+    /// switch for it, everything inside a trusted place is allowed.
+    pub fn inside_allows(&self, host: &str, path: &str) -> bool {
+        // Compared without regard to capitals: some servers do not care about them, and a
+        // switch that is off must not be dodged by changing them.
+        let path = path.to_lowercase();
+        self.inside.iter().filter(|r| r.host == host && catalog::path_under(&path, &r.path.to_lowercase())).max_by_key(|r| r.path.len()).map(|r| r.enabled).unwrap_or(true)
+    }
+
     /// The rule that decides this destination, if any. Exact rules win over wildcards, and among
     /// rules of the same kind a block wins over an allow, so adding a block can never be shadowed.
     pub fn rule_for(&self, host: &str) -> Option<&TrustRule> {
@@ -175,6 +205,7 @@ impl Config {
                         windowed: false,
                         projects: vec![],
                         trust: vec![],
+                        inside: vec![],
                     });
                     changed = true;
                     self.apps.last_mut().unwrap()
@@ -193,6 +224,12 @@ impl Config {
             for t in p.trust {
                 if !app.trust.iter().any(|r| r.host == t.host) {
                     app.trust.push(TrustRule { host: t.host.into(), enabled: t.enabled, source: "preset".into(), recommended: t.recommended });
+                    changed = true;
+                }
+            }
+            for i in p.inside {
+                if !app.inside.iter().any(|r| r.host == i.host && r.path == i.path) {
+                    app.inside.push(InsideRule { host: i.host.into(), path: i.path.into(), enabled: i.enabled, source: "preset".into() });
                     changed = true;
                 }
             }
@@ -242,6 +279,7 @@ impl Config {
                 // A windowed app decides for itself whom it trusts; it cannot be told about ours.
                 a.inspect = false;
             }
+            a.inside.retain(|r| hostname::canonical(&r.host).as_deref() == Some(r.host.as_str()) && valid_inside_path(&r.path));
             a.trust.retain(|r| hostname::valid_pattern(&r.host));
             for r in &mut a.trust {
                 r.host = hostname::normalize_pattern(&r.host);
@@ -307,6 +345,7 @@ impl Config {
             windowed,
             projects: vec![],
             trust: vec![],
+            inside: vec![],
         });
         Ok(id)
     }
@@ -459,6 +498,25 @@ mod tests {
         let rules = crate::fence::filter_rules(&loaded, true) + &crate::fence::filter_rules(&loaded, false);
         assert!(rules.lines().all(|l| l.is_empty() || l.starts_with('#') || l.starts_with("pass ") || l.starts_with("block ") || l == "anchor \"*\""));
         assert!(!rules.lines().any(|l| l.trim() == "pass out quick all"), "the name stays inside one comment line");
+    }
+
+    #[test]
+    fn the_most_specific_switch_inside_a_place_decides() {
+        let mut c = Config::fresh();
+        let a = c.app_mut("claude-code").unwrap();
+        // Out of the box: event logging is off, the conversation and everything else is on.
+        assert!(!a.inside_allows("api.anthropic.com", "/api/event_logging/v2/batch"));
+        assert!(a.inside_allows("api.anthropic.com", "/v1/messages"));
+        assert!(a.inside_allows("api.anthropic.com", "/api/event_logging_other"));
+        assert!(a.inside_allows("claude.ai", "/api/event_logging/v2/batch"), "a switch belongs to one place");
+        // A more specific switch wins over a broader one, in either direction.
+        a.inside.push(InsideRule { host: "api.anthropic.com".into(), path: "/api/event_logging/v2/health".into(), enabled: true, source: "you".into() });
+        a.inside.push(InsideRule { host: "api.anthropic.com".into(), path: "/".into(), enabled: false, source: "you".into() });
+        assert!(a.inside_allows("api.anthropic.com", "/api/event_logging/v2/health"));
+        assert!(!a.inside_allows("api.anthropic.com", "/api/event_logging/v2/batch"));
+        assert!(!a.inside_allows("api.anthropic.com", "/v1/messages"), "everything else under the broad switch");
+        assert!(!a.inside_allows("api.anthropic.com", "/API/Event_Logging/v2/batch"), "capitals do not get around a switch");
+        assert!(valid_inside_path("/v1/messages") && !valid_inside_path("v1") && !valid_inside_path("/a b") && !valid_inside_path("/a?b"));
     }
 
     #[test]

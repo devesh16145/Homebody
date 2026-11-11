@@ -131,6 +131,22 @@ inside() {
   check "another site named with its port"               "000" "$(code -H 'Host: attacker.example.net:443' https://api.anthropic.com/)"
   check "a request with two lengths (smuggling)"         "000" "$(code -H 'Content-Length: 5' -H 'Transfer-Encoding: chunked' -d 'hello' https://api.anthropic.com/v1/messages)"
   check "an unusual transfer encoding"                   "000" "$(code -H 'Transfer-Encoding: gzip, chunked' -d 'hello' https://api.anthropic.com/v1/messages)"
+  echo "Inside: addresses that are switched off"
+  "$SAI" inside "$APP" api.anthropic.com /corpus/off off >/dev/null
+  check "an address that is switched off"                "403" "$(code -d 'x=1' https://api.anthropic.com/corpus/off/deeper)"
+  check "the same, with a query to hide behind"          "403" "$(code "https://api.anthropic.com/corpus/off?really=/v1/messages")"
+  check "the same, spelled with an extra slash"          "403" "$(code https://api.anthropic.com/corpus/off/)"
+  check "respelled: a dot segment"                       "403" "$(code --path-as-is https://api.anthropic.com/corpus/./off)"
+  check "respelled: a doubled slash"                     "403" "$(code --path-as-is https://api.anthropic.com/corpus//off)"
+  check "respelled: up and back down"                    "403" "$(code --path-as-is https://api.anthropic.com/x/../corpus/off)"
+  check "respelled: an escaped letter"                   "403" "$(code --path-as-is https://api.anthropic.com/corpus/%6Fff)"
+  check "respelled: an escaped slash"                    "403" "$(code --path-as-is https://api.anthropic.com/corpus%2Foff)"
+  check "respelled: capitals"                            "403" "$(code --path-as-is https://api.anthropic.com/Corpus/OFF)"
+  check "respelled: a parameter in the segment"          "403" "$(code --path-as-is 'https://api.anthropic.com/corpus/off;v=1')"
+  check "a neighbour with a similar name still works"    "404" "$(code https://api.anthropic.com/corpus/offline)"
+  check "the rest of the place still works"              "401" "$(code https://api.anthropic.com/v1/models)"
+  check "switched off, hidden after an honest request"   "403" "$(R /usr/bin/curl -sS -m 12 -o /dev/null -w '%{http_code} ' https://api.anthropic.com/v1/models --next -sS -m 12 -o /dev/null -w '%{http_code}' https://api.anthropic.com/corpus/off | tail -1 | awk '{print $2}')"
+  "$SAI" call remove_inside_rule "{\"appId\":\"$APP\",\"host\":\"api.anthropic.com\",\"path\":\"/corpus/off\"}" >/dev/null
   [ "$was_on" = "True" ] || "$SAI" inspect "$APP" off >/dev/null
 }
 

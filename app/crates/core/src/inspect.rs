@@ -231,6 +231,8 @@ pub enum Trouble {
     OtherSite(String),
     /// Not something we can follow safely, so it is not let through.
     NotUnderstood(&'static str),
+    /// A request for an address inside the site that the user has switched off.
+    Refused(String),
 }
 
 const HEAD_LIMIT: usize = 64 * 1024;
@@ -248,8 +250,10 @@ enum State {
 }
 
 /// Follows the requests an app sends on one connection, without keeping any of their content.
-/// Fed every byte the app sends, in order; everything it does not understand is an error,
-/// because bytes we cannot follow are bytes we cannot vouch for.
+/// Fed every byte the app sends, in order, and says which bytes may be passed on. The start of
+/// each request (its line and headers) is held back until it is complete and has been checked,
+/// so nothing of a request that is refused ever leaves. Everything it does not understand is
+/// an error, because bytes we cannot follow are bytes we cannot vouch for.
 pub struct Sniffer {
     host: String,
     state: State,
@@ -257,11 +261,18 @@ pub struct Sniffer {
     /// "METHOD /path" -> how many times.
     seen: Vec<(String, u64)>,
     pub requests: u64,
+    /// Whether a request for this path (no query) may go. The user's switches for addresses
+    /// inside a trusted place.
+    allow: Box<dyn Fn(&str) -> bool + Send>,
 }
 
 impl Sniffer {
     pub fn new(host: &str) -> Sniffer {
-        Sniffer { host: host.to_ascii_lowercase(), state: State::Head, buf: Vec::new(), seen: Vec::new(), requests: 0 }
+        Sniffer::with_rules(host, |_| true)
+    }
+
+    pub fn with_rules(host: &str, allow: impl Fn(&str) -> bool + Send + 'static) -> Sniffer {
+        Sniffer { host: host.to_ascii_lowercase(), state: State::Head, buf: Vec::new(), seen: Vec::new(), requests: 0, allow: Box::new(allow) }
     }
 
     /// What was asked for, most frequent first.
@@ -271,12 +282,18 @@ impl Sniffer {
         v
     }
 
-    pub fn feed(&mut self, mut data: &[u8]) -> Result<(), Trouble> {
+    /// Take the next bytes from the app. Bytes that may be passed on are added to `pass`, in
+    /// order. On an error, `pass` holds what came before the trouble and nothing of it.
+    pub fn feed(&mut self, mut data: &[u8], pass: &mut Vec<u8>) -> Result<(), Trouble> {
         while !data.is_empty() {
             match self.state {
-                State::Opaque => return Ok(()),
+                State::Opaque => {
+                    pass.extend_from_slice(data);
+                    return Ok(());
+                }
                 State::Body(left) | State::ChunkData(left) => {
                     let take = (left.min(data.len() as u64)) as usize;
+                    pass.extend_from_slice(&data[..take]);
                     data = &data[take..];
                     let left = left - take as u64;
                     self.state = match (&self.state, left) {
@@ -287,8 +304,8 @@ impl Sniffer {
                     };
                 }
                 State::Head | State::ChunkSize | State::ChunkEnd | State::Trailers => {
-                    // Line-shaped parts: collect until the part is complete.
-                    let Some(used) = self.take_until_complete(data)? else { return Ok(()) };
+                    // Line-shaped parts: held back until the part is complete and checked.
+                    let Some(used) = self.take_until_complete(data, pass)? else { return Ok(()) };
                     data = &data[used..];
                 }
             }
@@ -298,7 +315,7 @@ impl Sniffer {
 
     /// Add bytes to the buffer until the current line-shaped part is complete, then act on it.
     /// Returns how many bytes of `data` were used, or None if all of it was and more is needed.
-    fn take_until_complete(&mut self, data: &[u8]) -> Result<Option<usize>, Trouble> {
+    fn take_until_complete(&mut self, data: &[u8], pass: &mut Vec<u8>) -> Result<Option<usize>, Trouble> {
         let end: &[u8] = if matches!(self.state, State::Head) { b"\r\n\r\n" } else { b"\r\n" };
         let before = self.buf.len();
         self.buf.extend_from_slice(data);
@@ -335,6 +352,9 @@ impl Sniffer {
             }
             _ => unreachable!("only line-shaped states get here"),
         }
+        // Checked and understood: this part may go.
+        pass.extend_from_slice(&part);
+        pass.extend_from_slice(end);
         Ok(Some(used))
     }
 
@@ -392,7 +412,13 @@ impl Sniffer {
         if chunked && length.is_some() {
             return Err(Trouble::NotUnderstood("both a length and chunks"));
         }
-        self.note(&method, target);
+        let path = clean_path(target);
+        // Judged as written and as a server would most generously read it, so that another
+        // spelling of a switched-off address is refused too.
+        if !(self.allow)(&path) || !(self.allow)(&rule_path(target)) {
+            return Err(Trouble::Refused(path));
+        }
+        self.note(&method, &path);
         self.state = if upgrade {
             State::Opaque
         } else if chunked {
@@ -406,14 +432,10 @@ impl Sniffer {
         Ok(())
     }
 
-    fn note(&mut self, method: &str, target: &str) {
+    fn note(&mut self, method: &str, shown: &str) {
         self.requests += 1;
-        // The path only: what comes after "?" can carry keys and personal data.
-        let path = target.split(['?', '#']).next().unwrap_or("");
-        let path = path.strip_prefix("https://").or_else(|| path.strip_prefix("http://")).map(|r| r.find('/').map(|i| &r[i..]).unwrap_or("/")).unwrap_or(path);
-        let shown: String = path.chars().filter(|c| c.is_ascii_graphic()).take(120).collect();
         let method: String = method.chars().filter(|c| c.is_ascii_alphabetic()).take(12).collect::<String>().to_ascii_uppercase();
-        let what = format!("{method} {}", if shown.is_empty() { "/" } else { &shown });
+        let what = format!("{method} {shown}");
         let known = self.seen.iter().position(|(k, _)| *k == what);
         let key = match known {
             Some(_) => what,
@@ -425,6 +447,54 @@ impl Sniffer {
             None => self.seen.push((key, 1)),
         }
     }
+}
+
+/// The path of a request as it is shown, matched against rules and written down: no site, and
+/// nothing after "?" or "#", which can carry keys and personal data.
+pub fn clean_path(target: &str) -> String {
+    let path = target.split(['?', '#']).next().unwrap_or("");
+    let path = path.strip_prefix("https://").or_else(|| path.strip_prefix("http://")).map(|r| r.find('/').map(|i| &r[i..]).unwrap_or("/")).unwrap_or(path);
+    let shown: String = path.chars().filter(|c| c.is_ascii_graphic()).take(120).collect();
+    if shown.is_empty() { "/".into() } else { shown }
+}
+
+/// The path of a request the way a forgiving server might read it, for matching against the
+/// user's switches: escapes undone, capitals lowered, backslashes read as slashes, empty and
+/// "." segments dropped, ".." applied, and anything after ";" in a segment ignored. Different
+/// spellings of one address come out the same, so switching an address off cannot be dodged
+/// by respelling it. Never shown or written down, and never shortened.
+pub fn rule_path(target: &str) -> String {
+    let path = target.split(['?', '#']).next().unwrap_or("");
+    let path = path.strip_prefix("https://").or_else(|| path.strip_prefix("http://")).map(|r| r.find('/').map(|i| &r[i..]).unwrap_or("/")).unwrap_or(path);
+    // Undo %XX escapes (once, as servers do).
+    let bytes = path.as_bytes();
+    let mut plain: Vec<u8> = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        let hex = |b: u8| (b as char).to_digit(16).map(|d| d as u8);
+        match (bytes[i], bytes.get(i + 1).copied().and_then(hex), bytes.get(i + 2).copied().and_then(hex)) {
+            (b'%', Some(hi), Some(lo)) => {
+                plain.push(hi * 16 + lo);
+                i += 3;
+            }
+            (b, _, _) => {
+                plain.push(b);
+                i += 1;
+            }
+        }
+    }
+    let text = String::from_utf8_lossy(&plain).replace('\\', "/").to_lowercase();
+    let mut kept: Vec<&str> = Vec::new();
+    for segment in text.split('/') {
+        match segment.split(';').next().unwrap_or("") {
+            "" | "." => {}
+            ".." => {
+                kept.pop();
+            }
+            name => kept.push(name),
+        }
+    }
+    format!("/{}", kept.join("/"))
 }
 
 #[cfg(test)]
@@ -500,10 +570,103 @@ mod tests {
 
     fn feed_all(host: &str, bytes: &[u8], step: usize) -> Result<Sniffer, Trouble> {
         let mut s = Sniffer::new(host);
+        let mut passed = Vec::new();
         for piece in bytes.chunks(step.max(1)) {
-            s.feed(piece)?;
+            s.feed(piece, &mut passed)?;
         }
+        assert_eq!(passed, bytes, "everything that was understood is passed on unchanged");
         Ok(s)
+    }
+
+    /// Feed in pieces and return what was passed on, and the trouble if there was any.
+    fn passed(mut s: Sniffer, bytes: &[u8], step: usize) -> (Vec<u8>, Option<Trouble>) {
+        let mut out = Vec::new();
+        for piece in bytes.chunks(step.max(1)) {
+            if let Err(t) = s.feed(piece, &mut out) {
+                return (out, Some(t));
+            }
+        }
+        (out, None)
+    }
+
+    #[test]
+    fn nothing_of_a_refused_request_leaves_and_everything_before_it_does() {
+        let good = b"POST /v1/messages HTTP/1.1\r\nHost: api.example.com\r\nContent-Length: 5\r\n\r\nhello";
+        let logging = b"POST /api/event_logging/v2/batch?x=1 HTTP/1.1\r\nHost: api.example.com\r\nAuthorization: Bearer SECRET\r\nContent-Length: 9\r\n\r\ntelemetry";
+        let wire = [good.as_slice(), logging.as_slice(), good.as_slice()].concat();
+        for step in [1, 3, 8, 50, 4096] {
+            let s = Sniffer::with_rules("api.example.com", |path| !path.starts_with("/api/event_logging"));
+            let (out, trouble) = passed(s, &wire, step);
+            assert_eq!(trouble, Some(Trouble::Refused("/api/event_logging/v2/batch".into())), "step {step}");
+            assert_eq!(out, good, "step {step}: the request before it went, and not one byte of the refused one");
+        }
+        // The same holds for a request that names another site, and for one that cannot be followed.
+        let fronted = b"POST /x HTTP/1.1\r\nHost: attacker.example.net\r\nCookie: SECRET\r\n\r\n";
+        let smuggled = b"POST /x HTTP/1.1\r\nHost: api.example.com\r\nContent-Length: 3\r\nTransfer-Encoding: chunked\r\n\r\nabc";
+        for bad in [fronted.as_slice(), smuggled.as_slice()] {
+            for step in [1, 7, 4096] {
+                let (out, trouble) = passed(Sniffer::new("api.example.com"), &[good.as_slice(), bad].concat(), step);
+                assert!(trouble.is_some());
+                assert_eq!(out, good, "step {step}");
+            }
+        }
+        // A request line is held back until its headers are complete.
+        let mut s = Sniffer::new("api.example.com");
+        let mut out = Vec::new();
+        s.feed(b"POST /v1/messages HTTP/1.1\r\nHost: api.example.com\r\n", &mut out).unwrap();
+        assert!(out.is_empty(), "nothing leaves before the request has been checked");
+        s.feed(b"\r\n", &mut out).unwrap();
+        assert!(out.starts_with(b"POST /v1/messages"));
+    }
+
+    #[test]
+    fn another_spelling_of_a_switched_off_address_is_refused_too() {
+        let off = |path: &str| !crate::catalog::path_under(path, "/api/event_logging");
+        let padding = "a/".repeat(100);
+        let spellings = [
+            "/api/event_logging/v2/batch".to_string(),
+            "/api//event_logging/v2/batch".into(),
+            "/api/./event_logging/v2/batch".into(),
+            "/x/../api/event_logging".into(),
+            "/api/event_logging/../event_logging/v2".into(),
+            "/API/Event_Logging/v2/batch".into(),
+            "/api/%65vent_logging/v2/batch".into(),
+            "/api%2Fevent_logging%2fv2".into(),
+            "/api/event_logging;jsessionid=1/v2/batch".into(),
+            "/api\\event_logging\\v2".into(),
+            "/api/event_logging?x=/v1/messages".into(),
+            "https://api.example.com/api/event_logging/v2/batch".into(),
+            // Padded past the length at which a path is shortened for display.
+            format!("/{padding}../{}api/event_logging/v2/batch", "../".repeat(99)),
+        ];
+        for spelled in &spellings {
+            let wire = format!("POST {spelled} HTTP/1.1\r\nHost: api.example.com\r\nContent-Length: 4\r\n\r\ndata");
+            let (out, trouble) = passed(Sniffer::with_rules("api.example.com", off), wire.as_bytes(), 9);
+            assert!(matches!(trouble, Some(Trouble::Refused(_))), "{}", &spelled[..spelled.len().min(60)]);
+            assert!(out.is_empty(), "nothing of it left: {}", &spelled[..spelled.len().min(60)]);
+        }
+        // Addresses that only look similar are not caught up in it.
+        for fine in ["/api/event_logging_other", "/api/events", "/v1/messages", "/api/event_loggin/g"] {
+            let wire = format!("GET {fine} HTTP/1.1\r\nHost: api.example.com\r\n\r\n");
+            let (_, trouble) = passed(Sniffer::with_rules("api.example.com", off), wire.as_bytes(), 9);
+            assert_eq!(trouble, None, "{fine}");
+        }
+        // Read either way it is under the switched-off address, so it is refused: a server
+        // that does not tidy the path would take it as written.
+        let odd = "GET /api/event_logging/../health HTTP/1.1\r\nHost: api.example.com\r\n\r\n";
+        assert!(matches!(passed(Sniffer::with_rules("api.example.com", off), odd.as_bytes(), 9).1, Some(Trouble::Refused(_))));
+        assert_eq!(rule_path("/A/b/../C//d/./e;x=1?q"), "/a/c/d/e");
+        assert_eq!(rule_path("/../../.."), "/");
+        assert_eq!(rule_path("/%zz/%4"), "/%zz/%4");
+    }
+
+    #[test]
+    fn paths_are_shown_without_what_follows_the_question_mark() {
+        assert_eq!(clean_path("/v1/messages?beta=true&key=SECRET"), "/v1/messages");
+        assert_eq!(clean_path("https://api.example.com/v1/x#frag"), "/v1/x");
+        assert_eq!(clean_path("https://api.example.com"), "/");
+        assert_eq!(clean_path(""), "/");
+        assert_eq!(clean_path("/a b\u{7}c"), "/abc");
     }
 
     #[test]

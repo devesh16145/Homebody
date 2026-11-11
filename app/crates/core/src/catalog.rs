@@ -113,6 +113,36 @@ pub fn companions(host: &str) -> &'static [&'static str] {
     lookup(host).map(|d| d.companions).unwrap_or(&[])
 }
 
+/// Plain words for addresses inside a known place, for when its connections are looked inside.
+/// (place, start of the path, label, purpose). Observed on real runs, November 2026.
+pub const INSIDE: &[(&str, &str, &str, &str)] = &[
+    ("api.anthropic.com", "/v1/messages", "Conversation", "What you and the AI say"),
+    ("api.anthropic.com", "/api/event_logging", "Event logging", "Usage statistics"),
+    ("api.anthropic.com", "/mcp-registry", "List of tool servers", "Start-up check"),
+    ("api.anthropic.com", "/api/claude_cli/bootstrap", "Start-up settings", "Start-up check"),
+    ("api.openai.com", "/v1/responses", "Conversation", "What you and the AI say"),
+    ("api.openai.com", "/v1/chat/completions", "Conversation", "What you and the AI say"),
+    ("generativelanguage.googleapis.com", "/v1beta/models", "Conversation", "What you and the AI say"),
+];
+
+/// Whether `path` is `prefix` or lies under it, by whole path segments.
+pub fn path_under(path: &str, prefix: &str) -> bool {
+    path == prefix || prefix.ends_with('/') && path.starts_with(prefix) || path.strip_prefix(prefix).is_some_and(|rest| rest.starts_with('/'))
+}
+
+/// (label, purpose) for an address inside a place; empty when we have no words for it.
+pub fn describe_inside(host: &str, path: &str) -> (String, String) {
+    INSIDE.iter().filter(|(h, p, _, _)| *h == host && path_under(path, p)).max_by_key(|(_, p, _, _)| p.len()).map(|(_, _, l, u)| (l.to_string(), u.to_string())).unwrap_or_default()
+}
+
+pub struct PresetInside {
+    pub host: &'static str,
+    /// Start of the path, matched by whole segments.
+    pub path: &'static str,
+    /// false: switched off out of the box (known usage statistics), like the places above.
+    pub enabled: bool,
+}
+
 pub struct PresetTrust {
     pub host: &'static str,
     /// true: trusted out of the box. false: blocked quietly out of the box (known telemetry).
@@ -139,6 +169,9 @@ pub struct AppPreset {
     /// It may then use any loopback port except other apps' gates.
     pub loopback_all: bool,
     pub trust: &'static [PresetTrust],
+    /// Switches for addresses inside trusted places. They only act while the app's connections
+    /// are being looked inside.
+    pub inside: &'static [PresetInside],
 }
 
 /// Ports reserved for gates. An app is never allowed to connect to a gate other than its own.
@@ -170,6 +203,8 @@ pub const APPS: &[AppPreset] = &[
             PresetTrust { host: "*.sentry.io", enabled: false, recommended: false },
             PresetTrust { host: "sentry.io", enabled: false, recommended: false },
         ],
+        // Seen on a real run: 225 KB of event logging beside a 49 KB conversation request.
+        inside: &[PresetInside { host: "api.anthropic.com", path: "/api/event_logging", enabled: false }],
     },
     AppPreset {
         id: "ollama",
@@ -186,6 +221,7 @@ pub const APPS: &[AppPreset] = &[
             // Model downloads are deliberately not listed: the first one asks, in plain words.
             PresetTrust { host: "ollama.com", enabled: false, recommended: false },
         ],
+        inside: &[],
     },
     // The four below started from each tool's documentation and were then run protected, not
     // signed in, on 11 Nov 2026. Seen: Codex reached api.openai.com and chatgpt.com and asked for
@@ -211,6 +247,7 @@ pub const APPS: &[AppPreset] = &[
             PresetTrust { host: "auth.openai.com", enabled: true, recommended: true },
             PresetTrust { host: "chatgpt.com", enabled: true, recommended: true },
         ],
+        inside: &[],
     },
     AppPreset {
         id: "gemini",
@@ -230,6 +267,7 @@ pub const APPS: &[AppPreset] = &[
             PresetTrust { host: "oauth2.googleapis.com", enabled: true, recommended: true },
             PresetTrust { host: "play.googleapis.com", enabled: false, recommended: false },
         ],
+        inside: &[],
     },
     AppPreset {
         id: "aider",
@@ -244,6 +282,7 @@ pub const APPS: &[AppPreset] = &[
         loopback_all: false,
         // Aider works with whichever provider you give it a key for, so none is assumed.
         trust: &[PresetTrust { host: "*.i.posthog.com", enabled: false, recommended: false }],
+        inside: &[],
     },
     AppPreset {
         id: "opencode",
@@ -257,6 +296,7 @@ pub const APPS: &[AppPreset] = &[
         serves_port: None,
         loopback_all: false,
         trust: &[],
+        inside: &[],
     },
 ];
 
@@ -356,6 +396,24 @@ mod tests {
         users.sort();
         users.dedup();
         assert_eq!(users.len(), APPS.len(), "every app has its own private user");
+    }
+
+    #[test]
+    fn addresses_inside_a_place_are_matched_by_whole_segments() {
+        assert!(path_under("/api/event_logging", "/api/event_logging"));
+        assert!(path_under("/api/event_logging/v2/batch", "/api/event_logging"));
+        assert!(!path_under("/api/event_logging_other", "/api/event_logging"));
+        assert!(!path_under("/api", "/api/event_logging"));
+        assert!(path_under("/anything", "/"));
+        assert_eq!(describe_inside("api.anthropic.com", "/api/event_logging/v2/batch").0, "Event logging");
+        assert_eq!(describe_inside("api.anthropic.com", "/unknown"), (String::new(), String::new()));
+        assert_eq!(describe_inside("example.com", "/v1/messages"), (String::new(), String::new()));
+        for a in APPS {
+            for r in a.inside {
+                assert!(r.path.starts_with('/') && hostname::canonical(r.host).is_some(), "{} {}", r.host, r.path);
+                assert!(a.trust.iter().any(|t| t.host == r.host && t.enabled), "{}: a switch inside a place that is not trusted", a.id);
+            }
+        }
     }
 
     #[test]

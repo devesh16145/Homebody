@@ -20,6 +20,7 @@ function bytesText(n) {
 }
 
 const mockProjects = [];
+const mockInside = [{ appId: 'claude-code', host: 'api.anthropic.com', hostLabel: 'Anthropic API', path: '/api/event_logging', label: 'Event logging', purpose: 'Usage statistics', enabled: false, source: 'preset' }];
 const mockApplied = new Set();
 const local = (v) => JSON.parse(JSON.stringify(v));
 
@@ -421,6 +422,18 @@ export function createMock(scenarioName) {
       s.apps.splice(s.apps.indexOf(a), 1);
       queueStatus();
       return status();
+    },
+    async get_inside_rules() { return local(mockInside); },
+    async set_inside_rule({ appId, host, path, enabled } = {}) {
+      const r = mockInside.find((x) => x.appId === appId && x.host === host && x.path === path);
+      if (r) r.enabled = !!enabled; else mockInside.push({ appId, host, hostLabel: 'Anthropic API', path, label: '', purpose: '', enabled: !!enabled, source: 'you' });
+      s.events.forEach((e) => (e.requests || []).forEach((q) => { if (e.appId === appId && e.host === host && q.path.startsWith(path)) q.allowed = !!enabled; }));
+      return local(mockInside);
+    },
+    async remove_inside_rule({ appId, host, path } = {}) {
+      const i = mockInside.findIndex((x) => x.appId === appId && x.host === host && x.path === path && x.source === 'you');
+      if (i >= 0) mockInside.splice(i, 1);
+      return local(mockInside);
     },
     async app_set_inspect({ appId, on } = {}) {
       const a = needApp(appId);

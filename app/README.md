@@ -35,6 +35,7 @@ Status: 11 Nov 2026. Everything in the table runs end to end on this Mac in the 
 | Opening the app shows its window (also when it is already running in the menu bar); a start at login or through a launcher stays quiet | Built, not yet seen by a person |
 | Every run of setup keeps a record of what it did as administrator (`logs/setup.sh.last.log`) | Working; it is what explained the failed first design |
 | Looking inside (off by default, per app): the gate ends the app's encrypted connection with a certificate from an authority that exists only on this computer, opens its own to the real server and checks that server's certificate the ordinary way, and reads the request lines in between. The Feed shows which paths were asked for and how often. The site named inside a request must be the approved one, which stops a trusted name being used as cover for another site; requests that cannot be followed (two lengths, unusual encodings, a tunnel inside) are not let through. Only method and path are recorded, never what follows "?", headers or content. Nothing is added to the Mac's trusted certificates: only protected apps are told, through their environment | Working, tested live with Claude Code, Codex, Gemini, Aider and opencode (each accepted it), seven bypass cases. Not available for Ollama or windowed apps: they take trusted certificates from the Mac itself. HTTP/1.1 only is offered while looking inside |
+| Switches inside a place: with looking inside on, one address inside a trusted place can be refused while the rest keeps working ("Refuse" in the Feed, or Studio → Trusted). Each request is held back until it has been checked, so nothing of a refused request leaves, not even its first line. An address is judged as written and as a forgiving server would read it (escapes, capitals, dot segments, doubled slashes, parameters), so respelling it does not get around the switch. Claude Code's event logging comes switched off | Working: 13 bypass cases, tested live with direct requests (the refused address gets a 403 from Sandbox-ai, its neighbours and the conversation address reach the real server). Not yet seen: Claude Code itself being refused its event logging, because it did not try to send any in the runs after the switch existed |
 | A program installed inside your home folder is detected and explained instead of failing silently | Working |
 | Open at login (Studio → Advanced) | Built; not yet tried across a real login |
 
@@ -92,7 +93,7 @@ app/
 
 The UI calls one command, `sai`, with `{cmd, args}`; the core's `dispatch` serves the app, the CLI and scripts alike. Opened in a plain browser, the UI runs against an in-page mock of the same contract (`ui/dev.html` is a review harness with scenarios).
 
-Sizes in this build: 75 unit tests, 56 bypass cases, a 7.2 MB app including the command-line tool (the encryption libraries for looking inside added about 2 MB), a 4 MB disk image.
+Sizes in this build: 80 unit tests, 69 bypass cases, a 7.2 MB app including the command-line tool (the encryption libraries for looking inside added about 2 MB), a 4 MB disk image.
 
 ## Verify it yourself
 
@@ -140,13 +141,14 @@ Claude Code, started once with a made-up key, sent these to `api.anthropic.com`,
 | `POST /v1/messages` (the conversation itself) | 49 KB |
 | `POST /api/eval/sdk-…`, `GET /api/claude_cli/bootstrap`, `GET /mcp-registry/v0/servers`, a few more | a few hundred bytes each |
 
-So the "219 KB to Anthropic at start-up" noted in the first build was event logging riding on the trusted name, not the conversation. Sandbox-ai still cannot refuse one path and allow another; it can now show you the difference.
+So the "219 KB to Anthropic at start-up" noted in the first build was event logging riding on the trusted name, not the conversation. Sandbox-ai now shows the difference and can refuse the one while allowing the other: that address comes switched off for Claude Code whenever looking inside is on.
 
 ## What it does not do yet, stated plainly
 
 - **Agents work on a copy of your project, not on the folder itself.** This is deliberate: nothing an agent does can damage your work until you apply it. The costs: changes are not live in your editor until applied, the agent's own commits stay in the copy (its changes arrive in your folder as ordinary edits), and files you edit after bringing a project in do not reach the copy. Sharing a folder in place is possible but was left out for now, because granting an agent a path into your home also exposes neighbouring files to it by file permissions alone.
 - **A link an agent creates is applied as a link.** The review shows where every new link points; read that line before applying.
-- **Looking inside is all or nothing per place.** With it on you see which paths an app asks for at a trusted place, but you cannot yet allow one path and refuse another, and content is not examined. With it off (the default) the Feed shows only the place and the size.
+- **Content is not examined.** With looking inside on you see, and can switch off, addresses inside a trusted place; what is said in a request that is allowed is not read. With looking inside off (the default) the Feed shows only the place and the size, and the switches inside a place do nothing.
+- **A refused address closes its connection.** The app is told "403, switched off" and the connection ends; an app that had other requests waiting on the same connection has to reconnect. Refusing an address an app depends on can stop the app working: the switch is yours to turn back on.
 - **Attempts that go around the gate are shown without the address.** macOS reports the program and the port, not where it was trying to go. Attempts to read your files are stopped by ordinary file permissions before the fence sees them, so those are not shown at all. The Network Extension version will show both.
 - **A trusted name can front for another site only where looking inside is off.** The greeting check stops the simple version everywhere; the full check (the site named inside each request) needs looking inside, which Ollama and windowed apps cannot use.
 - **Shared kernel.** A kernel exploit from inside a protected app is not contained. The virtual-machine tier (see `../spike/box`) is the answer and is planned.

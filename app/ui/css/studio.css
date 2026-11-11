@@ -160,3 +160,8 @@ div.log-lines { padding: 8px 14px; }
 .ap-inside { display: flex; align-items: center; gap: 16px; margin-top: 10px; padding: 9px 12px; border-radius: var(--r-md); background: var(--fill-1); font-size: var(--fs-small); }
 .ap-inside b { font-weight: 600; font-size: var(--fs-body); }
 .ap-inside .muted { display: inline-block; max-width: 62ch; line-height: 1.4; }
+
+/* switches for addresses inside a trusted place */
+.tr-inside { list-style: none; margin: 0 0 4px 38px; padding: 6px 0 2px; border-top: 1px dashed var(--hairline); }
+.tr-inside-h { display: flex; align-items: center; gap: 8px; font-size: var(--fs-cap); font-weight: 600; color: var(--text-3); margin-bottom: 2px; }
+.tr-row.sub { display: flex; align-items: center; gap: 10px; padding: 4px 0; }

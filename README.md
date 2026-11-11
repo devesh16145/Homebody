@@ -17,7 +17,7 @@ No virtual machine, no account, no telemetry, nothing hosted. Apache-2.0. Window
 - **Shows what tried to go around.** A program that connects directly or looks up a name by itself is refused by the fence, and that refusal shows up in the Feed.
 - **Lets agents work on your projects safely.** Bring a folder in and the agent works on a copy. You review what it changed and apply it to your own folder when you are happy.
 - **Finds your AI apps and makes protected the easy way in.** Known AI apps on the computer are listed with one-click Protect, and each protected app gets a launcher of its own for the Dock, so opening the protected copy is as easy as opening the ordinary one.
-- **Looks inside, if you ask it to.** Off by default. Switched on for an app, Sandbox-ai shows which addresses inside a trusted place the app asked for, and stops a trusted name being used as cover for another site. It records paths and sizes, never content, and changes nothing about which certificates your Mac trusts.
+- **Looks inside, if you ask it to.** Off by default. Switched on for an app, Sandbox-ai shows which addresses inside a trusted place the app asked for, and stops a trusted name being used as cover for another site. You can then switch off one address inside a place and keep the rest: usage logging off, the conversation on. It records paths and sizes, never content, and changes nothing about which certificates your Mac trusts.
 - **Watch mode.** Allow everything for an hour, then see exactly what your AI contacted and choose what to trust.
 - **Proof.** An append-only, hash-chained, Ed25519-signed log. Export it and anyone can check it with `sai verify <file>`.
 
@@ -51,11 +51,11 @@ cd app && cargo test -p sai-core
 cd app && tests/bypass-corpus.sh
 ```
 
-The second one is every way around the gate or the fence that we know of, as executable checks (56 at the time of writing). It needs the app running and setup done. If you find a way around that is not in it, that is the most valuable contribution you can make: see [SECURITY.md](SECURITY.md).
+The second one is every way around the gate or the fence that we know of, as executable checks (69 at the time of writing). It needs the app running and setup done. If you find a way around that is not in it, that is the most valuable contribution you can make: see [SECURITY.md](SECURITY.md).
 
 ## What it does not do yet
 
-- **Looking inside shows, it does not yet decide.** With it on you see which paths an app asks for at a trusted place; you cannot yet allow one path and refuse another, and content is not examined. It is not available for Ollama or windowed apps.
+- **Looking inside does not read content.** With it on you see, and can switch off, addresses inside a trusted place. What is said in a request that is allowed is not examined. It is not available for Ollama or windowed apps.
 - **Shared kernel.** A kernel exploit from inside a protected app is not contained. A virtual-machine tier is planned (`spike/box` is the experiment).
 - **Agents work on a copy of your project,** not on the folder itself. That is deliberate, and it means changes reach your editor only when you apply them.
 - **Windowed apps get one layer, not three.** A windowed app cannot run as another user, so it runs as you under the launch-time profile alone. Nothing it sends can skip the gate, and the obvious ways out for a program running as you are closed (handing a link to your browser, driving another app, planting a login item, touching Sandbox-ai's own files). But it can read your files, only the copy you open from Sandbox-ai is protected, its own inner sandbox has to be switched off, and an app that is deliberately trying to break out has other routes, for example writing into a folder another program syncs. Apps that live in Apple's App Sandbox cannot be wrapped at all. Full-strength protection for windowed apps needs the Network Extension, which needs an Apple Developer identity.

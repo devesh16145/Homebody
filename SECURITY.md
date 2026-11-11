@@ -17,7 +17,7 @@ This is a volunteer project with no paid support and no bounty. You will get an 
 - A protected app answers its own prompt, changes its own rules, or reaches the control socket.
 - The signed log can be changed, cut or reordered and still pass `sai verify`.
 - Anything in settings, an app name or a project that ends up running as administrator during setup.
-- With looking inside on: a request that reaches a site other than the approved one, a request the gate passed on without being able to follow it, anything after "?" or any content ending up in the log, or the local certificate authority's key being readable by a protected app.
+- With looking inside on: a request that reaches a site other than the approved one, a request the gate passed on without being able to follow it, anything after "?" or any content ending up in the log, the local certificate authority's key being readable by a protected app, or any spelling of an address that is switched off reaching the real server.
 - Applying a project's changes writes outside the folder it was brought in from.
 
 ## What is already known and stated

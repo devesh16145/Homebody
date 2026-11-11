@@ -174,7 +174,12 @@ function detailHtml(e) {
   const meta = [where ? `<span class="mono sel">${esc(where)}</span>` : '', `<span>${esc(fullTime(e.ts))}</span>`];
   if (e.bytesOut != null) meta.push(`<span class="num">Sent ${esc(fmtBytes(e.bytesOut))}${e.bytesIn != null ? ' · received ' + esc(fmtBytes(e.bytesIn)) : ''}${e.durationMs != null ? ' · ' + esc(fmtDuration(e.durationMs)) : ''}</span>`);
   const inside = e.requests && e.requests.length
-    ? `<div class="ev-inside"><span class="ev-inside-h">Inside this connection</span><ul>${e.requests.map((r) => `<li><span class="mono sel">${esc(r.what)}</span>${r.times > 1 ? `<span class="num">${esc(String(r.times))} times</span>` : ''}</li>`).join('')}</ul></div>`
+    ? `<div class="ev-inside"><span class="ev-inside-h">Inside this connection</span><ul>${e.requests.map((r) => `<li${r.allowed === false ? ' class="off"' : ''}>
+        <span class="grow ev-inside-what">${r.label ? `<b>${esc(r.label)}</b> ` : ''}<span class="mono sel">${esc(r.what)}</span></span>
+        ${r.times > 1 ? `<span class="num">${esc(String(r.times))} times</span>` : ''}
+        ${r.path ? (r.allowed === false
+          ? `<span class="ev-inside-state">Switched off</span><button class="btn sm" data-do="inside-on" data-path="${esc(r.path)}" data-key="in-${esc(r.path)}">Allow</button>`
+          : `<button class="btn sm" data-do="inside-off" data-path="${esc(r.path)}" data-key="in-${esc(r.path)}" title="Refuse requests to this address from now on. Everything else at ${esc(e.label || e.host)} keeps working.">Refuse</button>`) : ''}</li>`).join('')}</ul></div>`
     : e.requests ? '<div class="ev-inside"><span class="ev-inside-h">Looked inside: no requests were made in this connection</span></div>' : '';
   return `<div class="ev-detail"><p class="sel">${esc(e.explanation)}</p>${inside}
     <div class="ev-meta">${meta.join('')}</div>
@@ -241,6 +246,20 @@ async function act(what, btn) {
   const e = li && byId.get(Number(li.dataset.id));
   if (!e) return;
   rowError.delete(e.id);
+  if (what === 'inside-on' || what === 'inside-off') {
+    // A switch for one address inside this place; the place itself stays as it is.
+    const path = btn.dataset.path, enabled = what === 'inside-on';
+    try {
+      await invoke('set_inside_rule', { appId: e.appId, host: e.host, path, enabled });
+      for (const other of byId.values()) {
+        if (other.appId === e.appId && other.host === e.host && other.requests) {
+          other.requests.forEach((r) => { if (r.path && (r.path === path || r.path.startsWith(path.replace(/\/$/, '') + '/'))) r.allowed = enabled; });
+        }
+      }
+      ctx.toast(enabled ? 'Allowed again.' : 'Requests to that address will be refused from now on.');
+    } catch (err) { rowError.set(e.id, errText(err)); }
+    return refreshLi(e.id);
+  }
   if (what === 'once' || what === 'always' || what === 'block') {
     try { await invoke('decide', { askId: btn.parentElement.dataset.ask, choice: what }); }
     catch (err) { rowError.set(e.id, errText(err)); refreshLi(e.id); }

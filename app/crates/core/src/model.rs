@@ -248,6 +248,26 @@ pub struct RequestKind {
     /// For example "POST /v1/messages".
     pub what: String,
     pub times: u64,
+    /// The path alone, for switching it on or off.
+    pub path: String,
+    /// Plain words for it when we have them ("Conversation"), else empty.
+    pub label: String,
+    /// Whether requests there are allowed now.
+    pub allowed: bool,
+}
+
+/// A switch for an address inside a trusted place.
+#[derive(Serialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct InsideEntry {
+    pub app_id: String,
+    pub host: String,
+    pub host_label: String,
+    pub path: String,
+    pub label: String,
+    pub purpose: String,
+    pub enabled: bool,
+    pub source: String,
 }
 
 #[derive(Serialize, Clone, Debug)]

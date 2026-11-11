@@ -18,6 +18,26 @@ const trusted = {
   async load() {
     try { this.entries = await invoke('get_trust', {}); this.error = ''; }
     catch (e) { this.error = errText(e); }
+    try { this.inside = await invoke('get_inside_rules', {}); } catch (e) { this.inside = []; }
+    if (visible && pane === 'trusted') this.render();
+  },
+
+  /** Switches for addresses inside one place, shown under that place's row. */
+  insideHtml(appId, host) {
+    const rows = (this.inside || []).filter((r) => r.appId === appId && r.host === host);
+    if (!rows.length) return '';
+    const app = ctx.status().apps.find((x) => x.id === appId);
+    return `<li class="tr-inside"><div class="tr-inside-h">Inside ${esc(rows[0].hostLabel || host)}${app && !app.inspect ? ' <span class="tag">Needs Look inside on</span>' : ''}</div>
+      ${rows.map((r) => `<div class="tr-row sub">
+        <span class="switch sm green"><input type="checkbox" role="switch" data-inside-rule data-host="${esc(r.host)}" data-path="${esc(r.path)}" data-key="i-${esc(r.host + r.path)}" aria-label="${esc((r.label || r.path) + ' inside ' + (r.hostLabel || r.host))}"${r.enabled ? ' checked' : ''}><i></i></span>
+        <div class="grow"><div class="tr-label ellipsis">${esc(r.label || r.path)}</div><div class="tr-sub ellipsis">${esc(r.purpose || (r.source === 'you' ? 'Added by you' : ''))}</div></div>
+        <span class="tr-host mono sel">${esc(r.path)}</span>
+        ${r.source === 'you' ? `<button class="iconbtn" data-do="tr-inside-remove" data-host="${esc(r.host)}" data-path="${esc(r.path)}" aria-label="Remove this switch" title="Remove">${icon('x')}</button>` : ''}</div>`).join('')}</li>`;
+  },
+
+  async setInside(appId, host, path, enabled, remove = false) {
+    try { this.inside = await invoke(remove ? 'remove_inside_rule' : 'set_inside_rule', remove ? { appId, host, path } : { appId, host, path, enabled }); }
+    catch (e) { ctx.toast(errText(e)); }
     if (visible && pane === 'trusted') this.render();
   },
   onStatus() { this.render(); },
@@ -58,7 +78,7 @@ const trusted = {
         <div class="grow"><div class="tr-label ellipsis">${esc(named ? t.label : t.host)}${t.recommended ? ' <span class="tag">Recommended</span>' : ''}</div>
           <div class="tr-sub ellipsis">${esc(t.purpose || (t.source === 'you' ? 'Added by you' : ''))}</div></div>
         <span class="tr-host mono sel">${esc(t.host)}</span>
-        ${t.source === 'you' ? `<button class="iconbtn" data-do="tr-remove" data-host="${esc(t.host)}" data-key="rm-${esc(t.host)}" aria-label="Remove ${esc(t.host)}" title="Remove">${icon('x')}</button>` : '<span class="tr-gap"></span>'}</li>`;
+        ${t.source === 'you' ? `<button class="iconbtn" data-do="tr-remove" data-host="${esc(t.host)}" data-key="rm-${esc(t.host)}" aria-label="Remove ${esc(t.host)}" title="Remove">${icon('x')}</button>` : '<span class="tr-gap"></span>'}</li>${this.insideHtml(appId, t.host)}`;
     }).join('');
   },
 
@@ -279,6 +299,7 @@ export function init(el, context) {
   on(root, 'change', 'input[data-protect]', (ev, i) => apps.run(i.closest('.ap-card').dataset.app, 'app_set_protected', { protected: i.checked }));
   on(root, 'submit', '.tr-add', (ev, form) => { ev.preventDefault(); trusted.add(form); });
   on(root, 'change', 'input[data-login]', (ev, i) => advanced.setLogin(i.checked));
+  on(root, 'change', 'input[data-inside-rule]', (ev, i) => trusted.setInside(i.closest('.tr-app').dataset.app, i.dataset.host, i.dataset.path, i.checked));
   on(root, 'change', 'input[data-inside]', (ev, i) => apps.run(i.closest('.ap-card').dataset.app, 'app_set_inspect', { on: i.checked }));
   on(root, 'submit', '.ap-form', (ev, form) => { ev.preventDefault(); apps.add(form); });
   on(root, 'input', '.ap-form input', (ev, i) => apps.keep(i.form));
@@ -286,6 +307,7 @@ export function init(el, context) {
     const what = b.dataset.do, card = b.closest('.ap-card[data-app]'), appId = card && card.dataset.app;
     if (what === 'tr-reload') trusted.load();
     else if (what === 'tr-remove') trusted.remove(b.closest('.tr-app').dataset.app, b.dataset.host);
+    else if (what === 'tr-inside-remove') trusted.setInside(b.closest('.tr-app').dataset.app, b.dataset.host, b.dataset.path, false, true);
     else if (what === 'app-start') apps.run(appId, 'app_start', {}, true);
     else if (what === 'app-stop') apps.run(appId, 'app_stop', {}, true);
     else if (what === 'app-terminal') apps.run(appId, 'app_open_terminal');

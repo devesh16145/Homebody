@@ -223,5 +223,9 @@ body { display: flex; flex-direction: column; }
 .ev-inside { margin: 8px 0 2px; padding: 8px 10px; border-radius: var(--r-md); background: var(--fill-1); font-size: var(--fs-small); }
 .ev-inside-h { display: block; margin-bottom: 4px; font-size: var(--fs-cap); font-weight: 600; color: var(--text-3); }
 .ev-inside ul { list-style: none; margin: 0; padding: 0; }
-.ev-inside li { display: flex; justify-content: space-between; gap: 12px; padding: 1px 0; }
+.ev-inside li { display: flex; align-items: center; gap: 12px; padding: 2px 0; }
+.ev-inside li.off .mono { text-decoration: line-through; color: var(--text-3); }
+.ev-inside-what { min-width: 0; overflow-wrap: anywhere; }
+.ev-inside-what b { font-weight: 600; margin-right: 4px; }
+.ev-inside-state { flex: none; color: var(--red-text); font-size: var(--fs-cap); }
 .ev-inside .num { color: var(--text-3); flex: none; }

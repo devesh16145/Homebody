@@ -35,6 +35,8 @@ const HELP: &str = "sai — Sandbox-ai command line
   sai run <app> -- <command...>   run a command protected, in this terminal
   sai open [feed|proof|studio|glance]   show a window of the running app
   sai inspect <app> on|off        look inside an app's connections to trusted places
+  sai inside [app]                switches for addresses inside trusted places
+  sai inside <app> <place> <path> on|off   allow or refuse one address inside a place
   sai found                       AI apps on this computer that are not protected yet
   sai open-protected <app>        open an app protected (what a launcher does)
   sai check                       re-check protection now
@@ -290,6 +292,16 @@ async fn main() {
                 if s(app, "id") == a(1) {
                     println!("{}: looking inside is {}", s(app, "name"), if app["inspect"].as_bool() == Some(true) { "on" } else { "off" });
                 }
+            }
+        }
+        "inside" => {
+            let list = if a(2).is_empty() {
+                call("get_inside_rules", if a(1).is_empty() { Value::Null } else { json!({ "appId": a(1) }) }).await
+            } else {
+                call("set_inside_rule", json!({ "appId": a(1), "host": a(2), "path": a(3), "enabled": a(4) != "off" })).await
+            };
+            for r in list.as_array().into_iter().flatten() {
+                println!("{:<12} {:<8} {}{}  {}", s(r, "appId"), if r["enabled"].as_bool() == Some(true) { "allowed" } else { "refused" }, s(r, "host"), s(r, "path"), s(r, "label"));
             }
         }
         "found" => {

@@ -372,25 +372,46 @@ async fn inspected(engine: &Engine, app_id: &str, host: &str, decision: &Decisio
 
     let conn = engine.record_conn(app_id, host, &addr.ip().to_string(), 443, decision);
     let (out, inn) = (AtomicU64::new(0), AtomicU64::new(0));
-    let sniffer = std::sync::Mutex::new(crate::inspect::Sniffer::new(host));
+    let rules = {
+        let (engine, app_id, host) = (engine.clone(), app_id.to_string(), host.to_string());
+        move |path: &str| engine.inside_allowed(&app_id, &host, path)
+    };
+    let sniffer = std::sync::Mutex::new(crate::inspect::Sniffer::with_rules(host, rules));
     let trouble: std::sync::Mutex<Option<crate::inspect::Trouble>> = std::sync::Mutex::new(None);
-    let (mut cr, mut cw) = tokio::io::split(client);
+    let (mut cr, cw) = tokio::io::split(client);
     let (mut ur, mut uw) = tokio::io::split(upstream);
+    // Both directions may need to write to the app: the server's answers, and our own "no".
+    let cw = tokio::sync::Mutex::new(cw);
     let up = async {
         let mut buf = vec![0u8; 32 * 1024];
+        let mut pass = Vec::with_capacity(32 * 1024);
         loop {
             match cr.read(&mut buf).await {
                 Ok(0) | Err(_) => break,
                 Ok(n) => {
-                    // Read before it is passed on: what cannot be vouched for does not leave.
-                    if let Err(t) = sniffer.lock().unwrap().feed(&buf[..n]) {
+                    // Read before anything is passed on. Only what the reader releases leaves:
+                    // each request is held until it has been checked, and what cannot be
+                    // vouched for, or is switched off, never goes.
+                    pass.clear();
+                    let verdict = sniffer.lock().unwrap().feed(&buf[..n], &mut pass);
+                    if !pass.is_empty() {
+                        if uw.write_all(&pass).await.is_err() {
+                            break;
+                        }
+                        out.fetch_add(pass.len() as u64, Ordering::Relaxed);
+                    }
+                    if let Err(t) = verdict {
+                        if matches!(t, crate::inspect::Trouble::Refused(_)) {
+                            // Tell the app plainly, so it sees a refusal and not a dropped line.
+                            let body = "Blocked by Sandbox-ai: this address is switched off.";
+                            let no = format!("HTTP/1.1 403 Forbidden\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len());
+                            let mut w = cw.lock().await;
+                            let _ = w.write_all(no.as_bytes()).await;
+                            let _ = w.shutdown().await;
+                        }
                         *trouble.lock().unwrap() = Some(t);
                         return true;
                     }
-                    if uw.write_all(&buf[..n]).await.is_err() {
-                        break;
-                    }
-                    out.fetch_add(n as u64, Ordering::Relaxed);
                 }
             }
         }
@@ -403,14 +424,14 @@ async fn inspected(engine: &Engine, app_id: &str, host: &str, decision: &Decisio
             match ur.read(&mut buf).await {
                 Ok(0) | Err(_) => break,
                 Ok(n) => {
-                    if cw.write_all(&buf[..n]).await.is_err() {
+                    if cw.lock().await.write_all(&buf[..n]).await.is_err() {
                         break;
                     }
                     inn.fetch_add(n as u64, Ordering::Relaxed);
                 }
             }
         }
-        let _ = cw.shutdown().await;
+        let _ = cw.lock().await.shutdown().await;
     };
     tokio::pin!(up, down);
     let mut cut = engine.cut_signal();
@@ -427,6 +448,7 @@ async fn inspected(engine: &Engine, app_id: &str, host: &str, decision: &Decisio
     match found {
         Some(crate::inspect::Trouble::OtherSite(other)) => engine.record_refusal(app_id, host, 443, Reason::Malformed, "other_site", &other),
         Some(crate::inspect::Trouble::NotUnderstood(what)) => engine.record_refusal(app_id, host, 443, Reason::Malformed, "not_followed", what),
+        Some(crate::inspect::Trouble::Refused(path)) => engine.record_refusal(app_id, host, 443, Reason::NotTrusted, "path", &path),
         None => {}
     }
 }
