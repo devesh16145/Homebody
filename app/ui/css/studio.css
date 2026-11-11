@@ -125,3 +125,23 @@ div.log-lines { padding: 8px 14px; }
 .pj-warn { display: flex; gap: 6px; align-items: flex-start; margin: 8px 0 0; font-size: var(--fs-small); color: var(--amber-text); }
 .pj-warn .ic { width: 14px; height: 14px; flex: none; margin-top: 2px; }
 .pj-actions { margin-top: 10px; flex-wrap: wrap; }
+
+/* Adding your own app */
+.ap-add { display: flex; align-items: center; gap: 10px; margin: 4px 0 14px; }
+.ap-also { margin: 0 0 8px; font-size: var(--fs-small); color: var(--text-3); max-width: 64ch; }
+.ap-also b { font-weight: 600; color: var(--text-2); }
+.ap-form { display: flex; flex-direction: column; gap: 10px; }
+.ap-form .ap-meta { margin: 0; max-width: 60ch; }
+.ap-field { display: flex; align-items: center; gap: 10px; }
+.ap-field > span:first-child { flex: none; width: 64px; font-size: var(--fs-small); color: var(--text-2); }
+.ap-field .field { flex: 1; min-width: 0; }
+.ap-field .row { gap: 8px; }
+.ap-form-go { align-items: center; gap: 8px; }
+.ap-foot { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.ap-foot .row { align-items: center; gap: 8px; }
+.ap-card > .notice { margin-top: 10px; }
+.ad-switch { display: flex; align-items: center; gap: 16px; padding: 10px 12px; border-radius: var(--r-lg); background: var(--fill-1); box-shadow: inset 0 0 0 .5px var(--hairline); }
+.ad-switch b { font-weight: 500; }
+.ad-switch .muted { font-size: var(--fs-small); }
+.ap-lighter { max-width: 64ch; line-height: 1.45; }
+.ap-lighter b { font-weight: 600; color: var(--text-2); }

@@ -87,6 +87,7 @@ export const advanced = {
     try { this.text = await invoke('get_policy_text'); this.error = ''; }
     catch (e) { this.error = errText(e); }
     try { this.setupText = await invoke('get_setup_script'); } catch (e) { this.setupText = null; }
+    try { this.login = (await invoke('get_login_item')).on; } catch (e) { this.login = null; }
     if (this.env.isShown('advanced')) this.render();
   },
 
@@ -111,6 +112,9 @@ export const advanced = {
       : '<button class="btn danger" data-do="ad-ask" data-key="ad-ask">Remove protection from this computer</button>';
     patch(this.env.body(), `<div class="ad"><h2>Advanced</h2>
       <p class="lead">The technical details behind the switches. You never need to change anything here.</p>
+      ${this.login == null ? '' : `<section><h3>Start-up</h3>
+        <label class="ad-switch"><span class="grow"><b>Open Sandbox-ai when I log in</b><br><span class="muted">So protected apps are ready, and the menu-bar icon is there, without you starting anything.</span></span>
+          <span class="switch green"><input type="checkbox" role="switch" data-login data-key="ad-login" aria-label="Open Sandbox-ai when I log in"${this.login ? ' checked' : ''}><i></i></span></label></section>`}
       <section><h3>Health</h3>
         <div class="row"><button class="btn" data-do="ad-check" data-key="ad-check"${this.checking ? ' disabled' : ''}>Check protection now</button></div>${health}</section>
       <section><h3>Settings <span class="tag">Read-only</span></h3>${code}</section>
@@ -120,6 +124,12 @@ export const advanced = {
       <section><h3>Remove</h3>
         <p class="muted ad-note">Undoes everything the one-time setup created. You can set it up again at any time.</p>${removal}</section>
       <p class="ad-version faint num">Version ${esc(s.version || '')}</p></div>`);
+  },
+
+  async setLogin(on) {
+    try { this.login = (await invoke('set_login_item', { on })).on; }
+    catch (e) { this.env.ctx.toast(errText(e)); }
+    if (this.env.isShown('advanced')) this.render();
   },
 
   async act(what) {

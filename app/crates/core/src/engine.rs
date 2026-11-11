@@ -72,6 +72,10 @@ struct Inner {
     recent_denies: Mutex<HashMap<String, (Instant, u64)>>,
     /// Serialises refusals so two identical ones arriving together are counted on one row.
     deny_order: Mutex<()>,
+    /// Gate ports this engine is listening on.
+    gates: Mutex<HashSet<u16>>,
+    /// Process ids of windowed apps we opened (app id -> pid), so we can ask exactly those to quit.
+    pids: Mutex<HashMap<String, u32>>,
     /// Repeats counted on a row in memory but not yet written down (row id -> how many).
     unsaved_repeats: Mutex<HashMap<u64, u64>>,
     /// Flipped at shutdown so background helpers (the system-log follower) stop too.
@@ -118,6 +122,8 @@ impl Engine {
             quiet: Mutex::new(HashMap::new()),
             recent_denies: Mutex::new(HashMap::new()),
             deny_order: Mutex::new(()),
+            gates: Mutex::new(HashSet::new()),
+            pids: Mutex::new(HashMap::new()),
             unsaved_repeats: Mutex::new(HashMap::new()),
             stop: watch::channel(false).0,
             health: Mutex::new(HashMap::new()),
@@ -135,14 +141,9 @@ impl Engine {
         }
 
         // One gate per app.
-        let apps: Vec<(String, u16)> = engine.0.cfg.lock().unwrap().apps.iter().map(|a| (a.id.clone(), a.proxy_port)).collect();
-        for (id, port) in apps {
-            match crate::proxy::bind(port).await {
-                Ok(listener) => {
-                    tokio::spawn(crate::proxy::serve(engine.clone(), id, listener));
-                }
-                Err(e) => engine.0.listen_errors.lock().unwrap().push(format!("Port {port} is in use by another program ({e}).")),
-            }
+        let ports: Vec<u16> = engine.0.cfg.lock().unwrap().apps.iter().map(|a| a.proxy_port).collect();
+        for port in ports {
+            engine.ensure_gate(port).await;
         }
 
         // Status emitter: coalesces bursts, and re-checks on a slow tick so time-based state
@@ -216,6 +217,27 @@ impl Engine {
             }
         });
         Ok(engine)
+    }
+
+    /// Start the gate on this port unless it is already running.
+    async fn ensure_gate(&self, port: u16) {
+        if !self.0.gates.lock().unwrap().insert(port) {
+            return;
+        }
+        match crate::proxy::bind(port).await {
+            Ok(listener) => {
+                tokio::spawn(crate::proxy::serve(self.clone(), port, listener));
+            }
+            Err(e) => {
+                self.0.gates.lock().unwrap().remove(&port);
+                self.0.listen_errors.lock().unwrap().push(format!("Port {port} is in use by another program ({e})."));
+            }
+        }
+    }
+
+    /// The app whose gate this is, if any.
+    pub(crate) fn app_for_gate(&self, port: u16) -> Option<String> {
+        self.0.cfg.lock().unwrap().apps.iter().find(|a| a.proxy_port == port).map(|a| a.id.clone())
     }
 
     pub fn subscribe(&self) -> broadcast::Receiver<Event> {
@@ -776,9 +798,12 @@ impl Engine {
                     "lookup" => "tried to look up a name by itself instead of going through the gate".to_string(),
                     "listen" => "tried to accept connections from other computers".to_string(),
                     "gate" => "tried to use another app's gate".to_string(),
+                    "open" => "tried to hand something to another app, such as a link to your browser. That is a way for data to leave without passing the gate".to_string(),
+                    "control" => "tried to control another app".to_string(),
                     _ => "tried a kind of network access that protected apps do not get".to_string(),
                 };
-                format!("{who}, started by {app_name}, {tried}. The fence refused it, so nothing left this computer.")
+                let who = if who == app_name { who.to_string() } else { format!("{who}, started by {app_name},") };
+                format!("{who} {tried}. The fence refused it, so nothing left this computer.")
             }
         };
         if row.unreachable {
@@ -800,6 +825,8 @@ impl Engine {
                 "lookup" => "Name lookup",
                 "listen" => "Incoming connections",
                 "gate" => "Another app's gate",
+                "open" => "Opening another app",
+                "control" => "Controlling another app",
                 _ => "Network access",
             };
             (label.to_string(), "Went around the gate".to_string())
@@ -897,7 +924,9 @@ impl Engine {
         for a in &cfg.apps {
             let h = health.get(&a.id).cloned().unwrap_or_default();
             let state = h.state();
-            let installed = if h.checked { h.installed } else { catalog::find_binary(&a.binary).is_some() };
+            let found = catalog::find_binary(&a.binary);
+            let problem = found.as_deref().filter(|_| !a.windowed).and_then(|path| catalog::binary_problem(path, &a.name));
+            let installed = if h.checked { h.installed } else { found.is_some() };
             if a.protected && installed {
                 states.push(state);
                 for r in h.reasons(&a.name) {
@@ -915,9 +944,11 @@ impl Engine {
                 protected: a.protected,
                 fence: state,
                 running: running.contains(&a.id),
-                can_start: installed && a.protected && state == FenceState::Up,
+                can_start: installed && a.protected && state == FenceState::Up && problem.is_none(),
                 workspace: a.workspace.clone(),
                 today: per_app.get(&a.id).copied().unwrap_or_default(),
+                custom: a.custom,
+                problem,
             });
         }
         let fence = if states.iter().any(|s| *s == FenceState::Checking) {
@@ -1107,7 +1138,7 @@ impl Engine {
     pub async fn check_fence(&self) {
         let (apps, expected_rules) = {
             let cfg = self.0.cfg.lock().unwrap();
-            (cfg.apps.clone(), fence::filter_rules(&cfg))
+            (cfg.apps.clone(), fence::filter_rules(&cfg.provisioned()))
         };
         for a in &apps {
             let h = fence::probe(a, &expected_rules).await;
@@ -1146,7 +1177,20 @@ impl Engine {
                 return Err(format!("Something is already running on this computer where {} would be. Quit the other {} first, so only the protected one runs.", app.name, app.name));
             }
         }
+        if app.windowed && fence::window_running(&app).await {
+            // A second start would only bring the open copy forward, and that copy may be unprotected.
+            return Err(format!("{} is already open. Quit it first, then open it from here so the protected one is the only one running.", app.name));
+        }
         let mut child = fence::start_managed(&app).await?;
+        if app.windowed {
+            // An app that cannot run this way quits at once; say so instead of showing it as open.
+            if let Ok(Ok(_)) = tokio::time::timeout(Duration::from_millis(2500), child.wait()).await {
+                return Err(format!("{} closed straight away. It may not be able to run protected this way yet.", app.name));
+            }
+            if let Some(pid) = child.id() {
+                self.0.pids.lock().unwrap().insert(app_id.to_string(), pid);
+            }
+        }
         self.0.running.lock().unwrap().insert(app_id.to_string());
         self.append("start", fields! { "app" => app_id, "action" => "start" });
         let e = self.clone();
@@ -1154,6 +1198,7 @@ impl Engine {
         tokio::spawn(async move {
             let _ = child.wait().await;
             e.0.running.lock().unwrap().remove(&id);
+            e.0.pids.lock().unwrap().remove(&id);
             e.append("start", fields! { "app" => id, "action" => "stop" });
         });
         Ok(())
@@ -1161,7 +1206,14 @@ impl Engine {
 
     async fn app_stop(&self, app_id: &str) -> Result<(), String> {
         let app = self.0.cfg.lock().unwrap().app(app_id).cloned().ok_or_else(|| "Unknown app.".to_string())?;
-        fence::stop_all(&app).await;
+        if app.windowed {
+            let pid = self.0.pids.lock().unwrap().get(app_id).copied();
+            if let Some(pid) = pid {
+                fence::stop_pid(pid).await;
+            }
+        } else {
+            fence::stop_all(&app).await;
+        }
         tokio::time::sleep(Duration::from_millis(400)).await;
         self.touch();
         Ok(())
@@ -1270,11 +1322,11 @@ impl Engine {
                 ok(&self.0.ledger.lock().unwrap().tail(limit))
             }
             // Exactly what the administrator approves during setup, so it can be read first.
-            "get_setup_script" => Ok(Value::String(fence::setup_script(&self.0.cfg.lock().unwrap(), &fence::real_user()))),
+            "get_setup_script" => Ok(Value::String(fence::setup_script(&self.0.cfg.lock().unwrap().provisioned(), &fence::real_user()))),
             "get_policy_text" => Ok(Value::String(serde_json::to_string_pretty(&*self.0.cfg.lock().unwrap()).unwrap_or_default())),
             "run_setup" => {
                 let cfg = self.0.cfg.lock().unwrap().clone();
-                let mut r = fence::run_setup(&cfg).await;
+                let mut r = fence::run_setup(&cfg.provisioned()).await;
                 self.check_fence().await;
                 if r.ok {
                     let st = self.status();
@@ -1298,6 +1350,34 @@ impl Engine {
                 ok(&r)
             }
             "check_fence" => {
+                self.check_fence().await;
+                ok(&self.status())
+            }
+            "app_add" => {
+                let (id, port) = {
+                    let mut cfg = self.0.cfg.lock().unwrap();
+                    let id = cfg.add_custom(&req("name")?, &req("program")?)?;
+                    let port = cfg.app(&id).map(|a| a.proxy_port).unwrap_or(0);
+                    (id, port)
+                };
+                self.save_cfg();
+                self.append("app", fields! { "action" => "added", "app" => id.as_str() });
+                // Its gate starts now; its private space appears once setup is approved again.
+                self.ensure_gate(port).await;
+                self.check_fence().await;
+                ok(&self.status())
+            }
+            "app_remove" => {
+                let id = req("appId")?;
+                if self.0.running.lock().unwrap().contains(&id) {
+                    return Err("Stop it first.".into());
+                }
+                let app = self.0.cfg.lock().unwrap().app(&id).cloned().ok_or("Unknown app.")?;
+                self.0.cfg.lock().unwrap().remove_custom(&id)?;
+                self.save_cfg();
+                self.0.health.lock().unwrap().remove(&id);
+                fence::stop_all(&app).await;
+                self.append("app", fields! { "action" => "removed", "app" => id.as_str() });
                 self.check_fence().await;
                 ok(&self.status())
             }
@@ -1325,6 +1405,9 @@ impl Engine {
             }
             "app_open_terminal" => {
                 let app = self.app_if_ready(&req("appId")?)?;
+                if app.windowed {
+                    return Err(format!("{} is a windowed app. Open it instead.", app.name));
+                }
                 let dir = match s("project") {
                     Some(name) => {
                         app.projects.iter().find(|p| p.name == name).ok_or("Unknown project.")?;

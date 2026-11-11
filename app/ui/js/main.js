@@ -93,7 +93,7 @@ on(document, 'click', '[data-act="release"]', async () => {
 
 // ---------- setup / first run ----------
 
-const KIND = { model: 'Runs AI models on this computer', agent: 'AI coding assistant' };
+const KIND = { model: 'Runs AI models on this computer', agent: 'AI assistant, command line', window: 'Windowed app, network fenced' };
 
 function renderSetup() {
   const reason = status.setupReasons[0];

@@ -28,11 +28,15 @@ pub async fn bind(port: u16) -> std::io::Result<TcpListener> {
     TcpListener::bind(("127.0.0.1", port)).await
 }
 
-pub async fn serve(engine: Engine, app_id: String, listener: TcpListener) {
+/// Serve one gate. Which app the gate belongs to is looked up for every connection, so a gate
+/// keeps working (or goes quiet) as apps are added and removed while the engine runs.
+pub async fn serve(engine: Engine, port: u16, listener: TcpListener) {
     loop {
         match listener.accept().await {
             Ok((stream, _)) => {
-                let (e, a) = (engine.clone(), app_id.clone());
+                // A gate that belongs to no app answers nobody.
+                let Some(a) = engine.app_for_gate(port) else { continue };
+                let e = engine.clone();
                 tokio::spawn(async move {
                     let _ = handle(e, a, stream).await;
                 });

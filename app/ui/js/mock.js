@@ -98,7 +98,8 @@ export function createMock(scenarioName) {
       apps: s.apps.map((a) => ({
         id: a.id, name: a.name, kind: a.kind, icon: a.icon, installed: a.installed, protected: a.protected,
         fence: a.protected ? f : 'not_installed', running: a.running,
-        canStart: a.installed && a.protected && f === 'up', workspace: a.workspace,
+        canStart: a.installed && a.protected && f === 'up' && !a.problem, workspace: a.workspace,
+        custom: !!a.custom, problem: a.problem || null,
         today: counters(todays.filter((e) => e.appId === a.id)),
       })),
       pending,
@@ -378,6 +379,29 @@ export function createMock(scenarioName) {
       flags.checking = true; emit('status', status());
       await wait(700);
       flags.checking = false; queueStatus();
+      return status();
+    },
+    async pick_program() { return '/Applications/LM Studio.app'; },
+    async get_login_item() { return { on: !!s.loginItem }; },
+    async set_login_item({ on } = {}) { s.loginItem = !!on; return { on: s.loginItem }; },
+    async app_add({ name, program } = {}) {
+      await wait(400);
+      const clean = String(name || '').replace(/[^\p{L}\p{N} ._+-]/gu, '').trim();
+      if (!clean) throw 'Give the app a short name using letters and numbers.';
+      if (!String(program || '').trim()) throw 'Choose the program to run.';
+      if (s.apps.some((a) => a.name.toLowerCase() === clean.toLowerCase())) throw `There is already an app called ${clean}.`;
+      const id = 'my-' + clean.toLowerCase().replace(/[^a-z0-9]+/g, '-');
+      const win = String(program).trim().endsWith('.app');
+      if (win && /textedit|notes|safari/i.test(program)) throw `${clean} already runs in Apple's own sandbox, and macOS does not allow a second one around it. Apps like this need the Network Extension version of Sandbox-ai.`;
+      s.apps.push({ id, name: clean, kind: win ? 'window' : 'agent', icon: 'generic', workspace: win ? null : '/Users/Shared/SandboxAI/' + id, installed: true, protected: true, running: false, custom: true, problem: null });
+      queueStatus();
+      return status();
+    },
+    async app_remove({ appId } = {}) {
+      const a = needApp(appId);
+      if (!a.custom) throw `${a.name} is built in. Switch its protection off instead.`;
+      s.apps.splice(s.apps.indexOf(a), 1);
+      queueStatus();
       return status();
     },
     async app_set_protected({ appId, protected: on } = {}) {

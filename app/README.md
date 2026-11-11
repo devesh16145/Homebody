@@ -24,7 +24,11 @@ Status: second build, 10 Nov 2026 ("usable every day"). Everything below runs en
 | Health probes every 30 s; nothing protected starts unless every layer checks out | Working |
 | App: menu-bar icon with six states, Glance popover, prompt banner, main window (Feed, Proof, Studio), first-run setup screen | Working |
 | CLI `sai`: status, feed, watch, mode, watched, asks, allow/block, trust, proof, verify, export-log, project, run, terminal, open, daemon | Working |
-| Protected apps | Claude Code (agent), Ollama (local models) |
+| Protected apps | Claude Code (agent) and Ollama (local models): tested live. Codex CLI, Gemini CLI, Aider, opencode: recognised when installed, each with its own private user and gate; their short trusted lists follow the tools' documentation and have not been run here |
+| Protect another app: any command-line program gets its own private user, gate, workspace and an empty Trusted list (Studio → Apps) | Built, unit-tested; needs one more approval of setup per added app |
+| Windowed apps (lighter protection): added from Studio → Apps, opened protected as you under the launch-time profile, web traffic pointed at the app's own gate; handing things to other apps, driving other apps, login items and Sandbox-ai's own files are closed to it | Working for Electron apps, tested live with Obsidian: start-up contacts arrived at the gate as questions, direct connections and lookups were refused and shown. Not tried with LM Studio, Jan or Comfy, or with a non-Electron app (those would be offline rather than asked) |
+| A program installed inside your home folder is detected and explained instead of failing silently | Working |
+| Open at login (Studio → Advanced) | Built; not yet tried across a real login |
 
 ## Run it
 
@@ -79,7 +83,7 @@ app/
 
 The UI calls one command, `sai`, with `{cmd, args}`; the core's `dispatch` serves the app, the CLI and scripts alike. Opened in a plain browser, the UI runs against an in-page mock of the same contract (`ui/dev.html` is a review harness with scenarios).
 
-Sizes in this build: 58 unit tests, 46 bypass cases, a 4.2 MB app.
+Sizes in this build: 64 unit tests, 46 bypass cases, a 4.2 MB app.
 
 ## Verify it yourself
 
@@ -102,6 +106,7 @@ The corpus needs the app (or `sai daemon`) running. The gate half runs anywhere;
 - **A trusted name can still front for another site on the same hosting provider** inside encrypted traffic. The greeting check stops the simple version; the full fix is inspection.
 - **Shared kernel.** A kernel exploit from inside a protected app is not contained. The virtual-machine tier (see `../spike/box`) is the answer and is planned.
 - **The setup script runs from a file in your account** for the moments between writing it and approving it. A signed privileged helper replaces this once the project has an Apple Developer identity.
+- **Windowed apps get one layer.** They run as you under the launch-time profile, with no private user and no packet filter behind it. They can read your files; only the copy opened from Sandbox-ai is protected; their inner sandbox is switched off (macOS refuses a sandbox inside a sandbox); links they try to open in your browser are refused and shown. Apps in Apple's App Sandbox cannot be wrapped. An app deliberately trying to break out has routes left. The Network Extension is the full answer.
 - **macOS only.** The core is portable Rust; `fence.rs` and the control socket are the platform-specific parts.
 - **Unsigned.** Gatekeeper will warn when the app is opened on another Mac until it is signed and notarized.
 

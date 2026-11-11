@@ -20,6 +20,12 @@ const APPS = [
   { id: 'claude-code', name: 'Claude Code', kind: 'agent', icon: 'claude', workspace: '~/Private AI/Claude Code' },
 ];
 
+// Recognised but not installed; Aider shows the "installed where protected apps cannot go" case.
+const MORE = [
+  { id: 'codex', name: 'Codex CLI' }, { id: 'gemini', name: 'Gemini CLI' }, { id: 'opencode', name: 'opencode' },
+  { id: 'aider', name: 'Aider', problem: 'Aider is installed inside your home folder (~/.local/bin/aider), where protected apps cannot go. Install it for the whole computer instead, for example with Homebrew or "npm install -g".' },
+];
+
 const PRESETS = [
   ['ollama', 'registry.ollama.ai', true, 'preset', true],
   ['claude-code', 'api.anthropic.com', true, 'preset', true],
@@ -107,7 +113,8 @@ export function seed(scenario) {
   const s = {
     mode: 'private', modeSince: iso(now - 14 * DAY - 3 * HOUR), privateSince: iso(now - 14 * DAY - 3 * HOUR),
     lockdown: false, setupDone: true, fenceDown: false, setupReasons: [], askOnStart: null,
-    apps: APPS.map((a) => ({ ...a, installed: true, protected: true, running: !none })),
+    apps: APPS.map((a) => ({ ...a, installed: true, protected: true, running: !none, custom: false, problem: null }))
+      .concat(MORE.map((a) => ({ ...a, kind: 'agent', icon: 'generic', workspace: null, installed: !!a.problem, protected: true, running: false, custom: false, problem: a.problem || null }))),
     trust: PRESETS.filter((p) => !none || p[3] === 'preset').map((p) => trustEntry(...p)),
     events: [], seq: 1240,
   };

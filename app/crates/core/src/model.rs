@@ -128,6 +128,10 @@ pub struct AppStatus {
     pub can_start: bool,
     pub workspace: Option<String>,
     pub today: Counters,
+    /// Added by the user ("protect your own app"); can be removed.
+    pub custom: bool,
+    /// Installed, but in a way a protected app cannot use. A sentence for the user.
+    pub problem: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug)]

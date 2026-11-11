@@ -47,25 +47,63 @@ async fn sai(app: AppHandle, window: WebviewWindow, shell: tauri::State<'_, Shel
             app.exit(0);
             Ok(Value::Null)
         }
-        "pick_folder" => tokio::task::spawn_blocking(pick_folder).await.map_err(|e| e.to_string())?,
+        "pick_folder" => tokio::task::spawn_blocking(|| pick("choose folder with prompt \"Choose a project folder to bring in\"")).await.map_err(|e| e.to_string())?,
+        "pick_program" => tokio::task::spawn_blocking(|| pick("choose file with prompt \"Choose the program to protect\" default location (POSIX file \"/Applications\")")).await.map_err(|e| e.to_string())?,
+        "get_login_item" => Ok(serde_json::json!({ "on": login_item_path().map(|p| p.exists()).unwrap_or(false) })),
+        "set_login_item" => {
+            set_login_item(args.get("on").and_then(Value::as_bool).unwrap_or(false))?;
+            Ok(serde_json::json!({ "on": login_item_path().map(|p| p.exists()).unwrap_or(false) }))
+        }
         _ => shell.engine.dispatch(&cmd, args).await,
     }
 }
 
-/// The system's own folder chooser. Returns null when the user cancels.
+/// The system's own chooser for a folder or a file. Returns null when the user cancels.
 /// Uses the chooser built into macOS rather than a dialog library, to keep the app small.
-fn pick_folder() -> Result<Value, String> {
+fn pick(what: &str) -> Result<Value, String> {
     let out = std::process::Command::new("/usr/bin/osascript")
-        .args(["-e", "tell me to activate", "-e", "POSIX path of (choose folder with prompt \"Choose a project folder to bring in\")"])
+        .args(["-e", "tell me to activate", "-e", &format!("POSIX path of ({what})")])
         .output()
-        .map_err(|e| format!("The folder chooser could not be opened: {e}"))?;
+        .map_err(|e| format!("The chooser could not be opened: {e}"))?;
     if !out.status.success() {
         let err = String::from_utf8_lossy(&out.stderr);
         // -128 is "user cancelled".
-        return if err.contains("-128") { Ok(Value::Null) } else { Err(format!("The folder chooser failed: {}", err.trim())) };
+        return if err.contains("-128") { Ok(Value::Null) } else { Err(format!("The chooser failed: {}", err.trim())) };
     }
-    let path = String::from_utf8_lossy(&out.stdout).trim().trim_end_matches('/').to_string();
+    let path = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    let path = if path.len() > 1 { path.trim_end_matches('/').to_string() } else { path };
     Ok(if path.is_empty() { Value::Null } else { Value::String(path) })
+}
+
+const LOGIN_ITEM: &str = "com.sandboxai.app";
+
+fn login_item_path() -> Option<std::path::PathBuf> {
+    std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join("Library/LaunchAgents").join(format!("{LOGIN_ITEM}.plist")))
+}
+
+/// Open Sandbox-ai when the user logs in: a per-user launch entry pointing at this copy of the
+/// app. No administrator rights are involved, and switching it off removes the file again.
+fn set_login_item(on: bool) -> Result<(), String> {
+    let path = login_item_path().ok_or("Your home folder could not be found.")?;
+    if !on {
+        return match std::fs::remove_file(&path) {
+            Ok(()) => Ok(()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(e) => Err(format!("The login entry could not be removed: {e}")),
+        };
+    }
+    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    let exe = exe.to_string_lossy();
+    if exe.contains('<') || exe.contains('&') {
+        return Err("Move the app to a folder with a simpler name first.".into());
+    }
+    let plist = format!(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n<plist version=\"1.0\"><dict>\n  <key>Label</key><string>{LOGIN_ITEM}</string>\n  <key>ProgramArguments</key><array><string>{exe}</string></array>\n  <key>RunAtLoad</key><true/>\n  <key>LimitLoadToSessionType</key><string>Aqua</string>\n  <key>ProcessType</key><string>Interactive</string>\n</dict></plist>\n"
+    );
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir).map_err(|e| format!("The login entry could not be saved: {e}"))?;
+    }
+    std::fs::write(&path, plist).map_err(|e| format!("The login entry could not be saved: {e}"))
 }
 
 fn tray_icon(ind: Indicator) -> Image<'static> {

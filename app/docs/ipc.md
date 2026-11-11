@@ -53,6 +53,8 @@ interface AppStatus {
   canStart: boolean;            // true when installed, protected and fence is up
   workspace: string | null;     // folder the app may write in (agents only)
   today: Counters;
+  custom: boolean;              // added by the user ("protect another app"); can be removed
+  problem: string | null;       // installed, but where a protected app cannot reach it (inside the home folder). A sentence for the user
 }
 
 type Verb = "allowed" | "blocked" | "asked" | "seen";
@@ -70,7 +72,8 @@ type Reason =
   | "malformed"          // not a valid destination name (raw IP address, odd characters)
   | "local_address"      // name resolves to this computer or the local network
   | "around_gate";       // did not go through the gate; refused by the fence. host is "" and
-                         // label says what was tried ("Direct connection", "Name lookup", …)
+                         // label says what was tried ("Direct connection", "Name lookup",
+                         // "Opening another app", "Controlling another app", …)
 
 interface FeedEvent {
   id: number;                   // stable id (ledger sequence number)
@@ -188,6 +191,10 @@ interface SetupResult { ok: boolean; message: string; }
 | `run_setup` | — | `SetupResult` | one-time setup; the OS asks for the admin password |
 | `remove_setup` | — | `SetupResult` | undo everything setup created; asks for the admin password |
 | `check_fence` | — | `Status` | re-run health probes now |
+| `app_add` | `{ name, program }` | `Status` | protect another app. A command name or program path: it gets its own private user, gate and workspace, and setup must be approved again before it can run. A path ending in `.app`: a windowed app (`kind: "window"`), which runs as the user under the launch-time profile alone, needs no approval, and is opened and quit with `app_start` / `app_stop`. Rejects apps in Apple's App Sandbox with a sentence for the user |
+| `app_remove` | `{ appId }` | `Status` | only apps added with `app_add` |
+| `pick_program` | — | `string \| null` | shell only: the system file chooser |
+| `get_login_item` / `set_login_item` | — / `{ on }` | `{ on: boolean }` | shell only: open the app at login (a per-user launch entry) |
 | `app_set_protected` | `{ appId, protected }` | `Status` | |
 | `app_start` | `{ appId }` | `Status` | model apps: start the protected instance |
 | `app_stop` | `{ appId }` | `Status` | |

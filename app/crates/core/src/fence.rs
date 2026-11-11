@@ -98,6 +98,121 @@ pub fn real_home() -> String {
     dirs::home_dir().map(|p| p.to_string_lossy().into_owned()).unwrap_or_else(|| "/var/empty".into())
 }
 
+/// The profile for a windowed app, which runs as you. One layer instead of three: there is no
+/// private user and no packet filter behind it, so this profile is the whole fence.
+///
+/// - Network: this computer only (its own helpers, a local model), never another app's gate.
+///   Its web traffic is pointed at its own gate, where the usual rules and questions apply.
+/// - The ways a program running as you could step outside the profile are closed: handing a link
+///   or file to another app, driving another app, planting something that starts at login, and
+///   reaching Sandbox-ai's own settings, key and control socket.
+///
+/// It can still read and change your files, as it can when you open it normally.
+fn window_profile(app: &AppConfig) -> String {
+    let tag = |what: &str| format!("(with message \"{VIOLATION_TAG}{};{what}\")", app.id);
+    let mut p = String::from("(version 1)\n(allow default)\n");
+    p.push_str(&format!("(deny network* {})\n", tag("net")));
+    p.push_str("(allow network-outbound (remote ip \"localhost:*\"))\n");
+    for port in crate::catalog::GATE_PORTS.filter(|g| *g != app.proxy_port) {
+        p.push_str(&format!("(deny network-outbound (remote ip \"localhost:{port}\") {})\n", tag("gate")));
+    }
+    p.push_str("(allow network-bind (local ip \"localhost:*\"))\n");
+    p.push_str("(allow network-inbound (local ip \"localhost:*\"))\n");
+    // Windowed apps talk to their own helper processes over local sockets.
+    p.push_str("(allow network-outbound (remote unix-socket))\n(allow network-bind (local unix-socket))\n(allow network-inbound (local unix-socket))\n");
+    p.push_str(&format!("(deny mach-lookup (global-name \"com.apple.dnssd.service\") {})\n", tag("dns")));
+    p.push_str(&format!("(deny mach-lookup (global-name \"com.apple.mDNSResponder\") {})\n", tag("dns")));
+    p.push_str(&format!("(deny network-outbound (remote unix-socket (path-literal \"/private/var/run/mDNSResponder\")) {})\n", tag("dns")));
+    p.push_str(&format!("(deny lsopen {})\n", tag("open")));
+    p.push_str(&format!("(deny appleevent-send {})\n", tag("event")));
+    let safe = |path: &str| !path.is_empty() && !path.contains('"') && !path.contains('\\');
+    let data = crate::paths::data_dir().to_string_lossy().into_owned();
+    if safe(&data) {
+        p.push_str(&format!("(deny file* (subpath \"{data}\"))\n"));
+        p.push_str(&format!("(deny network-outbound (remote unix-socket (subpath \"{data}\")))\n"));
+    }
+    let home = real_home();
+    if home.starts_with("/Users/") && safe(&home) {
+        p.push_str(&format!("(deny file-write* (subpath \"{home}/Library/LaunchAgents\"))\n"));
+    }
+    p
+}
+
+/// What we need to know about a windowed app before wrapping it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Bundle {
+    /// The program inside the .app that is actually started.
+    pub exe: String,
+    /// Built with Electron. Its own inner sandbox cannot start inside ours, so it is switched
+    /// off, and its web traffic can be pointed at the gate.
+    pub electron: bool,
+}
+
+/// Look inside a .app and say whether it can be protected. The error is a sentence for the user.
+pub fn inspect_bundle(path: &str) -> Result<Bundle, String> {
+    let app = std::path::Path::new(path);
+    let name = app.file_stem().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "This app".into());
+    if !path.starts_with('/') || !path.ends_with(".app") || !app.is_dir() || path.contains('"') || path.contains('\\') || path.chars().any(|c| c.is_control()) {
+        return Err("Choose an app, for example from your Applications folder.".into());
+    }
+    let plist = app.join("Contents/Info.plist");
+    let exe_name = std::process::Command::new("/usr/bin/plutil")
+        .args(["-extract", "CFBundleExecutable", "raw", "-o", "-"])
+        .arg(&plist)
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .filter(|n| !n.is_empty() && !n.contains('/'))
+        .ok_or_else(|| format!("{name} does not look like an app that can be started."))?;
+    let exe = app.join("Contents/MacOS").join(&exe_name);
+    if !exe.is_file() {
+        return Err(format!("{name} does not look like an app that can be started."));
+    }
+    // An app that already lives in Apple's App Sandbox applies it at launch, and macOS refuses
+    // a second sandbox on top of ours: the app would quit at once.
+    let entitlements = std::process::Command::new("/usr/bin/codesign").args(["-d", "--entitlements", "-", "--xml"]).arg(app).output().map(|o| String::from_utf8_lossy(&o.stdout).into_owned()).unwrap_or_default();
+    if app_sandboxed(&entitlements) {
+        return Err(format!("{name} already runs in Apple's own sandbox, and macOS does not allow a second one around it. Apps like this need the Network Extension version of Sandbox-ai."));
+    }
+    Ok(Bundle { exe: exe.to_string_lossy().into_owned(), electron: app.join("Contents/Frameworks/Electron Framework.framework").exists() })
+}
+
+/// Whether a code-signing entitlements document switches the App Sandbox on.
+fn app_sandboxed(entitlements_xml: &str) -> bool {
+    let Some(at) = entitlements_xml.find("com.apple.security.app-sandbox") else { return false };
+    let rest = &entitlements_xml[at..];
+    let after_key = rest.find("</key>").map(|i| &rest[i + 6..]).unwrap_or("");
+    after_key.trim_start().starts_with("<true")
+}
+
+/// The command line that opens a windowed app protected: as you, under its profile, with its
+/// web traffic pointed at its gate.
+pub fn window_argv(app: &AppConfig) -> Result<Vec<String>, String> {
+    let bundle = inspect_bundle(&app.binary)?;
+    let gate = format!("http://127.0.0.1:{}", app.proxy_port);
+    let mut v: Vec<String> = vec!["/usr/bin/sandbox-exec".into(), "-p".into(), seatbelt_profile(app), "/usr/bin/env".into()];
+    for k in ["HTTPS_PROXY", "HTTP_PROXY", "https_proxy", "http_proxy", "ALL_PROXY"] {
+        v.push(format!("{k}={gate}"));
+    }
+    v.extend(["NO_PROXY=localhost,127.0.0.1".to_string(), "no_proxy=localhost,127.0.0.1".to_string(), "SANDBOX_AI=1".to_string(), bundle.exe]);
+    if bundle.electron {
+        v.extend(["--no-sandbox".to_string(), format!("--proxy-server={gate}"), "--proxy-bypass-list=<-loopback>;127.0.0.1;localhost".to_string()]);
+    }
+    Ok(v)
+}
+
+/// Whether the app is already open (protected or not). Windowed apps usually keep to one copy:
+/// a second start just hands over to the first, which may be an unprotected one.
+pub async fn window_running(app: &AppConfig) -> bool {
+    let Ok(bundle) = inspect_bundle(&app.binary) else { return false };
+    run(&["/usr/bin/pgrep", "-f", &format!("^{}", regex_escape(&bundle.exe))], Duration::from_secs(4)).await.map(|r| r.0).unwrap_or(false)
+}
+
+fn regex_escape(s: &str) -> String {
+    s.chars().flat_map(|c| if c.is_ascii_alphanumeric() || c == '/' || c == ' ' || c == '-' || c == '_' { vec![c] } else { vec!['\\', c] }).collect()
+}
+
 const VIOLATION_TAG: &str = "sai-app=";
 
 /// One refused attempt to reach the network without going through the gate.
@@ -107,7 +222,8 @@ pub struct Violation {
     /// Name of the program that tried, as the system reports it.
     pub process: String,
     /// "direct" (straight to an address), "lookup" (asked the system to resolve a name),
-    /// "listen" (accept connections from other computers), "gate" (another app's gate), "other".
+    /// "listen" (accept connections from other computers), "gate" (another app's gate),
+    /// "open" (hand something to another app), "control" (drive another app), "other".
     pub what: &'static str,
     /// The port, for "direct" and "gate". macOS does not report the address.
     pub port: u16,
@@ -145,6 +261,8 @@ pub fn parse_violation(message: &str) -> Option<Violation> {
     let what = match (hint, op) {
         ("dns", _) => "lookup",
         ("gate", _) => "gate",
+        ("open", _) => "open",
+        ("event", _) => "control",
         (_, "network-outbound") if target.contains("mDNSResponder") => "lookup",
         (_, "network-outbound") if target.starts_with('/') => "other",
         (_, "network-outbound") => "direct",
@@ -188,6 +306,9 @@ pub fn home_for(os_user: &str) -> String {
 /// to the system log with that tag, which is how attempts to go around the gate reach the Feed
 /// (see [`parse_violation`]).
 pub fn seatbelt_profile(app: &AppConfig) -> String {
+    if app.windowed {
+        return window_profile(app);
+    }
     let tag = |what: &str| format!("(with message \"{VIOLATION_TAG}{};{what}\")", app.id);
     let mut p = String::from("(version 1)\n(allow default)\n");
     // Network: nothing, then exactly the local gate and the listed local services.
@@ -257,6 +378,19 @@ pub fn fenced_env(app: &AppConfig) -> Vec<(String, String)> {
 /// The full command line that runs `program` protected: as the app's OS user, under its seatbelt
 /// profile, with a clean environment, in `cwd`.
 pub fn fenced_argv(app: &AppConfig, program: &str, args: &[String], extra_env: &[(String, String)], cwd: Option<&str>) -> Vec<String> {
+    if app.windowed {
+        // As you, under the windowed app's profile, with the same pointers to its gate.
+        let gate = format!("http://127.0.0.1:{}", app.proxy_port);
+        let mut v: Vec<String> = vec!["/usr/bin/sandbox-exec".into(), "-p".into(), seatbelt_profile(app), "/usr/bin/env".into()];
+        for k in ["HTTPS_PROXY", "HTTP_PROXY", "https_proxy", "http_proxy", "ALL_PROXY"] {
+            v.push(format!("{k}={gate}"));
+        }
+        v.extend(["NO_PROXY=localhost,127.0.0.1".to_string(), "no_proxy=localhost,127.0.0.1".to_string(), "SANDBOX_AI=1".to_string()]);
+        v.extend(extra_env.iter().map(|(k, val)| format!("{k}={val}")));
+        v.extend(["/bin/sh".into(), "-c".into(), "cd \"$1\" && shift && exec \"$@\"".into(), "sh".into(), cwd.unwrap_or("/").to_string(), program.to_string()]);
+        v.extend(args.iter().cloned());
+        return v;
+    }
     let mut v: Vec<String> = vec!["/usr/bin/sudo".into(), "-n".into(), "-u".into(), app.os_user.clone(), "-H".into(), "/usr/bin/sandbox-exec".into(), "-p".into(), seatbelt_profile(app), "/usr/bin/env".into(), "-i".into()];
     for (k, val) in fenced_env(app).into_iter().chain(extra_env.iter().cloned()) {
         v.push(format!("{k}={val}"));
@@ -298,6 +432,23 @@ pub async fn probe(app: &AppConfig, expected_rules: &str) -> Health {
     let t = Duration::from_secs(6);
     let mut h = Health { checked: true, ..Default::default() };
     h.installed = crate::catalog::find_binary(&app.binary).is_some();
+    if app.windowed {
+        // One layer, so one thing to check: the profile compiles, runs a harmless command, and
+        // refuses a direct connection and a name lookup. The other layers do not apply.
+        let wrap = |program: &str, args: &[&str]| {
+            let mut v: Vec<String> = vec!["/usr/bin/sandbox-exec".into(), "-p".into(), seatbelt_profile(app), program.into()];
+            v.extend(args.iter().map(|a| a.to_string()));
+            v
+        };
+        let control = run_owned(wrap("/usr/bin/true", &[]), t).await.map(|r| r.0).unwrap_or(false);
+        let direct = run_owned(untagged(wrap("/usr/bin/nc", &["-v", "-z", "-G", "2", "1.1.1.1", "443"])), t).await;
+        let refused = matches!(&direct, Some((false, out)) if out.contains("not permitted"));
+        let lookup = run_owned(untagged(wrap("/usr/bin/dscacheutil", &["-q", "host", "-a", "name", "example.com"])), t).await;
+        let no_lookup = matches!(&lookup, Some((_, out)) if !out.contains("ip_address") && !out.contains("ipv6_address"));
+        h.seatbelt_ok = control && refused && no_lookup;
+        (h.user_exists, h.group_ok, h.can_run, h.filter_ok, h.rules_current, h.workspace_ok) = (true, true, true, true, true, true);
+        return h;
+    }
     h.user_exists = run(&["/usr/bin/id", "-u", &app.os_user], t).await.map(|r| r.0).unwrap_or(false);
     if !h.user_exists {
         return h;
@@ -341,6 +492,12 @@ fn filter_status_ok(os_user: &str) -> bool {
 /// Start a protected background service (a local model). Output goes to a log file.
 pub async fn start_managed(app: &AppConfig) -> Result<tokio::process::Child, String> {
     let binary = crate::catalog::find_binary(&app.binary).ok_or_else(|| format!("{} is not installed on this computer.", app.name))?;
+    if app.windowed {
+        let argv = window_argv(app)?;
+        // Its output goes nowhere. It must not go to a file in our data folder: the profile
+        // closes that folder to the app, and an app that cannot touch its own output quits.
+        return Command::new(&argv[0]).args(&argv[1..]).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn().map_err(|e| format!("{} could not be opened: {e}", app.name));
+    }
     let args: Vec<String> = match app.id.as_str() {
         "ollama" => vec!["serve".into()],
         _ => vec![],
@@ -356,7 +513,15 @@ pub async fn start_managed(app: &AppConfig) -> Result<tokio::process::Child, Str
 /// Stop everything running as this app's OS user. We cannot signal another user's processes
 /// directly, so the signal is sent as that user.
 pub async fn stop_all(app: &AppConfig) {
+    if app.windowed {
+        return; // runs as you; the engine stops the one process it started (see `stop_pid`)
+    }
     let _ = run(&["/usr/bin/sudo", "-n", "-u", &app.os_user, "/bin/sh", "-c", "kill -TERM -1"], Duration::from_secs(5)).await;
+}
+
+/// Ask one process we started to quit.
+pub async fn stop_pid(pid: u32) {
+    let _ = run(&["/bin/kill", "-TERM", &pid.to_string()], Duration::from_secs(4)).await;
 }
 
 pub async fn is_port_open(port: u16) -> bool {
@@ -411,7 +576,7 @@ pub async fn reveal(path: &str, select: bool) {
 /// Packet filter rules for every protected app. Loopback is limited to the ports each app needs.
 pub fn filter_rules(cfg: &Config) -> String {
     let mut s = String::from("# Sandbox-ai packet filter rules. Generated by the app; changes are overwritten.\n");
-    for app in &cfg.apps {
+    for app in cfg.apps.iter().filter(|a| !a.windowed) {
         let u = &app.os_user;
         let mut out_ports: Vec<u16> = vec![app.proxy_port];
         out_ports.extend(&app.local_ports);
@@ -481,7 +646,7 @@ const DAEMON_PLIST: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
 
 /// The script the administrator approves. Idempotent: running it again repairs and updates.
 pub fn setup_script(cfg: &Config, real_user: &str) -> String {
-    let users: Vec<&str> = cfg.apps.iter().map(|a| a.os_user.as_str()).collect();
+    let users: Vec<&str> = cfg.apps.iter().filter(|a| !a.windowed).map(|a| a.os_user.as_str()).collect();
     let mut s = String::new();
     s.push_str("#!/bin/bash\n# Sandbox-ai one-time setup. Generated by the app. Safe to run again.\nset -Eeuo pipefail\n");
     s.push_str(&format!("REAL_USER={}\nGROUP={GROUP}\nSUPPORT={}\nWORKROOT={}\n", sh_quote(real_user), sh_quote(SYSTEM_DIR), sh_quote(WORKSPACE_ROOT)));
@@ -552,7 +717,7 @@ ensure_workspace() { # dir owner
 }
 
 "#);
-    for app in &cfg.apps {
+    for app in cfg.apps.iter().filter(|a| !a.windowed) {
         s.push_str(&format!("ensure_user {} {}\n", sh_quote(&app.os_user), sh_quote(&home_for(&app.os_user))));
         if let Some(w) = &app.workspace {
             s.push_str(&format!("ensure_workspace {} {}\n", sh_quote(w), sh_quote(&app.os_user)));
@@ -602,10 +767,12 @@ pfctl -q -f /etc/pf.conf 2>/dev/null || true
 rm -f /etc/pf.anchors/sandboxai /var/run/sandboxai.fence
 rm -rf "/Library/Application Support/SandboxAI"
 "#);
-    for app in &cfg.apps {
+    for app in cfg.apps.iter().filter(|a| !a.windowed) {
         let u = sh_quote(&app.os_user);
         s.push_str(&format!("pkill -u {u} 2>/dev/null || true\ndscl . -delete /Users/{} 2>/dev/null || true\nrm -rf {}\n", app.os_user, sh_quote(&home_for(&app.os_user))));
     }
+    // Private users left behind by apps that were added and later removed from the list.
+    s.push_str("for u in $(dscl . -list /Users | grep '^_sai'); do\n  if dscl . -read \"/Users/$u\" RealName 2>/dev/null | grep -q 'Sandbox-ai protected app'; then pkill -u \"$u\" 2>/dev/null || true; dscl . -delete \"/Users/$u\" 2>/dev/null || true; rm -rf \"/var/sai/${u#_sai}\"; fi\ndone\n");
     s.push_str(&format!("dscl . -delete /Groups/{GROUP} 2>/dev/null || true\necho removed\n"));
     s
 }
@@ -673,8 +840,78 @@ mod tests {
         }
     }
 
+    fn windowed(id: &str, bundle: &str) -> AppConfig {
+        let mut c = Config::fresh();
+        let mut a = c.apps.remove(0);
+        a.id = id.into();
+        a.name = "Window".into();
+        a.kind = "window".into();
+        a.binary = bundle.into();
+        a.os_user = "_saiwin1".into();
+        a.proxy_port = crate::catalog::FIRST_CUSTOM_PORT;
+        a.custom = true;
+        a.windowed = true;
+        a.workspace = None;
+        a
+    }
+
+    #[test]
+    fn a_windowed_app_is_fenced_by_its_profile_alone() {
+        let a = windowed("my-window", "/Applications/Nope.app");
+        let p = seatbelt_profile(&a);
+        let deny = p.find("(deny network* ").unwrap();
+        let local = p.find("(allow network-outbound (remote ip \"localhost:*\"))").unwrap();
+        assert!(deny < local, "local traffic is allowed after the deny, so it wins");
+        // Every gate but its own is closed again after that.
+        for port in crate::catalog::GATE_PORTS {
+            let rule = format!("(deny network-outbound (remote ip \"localhost:{port}\")");
+            assert_eq!(p.contains(&rule), port != a.proxy_port, "{port}");
+            if port != a.proxy_port {
+                assert!(p.find(&rule).unwrap() > local);
+            }
+        }
+        // The ways out for a program running as you.
+        for needle in ["(deny lsopen ", "(deny appleevent-send ", "Library/LaunchAgents", "(deny file* (subpath ", "mDNSResponder"] {
+            assert!(p.contains(needle), "{needle}");
+        }
+        assert!(!p.contains("(allow network*)") && !p.contains("(allow network-outbound)\n"));
+        // It never appears in anything an administrator approves or the packet filter loads.
+        let mut cfg = Config::fresh();
+        cfg.apps.push(a);
+        assert!(!filter_rules(&cfg).contains("_saiwin1"));
+        assert!(!setup_script(&cfg, "tester").contains("_saiwin1"));
+        assert!(!remove_script(&cfg).contains("_saiwin1 "));
+        assert!(cfg.provisioned().app("my-window").is_none());
+    }
+
+    #[test]
+    fn apps_in_apples_sandbox_are_recognised() {
+        assert!(app_sandboxed("<dict><key>com.apple.security.app-sandbox</key><true/></dict>"));
+        assert!(app_sandboxed("<key>com.apple.security.app-sandbox</key>\n\t<true/>"));
+        assert!(!app_sandboxed("<dict><key>com.apple.security.app-sandbox</key><false/></dict>"));
+        assert!(!app_sandboxed("<dict><key>com.apple.security.cs.allow-jit</key><true/></dict>"));
+        assert!(!app_sandboxed(""));
+        assert!(inspect_bundle("/Applications/No Such App.app").is_err());
+        assert!(inspect_bundle("/bin/sh").is_err());
+        assert_eq!(regex_escape("/Applications/A (B).app/x"), "/Applications/A \\(B\\)\\.app/x");
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_system_app_in_apples_sandbox_is_refused_with_a_reason() {
+        // TextEdit ships with every Mac and lives in the App Sandbox.
+        if std::path::Path::new("/System/Applications/TextEdit.app").is_dir() {
+            let err = inspect_bundle("/System/Applications/TextEdit.app").unwrap_err();
+            assert!(err.contains("Apple's own sandbox"), "{err}");
+        }
+    }
+
     #[test]
     fn refusals_are_read_from_the_system_log() {
+        let v = parse_violation("Sandbox: Obsidian(7) deny(1) lsopen\nsai-app=my-window;open").unwrap();
+        assert_eq!((v.what, v.port), ("open", 0));
+        let v = parse_violation("Sandbox: Obsidian(7) deny(1) appleevent-send com.apple.finder\nsai-app=my-window;event").unwrap();
+        assert_eq!(v.what, "control");
         let v = parse_violation("Sandbox: curl(40242) deny(1) network-outbound remote:*:443\nsai-app=claude-code;net").unwrap();
         assert_eq!(v, Violation { app: "claude-code".into(), process: "curl".into(), what: "direct", port: 443, count: 1 });
         let v = parse_violation("Sandbox: node(7) deny(1) network-outbound /private/var/run/mDNSResponder\nsai-app=claude-code;dns").unwrap();
@@ -738,7 +975,7 @@ mod tests {
         assert!(!seatbelt_profile(claude).contains("localhost:*\"))\n(deny network-outbound (remote ip"));
         assert!(!seatbelt_profile(claude).contains("(allow network-outbound (remote ip \"localhost:*\"))"));
         let rules = filter_rules(&cfg);
-        let block = rules.find(&format!("port 47110:47119 user {}", ollama.os_user)).expect("gate range blocked for the model server");
+        let block = rules.find(&format!("port {}:{} user {}", crate::catalog::GATE_PORTS.start(), crate::catalog::GATE_PORTS.end(), ollama.os_user)).expect("gate range blocked for the model server");
         let pass_all = rules.find(&format!("pass out quick on lo0 proto tcp from any to any user {}", ollama.os_user)).expect("loopback pass");
         assert!(block < pass_all, "the gate-range block must be evaluated first");
         assert!(!rules.contains(&format!("pass out quick on lo0 proto tcp from any to any user {}", claude.os_user)));

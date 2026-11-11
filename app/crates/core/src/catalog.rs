@@ -38,6 +38,18 @@ pub const DESTINATIONS: &[Destination] = &[
     // Other AI providers
     Destination { pattern: "api.openai.com", label: "OpenAI API", purpose: "Your AI provider", companions: &[] },
     Destination { pattern: "generativelanguage.googleapis.com", label: "Google Gemini API", purpose: "Your AI provider", companions: &[] },
+    Destination { pattern: "auth.openai.com", label: "OpenAI sign-in", purpose: "Signing in to your OpenAI account", companions: &[] },
+    Destination { pattern: "chatgpt.com", label: "ChatGPT", purpose: "Your AI provider (ChatGPT plan)", companions: &[] },
+    Destination { pattern: "cloudcode-pa.googleapis.com", label: "Google Gemini (Google account)", purpose: "Your AI provider", companions: &[] },
+    Destination { pattern: "accounts.google.com", label: "Google sign-in", purpose: "Signing in to your Google account", companions: &["oauth2.googleapis.com"] },
+    Destination { pattern: "oauth2.googleapis.com", label: "Google sign-in", purpose: "Signing in to your Google account", companions: &[] },
+    Destination { pattern: "play.googleapis.com", label: "Google usage statistics", purpose: "Usage statistics", companions: &[] },
+    Destination { pattern: "openrouter.ai", label: "OpenRouter", purpose: "Your AI provider", companions: &[] },
+    Destination { pattern: "api.mistral.ai", label: "Mistral API", purpose: "Your AI provider", companions: &[] },
+    Destination { pattern: "api.groq.com", label: "Groq API", purpose: "Your AI provider", companions: &[] },
+    Destination { pattern: "api.deepseek.com", label: "DeepSeek API", purpose: "Your AI provider", companions: &[] },
+    Destination { pattern: "models.dev", label: "models.dev", purpose: "List of available models", companions: &[] },
+    Destination { pattern: "*.posthog.com", label: "PostHog", purpose: "Usage statistics", companions: &[] },
     // Developer ecosystems
     Destination { pattern: "registry.npmjs.org", label: "npm registry", purpose: "Package downloads", companions: &[] },
     Destination { pattern: "pypi.org", label: "Python Package Index", purpose: "Package downloads", companions: &["files.pythonhosted.org"] },
@@ -117,7 +129,11 @@ pub struct AppPreset {
 }
 
 /// Ports reserved for gates. An app is never allowed to connect to a gate other than its own.
-pub const GATE_PORTS: std::ops::RangeInclusive<u16> = 47110..=47119;
+pub const GATE_PORTS: std::ops::RangeInclusive<u16> = 47110..=47139;
+
+/// A local model server on its usual port. Every agent may reach it, so an agent and a local
+/// model can work together with nothing leaving the computer.
+pub const LOCAL_MODEL_PORTS: &[u16] = &[11434];
 
 pub const APPS: &[AppPreset] = &[
     AppPreset {
@@ -158,14 +174,99 @@ pub const APPS: &[AppPreset] = &[
             PresetTrust { host: "ollama.com", enabled: false, recommended: false },
         ],
     },
+    // The four below follow each tool's documentation. They have not been run on the computer
+    // this was written on, so their lists are deliberately short: the provider and its sign-in.
+    // Anything else the tool contacts asks first.
+    AppPreset {
+        id: "codex",
+        name: "Codex CLI",
+        kind: "agent",
+        icon: "generic",
+        binary: "codex",
+        os_user: "_saicodex",
+        proxy_port: 47112,
+        local_ports: LOCAL_MODEL_PORTS,
+        serves_port: None,
+        loopback_all: false,
+        trust: &[
+            PresetTrust { host: "api.openai.com", enabled: true, recommended: true },
+            PresetTrust { host: "auth.openai.com", enabled: true, recommended: true },
+            PresetTrust { host: "chatgpt.com", enabled: true, recommended: true },
+        ],
+    },
+    AppPreset {
+        id: "gemini",
+        name: "Gemini CLI",
+        kind: "agent",
+        icon: "generic",
+        binary: "gemini",
+        os_user: "_saigemini",
+        proxy_port: 47113,
+        local_ports: LOCAL_MODEL_PORTS,
+        serves_port: None,
+        loopback_all: false,
+        trust: &[
+            PresetTrust { host: "generativelanguage.googleapis.com", enabled: true, recommended: true },
+            PresetTrust { host: "cloudcode-pa.googleapis.com", enabled: true, recommended: true },
+            PresetTrust { host: "accounts.google.com", enabled: true, recommended: true },
+            PresetTrust { host: "oauth2.googleapis.com", enabled: true, recommended: true },
+            PresetTrust { host: "play.googleapis.com", enabled: false, recommended: false },
+        ],
+    },
+    AppPreset {
+        id: "aider",
+        name: "Aider",
+        kind: "agent",
+        icon: "generic",
+        binary: "aider",
+        os_user: "_saiaider",
+        proxy_port: 47114,
+        local_ports: LOCAL_MODEL_PORTS,
+        serves_port: None,
+        loopback_all: false,
+        // Aider works with whichever provider you give it a key for, so none is assumed.
+        trust: &[PresetTrust { host: "*.posthog.com", enabled: false, recommended: false }],
+    },
+    AppPreset {
+        id: "opencode",
+        name: "opencode",
+        kind: "agent",
+        icon: "generic",
+        binary: "opencode",
+        os_user: "_saiopencode",
+        proxy_port: 47115,
+        local_ports: LOCAL_MODEL_PORTS,
+        serves_port: None,
+        loopback_all: false,
+        trust: &[],
+    },
 ];
+
+/// Gate ports from here up are handed to apps the user adds.
+pub const FIRST_CUSTOM_PORT: u16 = 47120;
 
 pub fn app_preset(id: &str) -> Option<&'static AppPreset> {
     APPS.iter().find(|a| a.id == id)
 }
 
-/// Find an executable the way a login shell on this platform would.
+/// Why a protected app could not run this program even though it exists, in plain words.
+/// Protected apps cannot enter your home folder, so a program installed there is out of reach.
+pub fn binary_problem(path: &str, app_name: &str) -> Option<String> {
+    let home = dirs::home_dir()?;
+    let real = std::fs::canonicalize(path).unwrap_or_else(|_| std::path::PathBuf::from(path));
+    if real.starts_with(&home) || std::path::Path::new(path).starts_with(&home) {
+        return Some(format!("{app_name} is installed inside your home folder ({path}), where protected apps cannot go. Install it for the whole computer instead, for example with Homebrew or \"npm install -g\"."));
+    }
+    None
+}
+
+/// Find an executable the way a login shell on this platform would. A full path is used as is.
 pub fn find_binary(name: &str) -> Option<String> {
+    if name.starts_with('/') {
+        let p = std::path::Path::new(name);
+        // A windowed app is a folder whose name ends in ".app".
+        return (p.is_file() || (name.ends_with(".app") && p.is_dir())).then(|| name.to_string());
+    }
     let mut dirs: Vec<String> = vec!["/opt/homebrew/bin".into(), "/usr/local/bin".into(), "/usr/bin".into(), "/bin".into()];
     if let Some(home) = dirs::home_dir() {
         dirs.push(home.join(".local/bin").to_string_lossy().into_owned());
@@ -220,5 +321,20 @@ mod tests {
         ports.dedup();
         assert_eq!(ports.len(), APPS.len());
         assert!(APPS.iter().all(|a| GATE_PORTS.contains(&a.proxy_port)));
+        assert!(APPS.iter().all(|a| a.proxy_port < FIRST_CUSTOM_PORT), "preset ports stay below the range for added apps");
+        let mut users: Vec<&str> = APPS.iter().map(|a| a.os_user).collect();
+        users.sort();
+        users.dedup();
+        assert_eq!(users.len(), APPS.len(), "every app has its own private user");
+    }
+
+    #[test]
+    fn a_program_inside_the_home_folder_is_reported() {
+        let home = dirs::home_dir().unwrap();
+        let inside = home.join(".local/bin/aider").to_string_lossy().into_owned();
+        assert!(binary_problem(&inside, "Aider").unwrap().contains("inside your home folder"));
+        assert!(binary_problem("/opt/homebrew/bin/aider", "Aider").is_none());
+        assert_eq!(find_binary("/bin/sh").as_deref(), Some("/bin/sh"));
+        assert!(find_binary("/no/such/program").is_none());
     }
 }

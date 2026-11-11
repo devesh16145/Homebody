@@ -99,35 +99,94 @@ const trusted = {
 
 const apps = {
   busy: new Map(), errors: new Map(),
+  adding: null,          // null, or { name, program, busy, error } while the "protect another app" form is open
+  removing: null,        // id of the added app awaiting "remove?" confirmation
   show() { this.render(); for (const a of ctx.status().apps) if (a.kind === 'agent' && a.canStart) projects.load(a.id); },
   onStatus() { this.render(); },
   onEvent() {},
 
   stateLine(a) {
+    if (a.problem) return ['warn', 'Installed where protected apps cannot reach it'];
     if (!a.installed) return ['', 'Not installed'];
     if (!a.protected) return ['', 'Not protected'];
     if (a.fence === 'checking') return ['warn', 'Checking protection…'];
     if (a.fence !== 'up') return ['warn', 'Needs setup'];
     if (a.kind === 'agent') return ['on', 'Protected. Open a protected terminal to use it.'];
+    if (a.kind === 'window') return a.running ? ['on', 'Open, with its network fenced'] : ['idle', 'Ready. Open it from here to use it protected.'];
     return a.running ? ['on', 'Protected and running'] : ['idle', 'Protected, not running'];
   },
   whyNot(a) {
+    if (a.problem) return '';
     if (!a.installed) return `Install ${a.name} first.`;
     if (!a.protected) return `Turn on protection for ${a.name} to use this.`;
     return 'Finish setup first.';
   },
 
   render() {
-    const list = ctx.status().apps;
+    const all = ctx.status().apps;
+    const list = all.filter((a) => a.installed || a.custom), others = all.filter((a) => !a.installed && !a.custom);
     patch(body, `<div class="ap"><h2>Apps</h2><p class="lead">Protected apps run in their own private space and can only reach what you trust.</p>
-      ${list.map((a) => this.card(a)).join('') || '<p class="muted">No AI apps were found on this computer yet.</p>'}</div>`);
+      ${list.map((a) => this.card(a)).join('') || '<p class="muted">No AI apps were found on this computer yet.</p>'}
+      ${this.addHtml()}
+      ${others.length ? `<p class="ap-also"><b>Also recognised:</b> ${others.map((a) => esc(a.name)).join(', ')}. Install one and it appears here, protected from its first run.</p>` : ''}</div>`);
+  },
+
+  addHtml() {
+    const f = this.adding;
+    if (!f) return `<div class="ap-add"><button class="btn" data-do="app-add-open" data-key="app-add-open">${icon('plus')}Protect another app…</button>
+      <span class="ap-why">A windowed app, or any program you start from the command line.</span></div>`;
+    return `<form class="ap-card ap-form" data-key-form="add">
+      <div class="ap-name">Protect another app</div>
+      <p class="ap-meta">It gets its own private space and its own Trusted list, starting empty: the first time it contacts anything, you are asked.</p>
+      <label class="ap-field"><span>Name</span><input type="text" class="field sel" name="name" data-key="add-name" value="${esc(f.name)}" placeholder="For example, My assistant" maxlength="40" autocomplete="off" spellcheck="false"></label>
+      <label class="ap-field"><span>Program</span><span class="row grow"><input type="text" class="field sel grow mono" name="program" data-key="add-program" value="${esc(f.program)}" placeholder="Choose an app, or type a command like aider" autocomplete="off" spellcheck="false">
+        <button type="button" class="btn" data-do="app-add-pick" data-key="add-pick">Choose…</button></span></label>
+      ${f.error ? `<div class="notice error" role="alert">${icon('alert')}<span>${esc(f.error)}</span></div>` : ''}
+      <div class="row ap-form-go"><button type="button" class="btn" data-do="app-add-cancel" data-key="add-cancel">Cancel</button>
+        <button class="btn primary" data-key="add-go"${f.busy ? ' disabled' : ''}>${f.busy ? 'Adding…' : 'Add'}</button>
+        <span class="ap-why">A command-line program needs your Mac password once, for its private space. A windowed app does not.</span></div>
+    </form>`;
+  },
+
+  keep(form) { if (this.adding && form) { this.adding.name = form.elements.name.value; this.adding.program = form.elements.program.value; } },
+
+  async add(form) {
+    this.keep(form);
+    const f = this.adding;
+    if (!f || f.busy) return;
+    f.busy = true; f.error = ''; this.render();
+    try {
+      ctx.setStatus(await invoke('app_add', { name: f.name, program: f.program }));
+      this.adding = null;
+    } catch (e) { f.busy = false; f.error = errText(e); }
+    if (visible && pane === 'apps') this.render();
+  },
+
+  async act(what, b) {
+    const form = body.querySelector('.ap-form');
+    if (what === 'app-add-open') { this.adding = { name: '', program: '', busy: false, error: '' }; this.render(); const i = body.querySelector('.ap-form input'); if (i) i.focus(); return; }
+    if (what === 'app-add-cancel') { this.adding = null; return this.render(); }
+    if (what === 'app-add-pick') {
+      this.keep(form);
+      try { const path = await invoke('pick_program'); if (path && this.adding) this.adding.program = path; }
+      catch (e) { if (this.adding) this.adding.error = errText(e); }
+      return this.render();
+    }
+    const card = b.closest('.ap-card'), appId = card && card.dataset.app;
+    if (what === 'app-remove') { this.removing = appId; return this.render(); }
+    if (what === 'app-remove-no') { this.removing = null; return this.render(); }
+    if (what === 'app-remove-yes') { this.removing = null; return this.run(appId, 'app_remove', {}, true); }
   },
 
   card(a) {
     const [cls, words] = this.stateLine(a), busy = this.busy.get(a.id), err = this.errors.get(a.id);
     const off = !a.canStart, why = off ? `<span class="ap-why">${esc(this.whyNot(a))}</span>` : '';
     let controls;
-    if (a.kind === 'model') {
+    if (a.kind === 'window') {
+      controls = a.running
+        ? `<button class="btn" data-do="app-stop" data-key="run-${esc(a.id)}"${busy ? ' disabled' : ''}>${icon('stop')}${busy ? 'Quitting…' : 'Quit'}</button>`
+        : `<button class="btn" data-do="app-start" data-key="run-${esc(a.id)}"${off || busy ? ' disabled' : ''}>${icon('play')}${busy ? 'Opening…' : 'Open protected'}</button>${why}`;
+    } else if (a.kind === 'model') {
       controls = a.running
         ? `<button class="btn" data-do="app-stop" data-key="run-${esc(a.id)}"${busy ? ' disabled' : ''}>${icon('stop')}${busy ? 'Stopping…' : 'Stop'}</button>`
         : `<button class="btn" data-do="app-start" data-key="run-${esc(a.id)}"${off || busy ? ' disabled' : ''}>${icon('play')}${busy ? 'Starting…' : 'Start'}</button>${why}`;
@@ -141,11 +200,16 @@ const apps = {
         <div class="grow"><div class="ap-name">${esc(a.name)}</div>
           <div class="ap-state"><span class="state ${cls}"></span>${words}</div></div>
         <label class="ap-protect"><span>Protected</span><span class="switch green"><input type="checkbox" role="switch" data-protect data-key="p-${esc(a.id)}" aria-label="Protect ${esc(a.name)}"${a.protected ? ' checked' : ''}${a.installed ? '' : ' disabled'}><i></i></span></label></div>
+      ${a.problem ? `<div class="notice warn" role="status">${icon('alert')}<span>${esc(a.problem)}</span></div>` : ''}
       <div class="ap-row">${controls}</div>
       ${a.workspace ? `<div class="ap-meta">Works only inside <span class="mono sel">${esc(a.workspace)}</span></div>` : ''}
+      ${a.kind === 'window' ? `<div class="ap-meta ap-lighter"><b>Lighter protection.</b> Nothing it sends can skip the gate: you see it and are asked, or it is refused. It can still read your files, as it always could, and only the copy you open from here is protected. To make that possible its own inner sandbox is switched off.</div>` : ''}
       ${a.kind === 'agent' && a.canStart ? projects.section(a) : ''}
       ${err ? `<div class="notice error" role="alert">${icon('alert')}<span>${esc(err)}</span></div>` : ''}
-      <div class="ap-meta num">Today: ${fmtCount(t.allowed)} allowed · ${fmtCount(t.blocked)} blocked · ${esc(fmtBytes(t.bytesOut))} sent</div>
+      <div class="ap-meta num ap-foot"><span>Today: ${fmtCount(t.allowed)} allowed · ${fmtCount(t.blocked)} blocked · ${esc(fmtBytes(t.bytesOut))} sent</span>
+        ${a.custom ? (this.removing === a.id
+          ? `<span class="row"><span>Stop protecting ${esc(a.name)}? Its files stay in its workspace.</span><button class="btn sm" data-do="app-remove-no" data-key="rm-no-${esc(a.id)}">Cancel</button><button class="btn sm danger" data-do="app-remove-yes" data-key="rm-yes-${esc(a.id)}">Remove</button></span>`
+          : `<button class="link" data-do="app-remove" data-key="rm-${esc(a.id)}">Remove</button>`) : ''}</div>
     </section>`;
   },
 
@@ -169,8 +233,11 @@ export function init(el, context) {
   on(root, 'change', 'input[data-trust]', (ev, i) => trusted.set(i.closest('.tr-app').dataset.app, i.dataset.trust, i.checked, i));
   on(root, 'change', 'input[data-protect]', (ev, i) => apps.run(i.closest('.ap-card').dataset.app, 'app_set_protected', { protected: i.checked }));
   on(root, 'submit', '.tr-add', (ev, form) => { ev.preventDefault(); trusted.add(form); });
+  on(root, 'change', 'input[data-login]', (ev, i) => advanced.setLogin(i.checked));
+  on(root, 'submit', '.ap-form', (ev, form) => { ev.preventDefault(); apps.add(form); });
+  on(root, 'input', '.ap-form input', (ev, i) => apps.keep(i.form));
   on(root, 'click', '[data-do]', (ev, b) => {
-    const what = b.dataset.do, card = b.closest('.ap-card'), appId = card && card.dataset.app;
+    const what = b.dataset.do, card = b.closest('.ap-card[data-app]'), appId = card && card.dataset.app;
     if (what === 'tr-reload') trusted.load();
     else if (what === 'tr-remove') trusted.remove(b.closest('.tr-app').dataset.app, b.dataset.host);
     else if (what === 'app-start') apps.run(appId, 'app_start', {}, true);
