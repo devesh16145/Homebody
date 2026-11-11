@@ -7,6 +7,8 @@ use homebody_core::{control, Engine};
 use serde_json::{json, Value};
 
 mod ci;
+#[cfg(windows)]
+mod contain;
 
 /// Wait until we are asked to stop: Ctrl-C, or a plain kill, logout or shutdown.
 pub(crate) async fn stop_signal() -> i32 {
@@ -420,6 +422,12 @@ async fn main() {
         }
         "check" => print_status(&call("check_fence", Value::Null).await),
         "ci" => std::process::exit(ci::run(&args[1..]).await),
+        // Windows only, used by `homebody run`: put a program in an app's private space, and
+        // (inside that space) pass its gate traffic out through the app's pipe.
+        #[cfg(windows)]
+        "__contain" => std::process::exit(contain::contain(&args[1..]).await),
+        #[cfg(windows)]
+        "__relay" => std::process::exit(contain::relay(a(1), a(2)).await),
         // For machines with no one to click "approve": print exactly what setup does, to be run
         // as administrator (`homebody setup --print | sudo bash`). Needs no running app.
         "setup" if a(1) == "--print" => {

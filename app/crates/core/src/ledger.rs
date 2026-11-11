@@ -189,6 +189,12 @@ impl Ledger {
         b64().encode(self.key.sign(bytes).to_bytes())
     }
 
+    /// Up to `limit` records after record number `seq`, exactly as written.
+    pub fn lines_after(&self, seq: u64, limit: usize) -> Vec<String> {
+        let Ok(f) = File::open(&self.path) else { return vec![] };
+        BufReader::new(f).lines().map_while(Result::ok).filter(|l| !l.trim().is_empty()).skip(seq as usize).take(limit).collect()
+    }
+
     pub fn tail(&self, limit: usize) -> Vec<String> {
         let Ok(f) = File::open(&self.path) else { return vec![] };
         let lines: Vec<String> = BufReader::new(f).lines().map_while(Result::ok).collect();
@@ -251,10 +257,32 @@ pub fn verify_export(path: &Path) -> (ChainCheck, Option<String>) {
     (check, Some(key))
 }
 
+/// Check records that continue a log from a known point: the record numbered `after_seq` had
+/// the hash `after_hash` (zero and [`ZERO_HASH`] for the very beginning). This is how a fleet
+/// server takes a computer's log piece by piece without ever trusting a piece it cannot link.
+/// Returns the number and hash of the last record checked.
+pub fn verify_continuation(lines: &[String], public_key_b64: &str, after_seq: u64, after_hash: &str) -> Result<(u64, String), String> {
+    let vk = b64().decode(public_key_b64).ok().and_then(|b| <[u8; 32]>::try_from(b).ok()).and_then(|k| VerifyingKey::from_bytes(&k).ok()).ok_or("The public key is not valid.")?;
+    let text = lines.join("\n");
+    let check = verify_from(text.as_bytes(), &vk, 0, crate::now_iso(), after_hash.to_string(), after_seq + 1);
+    match check.error {
+        Some(e) => Err(e),
+        None => {
+            let last: Value = lines.iter().rev().find(|l| !l.trim().is_empty()).and_then(|l| serde_json::from_str(l).ok()).unwrap_or(Value::Null);
+            match (last.get("seq").and_then(Value::as_u64), last.get("hash").and_then(Value::as_str)) {
+                (Some(seq), Some(hash)) => Ok((seq, hash.to_string())),
+                _ => Ok((after_seq, after_hash.to_string())),
+            }
+        }
+    }
+}
+
 fn verify_lines(reader: impl BufRead, vk: &VerifyingKey, line_offset: usize, checked_at: String) -> ChainCheck {
+    verify_from(reader, vk, line_offset, checked_at, ZERO_HASH.to_string(), 1)
+}
+
+fn verify_from(reader: impl BufRead, vk: &VerifyingKey, line_offset: usize, checked_at: String, mut prev: String, mut expected_seq: u64) -> ChainCheck {
     let fail = |count: u64, msg: String| ChainCheck { ok: false, count, checked_at: checked_at.clone(), error: Some(msg) };
-    let mut prev = ZERO_HASH.to_string();
-    let mut expected_seq = 1u64;
     let mut count = 0u64;
     for (i, line) in reader.lines().enumerate() {
         let n = i + 1 + line_offset;

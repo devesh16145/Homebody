@@ -16,6 +16,7 @@
 //! - [`projects`]: bring a folder in for an agent to work on, review, apply back
 //! - [`fence`]:    OS-level enforcement: private users, seatbelt profile, packet filter, launchers
 //! - `fence_linux`: the same fence built from Linux's tools: system users, nftables, a systemd service
+//! - [`fleet`]:    belonging to an organisation's fleet: its rules come here, the log goes there
 //! - [`control`]:  a local socket so the CLI and scripts can drive a running engine
 //! - [`appicons`]: each app's own icon, from its maker's Mac app
 
@@ -27,6 +28,7 @@ pub mod control;
 pub mod engine;
 pub mod feed;
 pub mod fence;
+pub mod fleet;
 #[cfg(unix)]
 pub mod fence_linux;
 #[cfg(windows)]

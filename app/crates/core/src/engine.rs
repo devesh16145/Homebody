@@ -232,6 +232,28 @@ impl Engine {
             }
         });
 
+        // An organisation's fleet, if this computer has joined one (or a management profile says
+        // which to join): its rules in, the log out, once a minute.
+        let e = engine.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_secs(3)).await;
+            if crate::fleet::Membership::load().is_none() {
+                if let Some((url, code)) = crate::fleet::managed_join() {
+                    let _ = e.fleet_join(&url, &code, None).await;
+                }
+            }
+            let mut stop = e.0.stop.subscribe();
+            loop {
+                if crate::fleet::Membership::load().is_some() {
+                    let _ = e.fleet_sync().await;
+                }
+                tokio::select! {
+                    _ = tokio::time::sleep(Duration::from_secs(60)) => {}
+                    _ = stop.changed() => return,
+                }
+            }
+        });
+
         // Fence health: now, then every half minute.
         let e = engine.clone();
         tokio::spawn(async move {
@@ -278,6 +300,17 @@ impl Engine {
         match crate::proxy::bind(port).await {
             Ok(listener) => {
                 tokio::spawn(crate::proxy::serve(self.clone(), port, listener));
+                // On Windows a protected app reaches its gate through a pipe only its own
+                // private space can open (see `fence_windows`).
+                #[cfg(windows)]
+                if let Some(app_id) = self.app_for_gate(port) {
+                    let errors = self.clone();
+                    tokio::spawn(async move {
+                        if let Err(e) = crate::fence_windows::serve_gate_pipe(app_id, port).await {
+                            errors.0.listen_errors.lock().unwrap().push(e);
+                        }
+                    });
+                }
             }
             Err(e) => {
                 self.0.gates.lock().unwrap().remove(&port);
@@ -383,6 +416,10 @@ impl Engine {
                 return deny(Reason::NotTrusted, Some(host), &format!("Blocked by Homebody: {} has sent as much to {} this hour as its limit allows.", app.name, label));
             }
             Some(r) if r.enabled => return allow(Reason::Trusted, None),
+            Some(r) if r.source == "org" => {
+                self.record_deny_detail(app_id, &host, port, Reason::NotTrusted, "org", "");
+                return deny(Reason::NotTrusted, Some(host), &format!("Blocked by Homebody: your organisation's rules do not allow {} for {}.", label, app.name));
+            }
             Some(r) => {
                 let reason = if r.source == "you" { Reason::YouBlocked } else { Reason::NotTrusted };
                 self.record_deny(app_id, &host, port, reason);
@@ -586,7 +623,9 @@ impl Engine {
     /// relies on telling the app about our certificate through its environment; an app that
     /// takes its trusted certificates from the Mac itself never hears about it.
     fn cannot_inspect(app: &AppConfig) -> Option<String> {
-        if app.windowed {
+        if cfg!(windows) {
+            Some("Looking inside connections is not available on Windows yet.".to_string())
+        } else if app.windowed {
             Some(format!("{} is a windowed app and takes its trusted certificates from your Mac, which Homebody does not change. Its connections cannot be looked inside yet.", app.name))
         } else if app.kind == "model" {
             // Seen on a real run: Ollama refused the certificate.
@@ -865,8 +904,12 @@ impl Engine {
         let pattern = hostname::normalize_pattern(pattern);
         let changed = {
             let mut cfg = self.0.cfg.lock().unwrap();
+            let org = cfg.org.as_ref().map(|p| p.name.clone());
             let app = cfg.app_mut(app_id).ok_or_else(|| "Unknown app.".to_string())?;
-            match app.trust.iter_mut().find(|r| r.host == pattern) {
+            if app.org_rule_for(&pattern).is_some() {
+                return Err(format!("{} decides this place, so it cannot be changed here.", org.unwrap_or_else(|| "Your organisation".into())));
+            }
+            match app.trust.iter_mut().find(|r| r.host == pattern && r.source != "org") {
                 Some(r) if r.enabled == enabled => false,
                 Some(r) => {
                     r.enabled = enabled;
@@ -897,6 +940,11 @@ impl Engine {
         let mut out = Vec::new();
         for a in cfg.apps.iter().filter(|a| app_id.map(|id| id == a.id).unwrap_or(true)) {
             for r in &a.trust {
+                // Your own rule for a place the organisation has a rule for is kept, but it is
+                // not in force and would only show the place twice.
+                if r.source != "org" && a.trust.iter().any(|o| o.source == "org" && o.host == r.host) {
+                    continue;
+                }
                 let (mut label, mut purpose) = catalog::describe_pattern(&r.host);
                 // A place switched on with an AI site is named after the site and what it is for.
                 if let (true, Some((site, why))) = (label == r.host, catalog::ai_site_for(&r.host).filter(|_| a.kind == "browser")) {
@@ -1095,6 +1143,7 @@ impl Engine {
                 let named = if what.is_empty() { row.other.clone() } else { format!("{what} ({})", row.other) };
                 format!("{app_name} asked {label} for {named}, which is switched off, so that request was refused and nothing of it was sent.")
             }
+            Reason::NotTrusted if row.detail == "org" => format!("Your organisation's rules do not allow {label} for {app_name}, so it was blocked."),
             Reason::NotTrusted => format!("{label} is switched off for {app_name}, so it was blocked without asking."),
             Reason::NoAnswer => "Nobody answered within 30 seconds, so it was blocked.".into(),
             Reason::Watching => "Watch mode is on, so this was allowed and recorded.".into(),
@@ -1357,6 +1406,8 @@ impl Engine {
             ask: cfg.ask,
             preset_notes: catalog::PRESET_NOTES.iter().filter(|(v, _)| *v > cfg.presets_seen).map(|(_, text)| text.to_string()).collect(),
             local_servers: fence::own_servers(),
+            org: cfg.org.as_ref().map(|p| p.name.clone()),
+            org_locked: cfg.mode_locked(),
             watch,
             watch_review,
         }
@@ -1661,6 +1712,98 @@ impl Engine {
     // Fence and apps
     // -----------------------------------------------------------------------------------------
 
+    fn org_name(&self) -> String {
+        self.0.cfg.lock().unwrap().org.as_ref().map(|p| p.name.clone()).unwrap_or_else(|| "Your organisation".into())
+    }
+
+    fn fleet_status(&self) -> Value {
+        let cfg = self.0.cfg.lock().unwrap();
+        let (records, _) = self.0.ledger.lock().unwrap().head();
+        match crate::fleet::Membership::load() {
+            Some(m) => json!({
+                "joined": true, "org": m.org, "url": m.url, "deviceId": m.device_id, "joinedAt": m.joined_at,
+                "lastSync": m.last_sync, "lastError": m.last_error, "sent": m.sent_seq, "waiting": records.saturating_sub(m.sent_seq),
+                "policyVersion": cfg.org.as_ref().map(|p| p.version), "rules": cfg.org.as_ref().map(|p| p.rules.len()), "locked": cfg.mode_locked(),
+            }),
+            None => json!({ "joined": false }),
+        }
+    }
+
+    /// Join an organisation's fleet with a code its administrator gave out.
+    async fn fleet_join(&self, url: &str, code: &str, ca_file: Option<String>) -> Result<(), String> {
+        use crate::fleet;
+        if fleet::Membership::load().is_some() {
+            return Err("This computer is already in a fleet. Leave it first.".into());
+        }
+        let url = fleet::clean_url(url)?;
+        let code = code.trim();
+        if code.is_empty() || code.len() > 200 {
+            return Err("Type the code your administrator gave you.".into());
+        }
+        if let Some(ca) = &ca_file {
+            if !std::path::Path::new(ca).is_file() {
+                return Err("The certificate file could not be found.".into());
+            }
+        }
+        let public_key = self.0.ledger.lock().unwrap().public_key_b64();
+        let name = std::process::Command::new(if cfg!(windows) { "hostname.exe" } else { "/bin/hostname" }).output().ok().map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string()).filter(|n| !n.is_empty()).unwrap_or_else(|| "computer".into());
+        let body = json!({ "code": code, "deviceName": name, "user": fence::real_user(), "publicKey": public_key, "os": std::env::consts::OS, "version": crate::VERSION });
+        self.append("conn", fields! { "app" => "homebody", "host" => fleet::host_of(&url), "port" => 443, "decision" => "allow", "reason" => "you_allowed_once", "detail" => "self" });
+        let reply = fleet::request("POST", &format!("{url}/v1/join"), None, Some(&body), ca_file.as_deref()).await?;
+        let field = |k: &str| reply.get(k).and_then(Value::as_str).map(str::to_string).ok_or_else(|| "The server's answer was not understood. Is that a Homebody fleet server?".to_string());
+        let m = fleet::Membership { url, device_id: field("deviceId")?, secret: field("secret")?, fleet_key: field("fleetKey")?, org: field("org")?, ca_file, joined_at: now_iso(), sent_seq: 0, last_sync: None, last_error: None };
+        m.save().map_err(|e| format!("Joining could not be saved: {e}"))?;
+        self.append("fleet", fields! { "event" => "joined", "org" => m.org.as_str(), "server" => m.url.as_str(), "fleetKey" => m.fleet_key.as_str() });
+        self.fleet_sync().await
+    }
+
+    /// Take the organisation's current rules and send it the records it does not have yet.
+    pub async fn fleet_sync(&self) -> Result<(), String> {
+        use crate::fleet;
+        let Some(mut m) = fleet::Membership::load() else { return Err("This computer is not in a fleet.".into()) };
+        let bearer = format!("{}.{}", m.device_id, m.secret);
+        let result: Result<(), String> = async {
+            // 1. Rules. Signed by the fleet's key, which was pinned when this computer joined.
+            let signed = fleet::request("GET", &format!("{}/v1/policy", m.url), Some(&bearer), None, m.ca_file.as_deref()).await?;
+            let policy = fleet::verify_policy(&signed, &m.fleet_key)?;
+            let current = self.0.cfg.lock().unwrap().org.clone();
+            match &current {
+                Some(c) if c.version > policy.version => return Err("The server offered older rules than this computer already has, so they were not applied.".into()),
+                Some(c) if *c == policy => {}
+                _ => {
+                    let (version, rules) = (policy.version, policy.rules.len());
+                    self.0.cfg.lock().unwrap().apply_org(Some(policy));
+                    self.save_cfg();
+                    self.cancel_asks();
+                    self.append("fleet", fields! { "event" => "rules", "org" => m.org.as_str(), "version" => version, "rules" => rules });
+                }
+            }
+            // 2. The log, from where the server says it stands, exactly as written.
+            let head = fleet::request("GET", &format!("{}/v1/head", m.url), Some(&bearer), None, m.ca_file.as_deref()).await?;
+            let mut sent = head.get("seq").and_then(Value::as_u64).unwrap_or(0);
+            for _ in 0..40 {
+                let lines = self.0.ledger.lock().unwrap().lines_after(sent, fleet::BATCH);
+                if lines.is_empty() {
+                    break;
+                }
+                let reply = fleet::request("POST", &format!("{}/v1/records", m.url), Some(&bearer), Some(&json!({ "after": sent, "records": lines })), m.ca_file.as_deref()).await?;
+                let now = reply.get("seq").and_then(Value::as_u64).unwrap_or(sent);
+                if now <= sent {
+                    return Err("The server did not take the records.".into());
+                }
+                sent = now;
+            }
+            m.sent_seq = sent;
+            Ok(())
+        }
+        .await;
+        m.last_sync = Some(now_iso());
+        m.last_error = result.as_ref().err().cloned();
+        let _ = m.save();
+        self.touch();
+        result
+    }
+
     pub async fn check_fence(&self) {
         let (apps, expected_rules) = {
             let cfg = self.0.cfg.lock().unwrap();
@@ -1776,6 +1919,9 @@ impl Engine {
             "get_status" => ok(&self.status()),
             "set_mode" => {
                 let mode = Mode::parse(&req("mode")?).ok_or("Unknown mode.")?;
+                if mode != Mode::Private && self.0.cfg.lock().unwrap().mode_locked() {
+                    return Err(format!("{} keeps protection on for this computer.", self.org_name()));
+                }
                 self.set_mode_for(mode, args.get("minutes").and_then(Value::as_u64), "you");
                 ok(&self.status())
             }
@@ -1976,6 +2122,32 @@ impl Engine {
                 self.touch();
                 ok(&self.trust_list(Some(&app)))
             }
+            // An organisation's fleet (see `fleet`): join, leave, what is going on.
+            "fleet_status" => Ok(self.fleet_status()),
+            "fleet_join" => {
+                self.fleet_join(&req("url")?, &req("code")?, s("caFile")).await?;
+                Ok(self.fleet_status())
+            }
+            "fleet_sync" => {
+                self.fleet_sync().await?;
+                Ok(self.fleet_status())
+            }
+            "fleet_leave" => {
+                if crate::fleet::Membership::load().is_none() {
+                    return Err("This computer is not in a fleet.".into());
+                }
+                crate::fleet::Membership::forget();
+                let org = {
+                    let mut cfg = self.0.cfg.lock().unwrap();
+                    let org = cfg.org.as_ref().map(|p| p.name.clone());
+                    cfg.apply_org(None);
+                    org
+                };
+                self.save_cfg();
+                self.append("fleet", fields! { "event" => "left", "org" => org });
+                self.touch();
+                Ok(self.fleet_status())
+            }
             "get_install" => Ok(self.install_info()),
             // Each protected app's own icon, from its maker's Mac app when installed: { appId: dataUrl }.
             "get_app_icons" => {
@@ -2046,6 +2218,9 @@ impl Engine {
             }
             "set_ask" => {
                 let on = b("on")?;
+                if self.0.cfg.lock().unwrap().org.as_ref().and_then(|p| p.ask).is_some() {
+                    return Err(format!("{} decides whether new places are asked about.", self.org_name()));
+                }
                 self.0.cfg.lock().unwrap().ask = on;
                 self.save_cfg();
                 self.append("mode", fields! { "ask" => on, "why" => "you" });
@@ -2091,6 +2266,9 @@ impl Engine {
             "app_set_protected" => {
                 let id = req("appId")?;
                 let on = b("protected")?;
+                if !on && self.0.cfg.lock().unwrap().mode_locked() {
+                    return Err(format!("{} keeps protection on for this computer.", self.org_name()));
+                }
                 {
                     let mut cfg = self.0.cfg.lock().unwrap();
                     cfg.app_mut(&id).ok_or("Unknown app.")?.protected = on;

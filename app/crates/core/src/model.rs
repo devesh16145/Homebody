@@ -81,6 +81,10 @@ pub struct Status {
     /// Agents may reach servers they started themselves on this computer (and only those).
     /// Switched on by setup once it has tested that the packet filter can enforce it here.
     pub local_servers: bool,
+    /// The organisation whose fleet this computer has joined, if any. Its rules come first.
+    pub org: Option<String>,
+    /// That organisation keeps protection on: Watch and Off cannot be chosen.
+    pub org_locked: bool,
     /// Present while Watch is on.
     pub watch: Option<WatchStatus>,
     /// Present when a finished Watch has results waiting to be reviewed.

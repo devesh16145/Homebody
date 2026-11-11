@@ -106,6 +106,7 @@ mod tests {
     #[test]
     fn the_documentation_carries_the_same_table() {
         let doc = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../../../docs/compliance.md")).expect("docs/compliance.md");
-        assert!(doc.contains(&markdown()), "docs/compliance.md is out of step: regenerate the tables from compliance::markdown()");
+        // A checkout on Windows may have turned the line endings; the words are what is compared.
+        assert!(doc.replace("\r\n", "\n").contains(&markdown()), "docs/compliance.md is out of step: regenerate the tables from compliance::markdown()");
     }
 }

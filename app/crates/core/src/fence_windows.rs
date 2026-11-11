@@ -47,8 +47,39 @@ pub fn container_name(app_id: &str) -> String {
     format!("homebody.{}", app_id.chars().filter(|c| c.is_ascii_alphanumeric() || *c == '-').take(48).collect::<String>())
 }
 
-pub fn home_for(app: &AppConfig) -> String {
-    format!("{DATA_ROOT}/home/{}", app.id)
+/// The app's own home folder, named after its private name like on the other systems.
+pub fn home_for(os_user: &str) -> String {
+    format!("{DATA_ROOT}/home/{}", os_user.trim_start_matches("_hb").trim_start_matches('_'))
+}
+
+/// What a contained program is told about its surroundings. Windows will not start a program
+/// in a container without the usual set of variables, so they are all given, pointing at the
+/// app's own folders instead of yours.
+pub fn base_env(home: &str) -> Vec<(String, String)> {
+    let home = home.replace('/', "\\");
+    let sys = std::env::var("SystemRoot").unwrap_or_else(|_| "C:\\Windows".into());
+    let drive = std::env::var("SystemDrive").unwrap_or_else(|_| "C:".into());
+    let pf = std::env::var("ProgramFiles").unwrap_or_else(|_| format!("{drive}\\Program Files"));
+    let s = |k: &str, v: String| (k.to_string(), v);
+    vec![
+        s("ALLUSERSPROFILE", format!("{drive}\\ProgramData")),
+        s("APPDATA", format!("{home}\\AppData\\Roaming")),
+        s("ComSpec", format!("{sys}\\System32\\cmd.exe")),
+        s("HOMEDRIVE", home.chars().take(2).collect()),
+        s("HOMEPATH", home.chars().skip(2).collect()),
+        s("LOCALAPPDATA", format!("{home}\\AppData\\Local")),
+        s("PATH", format!("{sys}\\System32;{sys};{sys}\\System32\\Wbem;{sys}\\System32\\WindowsPowerShell\\v1.0;{pf}\\nodejs;{pf}\\Git\\cmd")),
+        s("PATHEXT", ".COM;.EXE;.BAT;.CMD".to_string()),
+        s("ProgramData", format!("{drive}\\ProgramData")),
+        s("ProgramFiles", pf),
+        s("SystemDrive", drive),
+        s("SystemRoot", sys.clone()),
+        s("TEMP", format!("{home}\\Temp")),
+        s("TMP", format!("{home}\\Temp")),
+        s("USERNAME", "homebody".to_string()),
+        s("USERPROFILE", home),
+        s("windir", sys),
+    ]
 }
 
 /// The pipe the relay inside an app's container uses to reach its gate.
@@ -126,12 +157,82 @@ pub fn grant(path: &str, sid_text: &str, change: bool) -> Result<(), String> {
 }
 
 /// The folders an app needs, opened to its container: a home of its own and its workspace.
-pub fn ensure_dirs(app: &AppConfig, sid_text: &str) -> Result<(), String> {
-    for dir in [Some(home_for(app)), app.workspace.clone()].into_iter().flatten() {
-        std::fs::create_dir_all(&dir).map_err(|e| format!("{dir} could not be made: {e}"))?;
-        grant(&dir, sid_text, true)?;
+pub fn ensure_dirs(home: &str, workspace: Option<&str>, sid_text: &str) -> Result<(), String> {
+    for sub in ["AppData/Roaming", "AppData/Local", "Temp"] {
+        let d = format!("{home}/{sub}");
+        std::fs::create_dir_all(&d).map_err(|e| format!("{d} could not be made: {e}"))?;
+    }
+    for dir in [Some(home), workspace].into_iter().flatten() {
+        std::fs::create_dir_all(dir).map_err(|e| format!("{dir} could not be made: {e}"))?;
+        grant(dir, sid_text, true)?;
     }
     Ok(())
+}
+
+/// The launcher's command line for running something protected (see `homebody __contain`).
+pub fn contain_argv(app: &AppConfig, launcher: &str, program: &str, args: &[String], env: &[(String, String)], cwd: Option<&str>) -> Vec<String> {
+    let home = home_for(&app.os_user);
+    let dir = cwd.map(str::to_string).or_else(|| app.workspace.clone()).unwrap_or_else(|| home.clone());
+    let mut v: Vec<String> = vec![launcher.to_string(), "__contain".into(), "--app".into(), app.id.clone(), "--port".into(), app.proxy_port.to_string(), "--home".into(), home, "--cwd".into(), dir];
+    if let Some(w) = &app.workspace {
+        v.extend(["--workspace".to_string(), w.clone()]);
+    }
+    for (k, val) in env {
+        v.extend(["--env".to_string(), format!("{k}={val}")]);
+    }
+    v.push("--".into());
+    v.push(program.to_string());
+    v.extend(args.iter().cloned());
+    v
+}
+
+/// The container really holds, checked by running things in it: a harmless command works, and
+/// a connection straight to the internet does not.
+pub fn holds(app: &AppConfig) -> Result<bool, String> {
+    let sid = ContainerSid::for_app(&app.id)?;
+    let home = home_for(&app.os_user);
+    ensure_dirs(&home, app.workspace.as_deref(), &sid.text()?)?;
+    let env = base_env(&home);
+    let sys = std::env::var("SystemRoot").unwrap_or_else(|_| "C:\\Windows".into());
+    let v = |a: &[&str]| a.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+    let control = Contained::spawn(&sid, &v(&["cmd.exe", "/c", "exit", "0"]), &env, &home)?.wait();
+    let direct = Contained::spawn(&sid, &v(&[&format!("{sys}\\System32\\curl.exe"), "-sS", "-m", "5", "-o", "NUL", "https://1.1.1.1/"]), &env, &home)?.wait();
+    Ok(control == 0 && direct != 0)
+}
+
+/// Serve an app's gate to its container over a named pipe: everything that arrives is passed,
+/// untouched, to the gate's own port. Only that app's container (and you) can open the pipe.
+pub async fn serve_gate_pipe(app_id: String, port: u16) -> Result<(), String> {
+    use tokio::net::windows::named_pipe::ServerOptions;
+    let sid_text = ContainerSid::for_app(&app_id)?.text()?;
+    let security = PipeSecurity::for_container(&sid_text)?;
+    let name = gate_pipe(&app_id);
+    let make = |first: bool| {
+        let mut o = ServerOptions::new();
+        o.first_pipe_instance(first).reject_remote_clients(true);
+        // SAFETY: `security` lives as long as this task; the pointer is to its attributes.
+        unsafe { o.create_with_security_attributes_raw(&name, &security.attributes as *const _ as *mut c_void) }
+    };
+    let mut server = make(true).map_err(|e| format!("The gate for {app_id} could not be opened to its private space: {e}"))?;
+    loop {
+        if server.connect().await.is_err() {
+            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+            continue;
+        }
+        let next = match make(false) {
+            Ok(n) => n,
+            Err(_) => {
+                tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+                continue;
+            }
+        };
+        let mut client = std::mem::replace(&mut server, next);
+        tokio::spawn(async move {
+            if let Ok(mut gate) = tokio::net::TcpStream::connect(("127.0.0.1", port)).await {
+                let _ = tokio::io::copy_bidirectional(&mut client, &mut gate).await;
+            }
+        });
+    }
 }
 
 /// A security descriptor for the gate pipe: you (the owner), the system, and this one container.
@@ -304,8 +405,13 @@ mod tests {
         let sid = ContainerSid::for_app("unit-test").expect("container");
         let v = |a: &[&str]| a.iter().map(|s| s.to_string()).collect::<Vec<_>>();
         let sys = std::env::var("SystemRoot").unwrap_or_else(|_| "C:\\Windows".into());
-        let env = vec![("SystemRoot".to_string(), sys.clone()), ("PATH".to_string(), format!("{sys}\\System32"))];
-        let run = |args: &[&str]| Contained::spawn(&sid, &v(args), &env, &format!("{sys}\\System32")).map(|c| c.wait());
+        let home = home_for("_hbunittest");
+        ensure_dirs(&home, None, &sid.text().unwrap()).expect("folders");
+        let env = base_env(&home);
+        let run = |args: &[&str]| Contained::spawn(&sid, &v(args), &env, &home).map(|c| c.wait());
+        // It can use its own home folder.
+        assert_eq!(run(&["cmd.exe", "/c", "echo x> mine.txt"]), Ok(0));
+        assert!(std::path::Path::new(&home).join("mine.txt").is_file());
         // Control: a harmless command runs and says it succeeded.
         assert_eq!(run(&["cmd.exe", "/c", "exit", "0"]), Ok(0));
         assert_eq!(run(&["cmd.exe", "/c", "exit", "7"]), Ok(7));

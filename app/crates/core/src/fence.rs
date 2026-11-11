@@ -556,6 +556,18 @@ pub fn home_for(os_user: &str) -> String {
     if LINUX {
         return crate::fence_linux::home_for(os_user);
     }
+    #[cfg(windows)]
+    {
+        return crate::fence_windows::home_for(os_user);
+    }
+    #[cfg(not(windows))]
+    {
+        mac_home_for(os_user)
+    }
+}
+
+#[cfg(not(windows))]
+fn mac_home_for(os_user: &str) -> String {
     let name = os_user.trim_start_matches("_hb").trim_start_matches('_');
     // Private users made before the app was called Homebody keep their home folder where it was:
     // macOS does not let anyone, administrator included, move a user's home folder.
@@ -619,6 +631,16 @@ pub fn seatbelt_profile_for(app: &AppConfig, own_servers: bool) -> String {
 pub fn fenced_env(app: &AppConfig) -> Vec<(String, String)> {
     let home = home_for(&app.os_user);
     let gate = format!("http://127.0.0.1:{}", app.proxy_port);
+    #[cfg(windows)]
+    {
+        let mut env = crate::fence_windows::base_env(&home);
+        for k in ["HTTPS_PROXY", "HTTP_PROXY", "ALL_PROXY"] {
+            env.push((k.to_string(), gate.clone()));
+        }
+        env.extend([("NO_PROXY".to_string(), "localhost,127.0.0.1".to_string()), ("NODE_USE_ENV_PROXY".to_string(), "1".to_string()), ("HOMEBODY".to_string(), "1".to_string())]);
+        return env;
+    }
+    #[allow(unreachable_code)]
     let mut env: Vec<(String, String)> = vec![
         ("HOME".into(), home.clone()),
         ("USER".into(), app.os_user.clone()),
@@ -658,6 +680,14 @@ pub fn fenced_env(app: &AppConfig) -> Vec<(String, String)> {
 /// The full command line that runs `program` protected: as the app's OS user, under its seatbelt
 /// profile, with a clean environment, in `cwd`.
 pub fn fenced_argv(app: &AppConfig, program: &str, args: &[String], extra_env: &[(String, String)], cwd: Option<&str>) -> Vec<String> {
+    #[cfg(windows)]
+    {
+        // The command line tool is the launcher: it puts the program in the app's container.
+        let me = std::env::current_exe().ok();
+        let launcher = me.as_ref().and_then(|p| p.parent()).map(|d| d.join("homebody.exe")).filter(|p| p.is_file()).or(me).map(|p| p.to_string_lossy().into_owned()).unwrap_or_else(|| "homebody.exe".into());
+        let env: Vec<(String, String)> = fenced_env(app).into_iter().chain(extra_env.iter().cloned()).collect();
+        return crate::fence_windows::contain_argv(app, &launcher, program, args, &env, cwd);
+    }
     #[cfg(unix)]
     if LINUX {
         let env: Vec<(String, String)> = fenced_env(app).into_iter().chain(extra_env.iter().cloned()).collect();
@@ -742,6 +772,22 @@ async fn profile_holds(wrap: impl Fn(&str, &[&str]) -> Vec<String>) -> bool {
 }
 
 pub async fn probe(app: &AppConfig, expected_rules: &str) -> Health {
+    #[cfg(windows)]
+    {
+        // One layer on Windows, Windows' own: the app container. Checked by running things in it.
+        let _ = expected_rules;
+        let mut h = Health { checked: true, ..Default::default() };
+        h.installed = crate::catalog::find_binary(&app.binary).is_some();
+        if app.windowed || !(h.installed || app.custom) {
+            return h;
+        }
+        let a = app.clone();
+        let held = tokio::task::spawn_blocking(move || crate::fence_windows::holds(&a)).await.ok().and_then(|r| r.ok()).unwrap_or(false);
+        (h.user_exists, h.group_ok, h.can_run, h.filter_ok, h.rules_current) = (true, true, true, true, true);
+        h.seatbelt_ok = held;
+        h.workspace_ok = app.workspace.as_ref().map(|w| std::path::Path::new(w).is_dir()).unwrap_or(true);
+        return h;
+    }
     #[cfg(unix)]
     if LINUX {
         // Somewhere it must not be able to reach although something is listening there: the
@@ -1303,6 +1349,12 @@ async fn run_as_admin(script: &str, name: &str, prompt: &str) -> SetupResult {
     }
 }
 
+#[cfg(windows)]
+pub async fn run_setup(_cfg: &Config) -> SetupResult {
+    SetupResult { ok: true, message: "Nothing needs setting up on Windows: each app gets its private space when it is first opened.".into() }
+}
+
+#[cfg(not(windows))]
 pub async fn run_setup(cfg: &Config) -> SetupResult {
     run_as_admin(&setup_script(cfg, &real_user()), "setup.sh", "Homebody needs your approval to turn on protection.").await
 }

@@ -62,3 +62,11 @@ jobs:
       - name: What the engine said (Linux)
         if: runner.os == 'Linux' && always()
         run: tail -40 /tmp/homebody-daemon.log || true; cat ~/.local/share/Homebody/logs/* 2>/dev/null | tail -40 || true; sudo journalctl -k -n 15 --no-pager | grep homebody || true
+
+      # Windows only: the fence (app containers), with a real engine, attacked from inside.
+      - name: Fence, end to end (Windows)
+        if: runner.os == 'Windows' && !cancelled()
+        run: bash tests/windows-fence.sh
+      - name: What the engine said (Windows)
+        if: runner.os == 'Windows' && always()
+        run: tail -40 "$TEMP/homebody-daemon.log" || true

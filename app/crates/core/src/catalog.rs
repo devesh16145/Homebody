@@ -425,6 +425,25 @@ pub fn binary_problem(path: &str, app_name: &str) -> Option<String> {
 
 /// Find an executable the way a login shell on this platform would. A full path is used as is.
 pub fn find_binary(name: &str) -> Option<String> {
+    #[cfg(windows)]
+    {
+        let p = std::path::Path::new(name);
+        if p.is_absolute() {
+            return p.is_file().then(|| name.to_string());
+        }
+        // The way Windows itself looks a command up: each folder on the path, each ending.
+        let endings: Vec<String> = if p.extension().is_some() { vec![String::new()] } else { vec![".exe".into(), ".cmd".into(), ".bat".into(), ".com".into()] };
+        for dir in std::env::var("PATH").unwrap_or_default().split(';').filter(|d| !d.is_empty()) {
+            for e in &endings {
+                let candidate = std::path::Path::new(dir).join(format!("{name}{e}"));
+                if candidate.is_file() {
+                    return Some(candidate.to_string_lossy().into_owned());
+                }
+            }
+        }
+        return None;
+    }
+    #[allow(unreachable_code)]
     if name.starts_with('/') {
         let p = std::path::Path::new(name);
         // A windowed app is a folder whose name ends in ".app".

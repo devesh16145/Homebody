@@ -134,12 +134,25 @@ impl AppConfig {
 
     /// The rule that decides this destination, if any. Exact rules win over wildcards, and among
     /// rules of the same kind a block wins over an allow, so adding a block can never be shadowed.
+    ///
+    /// Rules set by an organisation (source "org", see `fleet`) are looked at first, by the same
+    /// order among themselves: where one of them covers a place, your own rules are not asked.
     pub fn rule_for(&self, host: &str) -> Option<&TrustRule> {
-        let exact = self.trust.iter().filter(|r| !r.host.starts_with("*.") && r.host == host);
+        self.rule_among(host, true).or_else(|| self.rule_among(host, false))
+    }
+
+    fn rule_among(&self, host: &str, org: bool) -> Option<&TrustRule> {
+        let tier = |r: &&TrustRule| (r.source == "org") == org;
+        let exact = self.trust.iter().filter(tier).filter(|r| !r.host.starts_with("*.") && r.host == host);
         if let Some(r) = pick_strictest(exact) {
             return Some(r);
         }
-        pick_strictest(self.trust.iter().filter(|r| r.host.starts_with("*.") && hostname::matches(&r.host, host)))
+        pick_strictest(self.trust.iter().filter(tier).filter(|r| r.host.starts_with("*.") && hostname::matches(&r.host, host)))
+    }
+
+    /// The organisation's rule covering this place or pattern, if there is one.
+    pub fn org_rule_for(&self, pattern: &str) -> Option<&TrustRule> {
+        self.trust.iter().find(|r| r.source == "org" && r.host == pattern).or_else(|| self.rule_among(pattern.trim_start_matches("*."), true))
     }
 }
 
@@ -198,6 +211,10 @@ pub struct Config {
     /// Folders whose contents must never be sent (see `secrets::DocIndex`).
     #[serde(default)]
     pub private_folders: Vec<String>,
+    /// The policy of the organisation this computer belongs to, as last received and checked
+    /// (see `fleet`). Its rules are in each app's list with source "org".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub org: Option<crate::fleet::OrgPolicy>,
     pub apps: Vec<AppConfig>,
 }
 
@@ -213,7 +230,7 @@ fn yes() -> bool {
 impl Config {
     pub fn fresh() -> Config {
         let now = crate::now_iso();
-        let mut c = Config { version: 1, mode: Mode::Private, mode_since: now.clone(), private_since: Some(now), lockdown: false, ask: true, watch_until: None, watch_review: None, presets_seen: catalog::presets_version(), private_folders: vec![], apps: vec![] };
+        let mut c = Config { version: 1, mode: Mode::Private, mode_since: now.clone(), private_since: Some(now), lockdown: false, ask: true, watch_until: None, watch_review: None, presets_seen: catalog::presets_version(), private_folders: vec![], org: None, apps: vec![] };
         c.merge_presets();
         c
     }
@@ -377,7 +394,8 @@ impl Config {
         if program.is_empty() || program.chars().any(|c| c.is_control()) || program.len() > 512 {
             return Err("Choose the program to run.".into());
         }
-        if !program.starts_with('/') && !program.chars().all(|c| c.is_ascii_alphanumeric() || "-_.+".contains(c)) {
+        let full_path = program.starts_with('/') || (cfg!(windows) && Path::new(program).is_absolute() && !program.contains('"'));
+        if !full_path && !program.chars().all(|c| c.is_ascii_alphanumeric() || "-_.+".contains(c)) {
             return Err("Give the program's name (like aider) or choose its file.".into());
         }
         let found = catalog::find_binary(program).ok_or_else(|| format!("{program} was not found on this computer."))?;
@@ -492,6 +510,42 @@ impl Config {
         Ok(())
     }
 
+    /// Take an organisation's policy (already checked and verified), or with `None` let go of
+    /// it. Its rules replace the ones it set before; your own rules are kept as they are and
+    /// simply come second while it is in force.
+    pub fn apply_org(&mut self, policy: Option<crate::fleet::OrgPolicy>) {
+        for app in &mut self.apps {
+            app.trust.retain(|r| r.source != "org");
+            if let Some(p) = &policy {
+                for (host, enabled) in p.rules_for(&app.id) {
+                    app.trust.push(TrustRule { host, enabled, source: "org".into(), recommended: false, limit_mb: None });
+                }
+                if p.lock_mode {
+                    app.protected = true;
+                }
+            }
+        }
+        if let Some(p) = &policy {
+            if let Some(ask) = p.ask {
+                self.ask = ask;
+            }
+            if p.lock_mode {
+                if self.mode != Mode::Private {
+                    self.mode = Mode::Private;
+                    self.mode_since = crate::now_iso();
+                    self.private_since = Some(self.mode_since.clone());
+                    self.watch_until = None;
+                }
+            }
+        }
+        self.org = policy;
+    }
+
+    /// Protection may not be switched to Watch or Off because the organisation says so.
+    pub fn mode_locked(&self) -> bool {
+        self.org.as_ref().map(|p| p.lock_mode).unwrap_or(false)
+    }
+
     /// Forget an app the user added. Its private user and workspace stay on disk until setup is
     /// removed; they are inert without the entry.
     pub fn remove_custom(&mut self, id: &str) -> Result<(), String> {
@@ -568,6 +622,37 @@ mod tests {
         let ollama = c.app("ollama").unwrap();
         assert!(!ollama.rule_for("ollama.com").unwrap().enabled);
         assert!(ollama.rule_for("registry.ollama.ai").is_none());
+    }
+
+    #[test]
+    fn an_organisations_rules_come_before_your_own_and_leave_them_untouched() {
+        use crate::fleet::{OrgPolicy, OrgRule, POLICY_FORMAT};
+        let mut cfg = Config::fresh();
+        cfg.mode = Mode::Watch;
+        let id = "claude-code";
+        let mine = |host: &str, enabled| TrustRule { host: host.into(), enabled, source: "you".into(), recommended: false, limit_mb: None };
+        cfg.app_mut(id).unwrap().trust = vec![mine("api.example.com", true), mine("tools.example.org", false), mine("mine.dev", true)];
+        let rule = |app: &str, host: &str, enabled| OrgRule { app: app.into(), host: host.into(), enabled };
+        let policy = OrgPolicy { format: POLICY_FORMAT.into(), version: 1, updated_at: crate::now_iso(), name: "Org".into(), ask: Some(false), lock_mode: true, rules: vec![rule("*", "*.example.com", false), rule(id, "tools.example.org", true), rule("ollama", "only-ollama.net", true)] };
+        cfg.apply_org(Some(policy.clone()));
+        let app = cfg.app(id).unwrap();
+        let allowed = |host: &str| app.rule_for(host).map(|r| r.enabled);
+        // Its wildcard block beats your exact allow; its allow beats your block; the rest is yours.
+        assert_eq!(allowed("api.example.com"), Some(false));
+        assert_eq!(allowed("tools.example.org"), Some(true));
+        assert_eq!(allowed("mine.dev"), Some(true));
+        assert_eq!(allowed("only-ollama.net"), None, "a rule for another app does not apply here");
+        assert!(app.org_rule_for("api.example.com").is_some() && app.org_rule_for("mine.dev").is_none());
+        assert!(cfg.mode == Mode::Private && !cfg.ask && cfg.mode_locked());
+        // Applying it again does not pile rules up; a new version replaces the old one's rules.
+        cfg.apply_org(Some(policy));
+        assert_eq!(cfg.app(id).unwrap().trust.iter().filter(|r| r.source == "org").count(), 2);
+        // Leaving: your own rules decide again, exactly as they were.
+        cfg.apply_org(None);
+        let app = cfg.app(id).unwrap();
+        assert_eq!(app.rule_for("api.example.com").map(|r| r.enabled), Some(true));
+        assert_eq!(app.rule_for("tools.example.org").map(|r| r.enabled), Some(false));
+        assert!(!cfg.mode_locked() && app.trust.iter().all(|r| r.source != "org"));
     }
 
     #[test]
