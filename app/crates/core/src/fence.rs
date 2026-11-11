@@ -91,7 +91,7 @@ pub fn dev_allow_partial() -> bool {
 }
 
 pub fn real_user() -> String {
-    std::env::var("USER").or_else(|_| std::env::var("LOGNAME")).unwrap_or_else(|_| "nobody".into())
+    std::env::var("USER").or_else(|_| std::env::var("LOGNAME")).or_else(|_| std::env::var("USERNAME")).unwrap_or_else(|_| "nobody".into())
 }
 
 pub fn real_home() -> String {
@@ -1177,7 +1177,8 @@ pub async fn remove_setup(cfg: &Config) -> SetupResult {
     run_as_admin(&remove_script(cfg), "remove.sh", "Homebody needs your approval to remove protection from this computer.").await
 }
 
-#[cfg(test)]
+// These check the macOS fence: its profile, its packet filter rules, its setup script.
+#[cfg(all(test, target_os = "macos"))]
 mod tests {
     use super::*;
 

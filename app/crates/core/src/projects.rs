@@ -16,6 +16,7 @@ use serde::Serialize;
 use std::collections::BTreeMap;
 use std::fs;
 use std::io::Read;
+#[cfg(unix)]
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
@@ -24,8 +25,71 @@ use std::time::SystemTime;
 /// Never compared and never copied back: version history, and the file in which a project
 /// suggests places to trust (an agent must not be able to write itself a suggestion).
 const SKIPPED: &[&str] = &[".git", SUGGESTIONS_FILE];
-/// `O_NOFOLLOW` on macOS and the BSDs.
+/// `O_NOFOLLOW`: refuse to open through a link. The number differs between systems.
+#[cfg(any(target_os = "macos", target_os = "ios", target_os = "freebsd", target_os = "openbsd", target_os = "netbsd"))]
 const O_NOFOLLOW: i32 = 0x0100;
+#[cfg(all(unix, not(any(target_os = "macos", target_os = "ios", target_os = "freebsd", target_os = "openbsd", target_os = "netbsd"))))]
+const O_NOFOLLOW: i32 = if cfg!(any(target_arch = "aarch64", target_arch = "arm")) { 0o100000 } else { 0o400000 };
+
+#[cfg(unix)]
+fn is_exec(md: &fs::Metadata) -> bool {
+    md.mode() & 0o111 != 0
+}
+#[cfg(not(unix))]
+fn is_exec(_: &fs::Metadata) -> bool {
+    false // Windows has no such bit; a file is runnable by its name
+}
+
+/// Open for reading without following a link at the last step.
+#[cfg(unix)]
+fn open_nofollow(path: &Path) -> std::io::Result<fs::File> {
+    use std::os::unix::fs::OpenOptionsExt;
+    fs::OpenOptions::new().read(true).custom_flags(O_NOFOLLOW).open(path)
+}
+#[cfg(not(unix))]
+fn open_nofollow(path: &Path) -> std::io::Result<fs::File> {
+    if fs::symlink_metadata(path)?.file_type().is_symlink() {
+        return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "refusing to read through a link"));
+    }
+    fs::File::open(path)
+}
+
+#[cfg(unix)]
+fn make_link(target: &Path, at: &Path) -> std::io::Result<()> {
+    std::os::unix::fs::symlink(target, at)
+}
+#[cfg(windows)]
+fn make_link(target: &Path, at: &Path) -> std::io::Result<()> {
+    std::os::windows::fs::symlink_file(target, at)
+}
+
+#[cfg(unix)]
+fn set_exec(path: &Path, exec: bool) -> std::io::Result<()> {
+    fs::set_permissions(path, fs::Permissions::from_mode(if exec { 0o755 } else { 0o644 }))
+}
+#[cfg(not(unix))]
+fn set_exec(_: &Path, _: bool) -> std::io::Result<()> {
+    Ok(())
+}
+
+/// A plain recursive copy for systems without a cloning `cp`. Links are copied as links.
+#[cfg(not(unix))]
+fn copy_tree(from: &Path, to: &Path) -> std::io::Result<()> {
+    fs::create_dir_all(to)?;
+    for e in fs::read_dir(from)? {
+        let e = e?;
+        let (src, dst) = (e.path(), to.join(e.file_name()));
+        let ft = e.file_type()?;
+        if ft.is_symlink() {
+            let _ = make_link(&fs::read_link(&src)?, &dst);
+        } else if ft.is_dir() {
+            copy_tree(&src, &dst)?;
+        } else {
+            fs::copy(&src, &dst)?;
+        }
+    }
+    Ok(())
+}
 /// How many changes are listed for display. Counts are always complete.
 pub const LIST_LIMIT: usize = 500;
 
@@ -140,8 +204,20 @@ fn clone_tree(from: &Path, to: &Path) -> Result<(), String> {
     if let Some(parent) = to.parent() {
         fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
-    // `cp -c` clones on APFS (instant, no extra space until files diverge) and copies elsewhere.
-    let out = std::process::Command::new("/bin/cp").arg("-cR").arg(from).arg(to).output().map_err(|e| e.to_string())?;
+    #[cfg(not(unix))]
+    {
+        return copy_tree(from, to).map_err(|e| format!("The folder could not be copied: {e}"));
+    }
+    // macOS: `cp -c` clones on APFS (instant, no extra space until files diverge) and copies
+    // elsewhere. Linux: the same idea is `--reflink=auto` (Btrfs, XFS), a plain copy otherwise.
+    #[cfg(unix)]
+    let out = if cfg!(target_os = "macos") {
+        std::process::Command::new("/bin/cp").arg("-cR").arg(from).arg(to).output()
+    } else {
+        std::process::Command::new("cp").arg("-R").arg("-P").arg("--preserve=mode,timestamps").arg("--reflink=auto").arg(from).arg(to).output()
+    }
+    .map_err(|e| e.to_string())?;
+    #[cfg(unix)]
     if out.status.success() {
         Ok(())
     } else {
@@ -200,7 +276,7 @@ fn entry_at(path: &Path) -> Option<Entry> {
     if ft.is_symlink() {
         Some(Entry::Link(fs::read_link(path).ok()?))
     } else if ft.is_file() {
-        Some(Entry::File { len: md.len(), mtime: md.modified().ok(), exec: md.mode() & 0o111 != 0 })
+        Some(Entry::File { len: md.len(), mtime: md.modified().ok(), exec: is_exec(&md) })
     } else {
         None
     }
@@ -315,17 +391,17 @@ fn put(from_root: &Path, to_root: &Path, rel: &str) -> std::io::Result<()> {
     match entry_at(&from) {
         Some(Entry::Link(target)) => {
             let _ = fs::remove_file(&to);
-            std::os::unix::fs::symlink(target, &to)
+            make_link(&target, &to)
         }
         Some(Entry::File { exec, .. }) => {
             if fs::symlink_metadata(&to).map(|m| m.file_type().is_symlink()).unwrap_or(false) {
                 fs::remove_file(&to)?;
             }
             // The copy belongs to the agent and may change under us: refuse to read through a link.
-            let mut src = { use std::os::unix::fs::OpenOptionsExt; fs::OpenOptions::new().read(true).custom_flags(O_NOFOLLOW).open(&from)? };
+            let mut src = open_nofollow(&from)?;
             let mut dst = fs::File::create(&to)?;
             std::io::copy(&mut src, &mut dst)?;
-            fs::set_permissions(&to, fs::Permissions::from_mode(if exec { 0o755 } else { 0o644 }))
+            set_exec(&to, exec)
         }
         None => Err(std::io::Error::new(std::io::ErrorKind::NotFound, "nothing to copy")),
     }
@@ -485,6 +561,7 @@ mod tests {
         assert!(!w.source.join(".git/hooks/pre-commit").exists(), "a hook planted in the copy must not reach your repository");
     }
 
+    #[cfg(unix)]
     #[test]
     fn links_are_reported_as_links_and_never_followed() {
         let w = world();
@@ -497,6 +574,7 @@ mod tests {
         assert!(md.file_type().is_symlink(), "applied as a link, not as a copy of what it points to");
     }
 
+    #[cfg(unix)]
     #[test]
     fn a_directory_swapped_for_a_link_cannot_redirect_writes() {
         // The agent replaces src/ with a link to somewhere else and puts a file "inside" it.
@@ -512,6 +590,7 @@ mod tests {
         assert!(!all.iter().any(|c| c.path.contains("planted")));
     }
 
+    #[cfg(unix)]
     #[test]
     fn executable_bit_changes_are_noticed() {
         let w = world();

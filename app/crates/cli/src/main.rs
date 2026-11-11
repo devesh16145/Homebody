@@ -5,7 +5,61 @@
 
 use homebody_core::{control, Engine};
 use serde_json::{json, Value};
-use std::os::unix::process::CommandExt;
+
+mod ci;
+
+/// Wait until we are asked to stop: Ctrl-C, or a plain kill, logout or shutdown.
+pub(crate) async fn stop_signal() -> i32 {
+    #[cfg(unix)]
+    {
+        let mut term = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()).expect("signal handler");
+        tokio::select! {
+            _ = tokio::signal::ctrl_c() => 130,
+            _ = term.recv() => 143,
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = tokio::signal::ctrl_c().await;
+        130
+    }
+}
+
+/// Become the given command (Unix), or run it and leave with its exit code (Windows).
+fn run_in_place(argv: &[String]) -> ! {
+    let mut cmd = std::process::Command::new(&argv[0]);
+    cmd.args(&argv[1..]);
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        let err = cmd.current_dir("/").exec();
+        eprintln!("could not run: {err}");
+        std::process::exit(1);
+    }
+    #[cfg(not(unix))]
+    match cmd.status() {
+        Ok(s) => std::process::exit(s.code().unwrap_or(1)),
+        Err(e) => {
+            eprintln!("could not run: {e}");
+            std::process::exit(1);
+        }
+    }
+}
+
+/// Be the engine in this process, with the control socket other commands talk to.
+pub(crate) async fn engine_here() -> Result<Engine, String> {
+    let engine = Engine::start().await?;
+    let server = engine.clone();
+    let control_task = tokio::spawn(async move { control::serve(server).await });
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    if control_task.is_finished() {
+        return Err(match control_task.await {
+            Ok(Err(e)) => format!("Could not start: {e}"),
+            _ => "Could not start the control socket.".into(),
+        });
+    }
+    Ok(engine)
+}
 
 const HELP: &str = "homebody: the Homebody command line
 
@@ -33,6 +87,8 @@ const HELP: &str = "homebody: the Homebody command line
   homebody project apply <app> <name> [--replace-mine]   put those changes into your folder
   homebody project remove <app> <name>    delete the copy (your folder is not touched)
   homebody run <app> -- <command...>   run a command protected, in this terminal
+  homebody ci [options] <app> -- <command...>   the same with nobody at the keyboard (homebody ci --help)
+  homebody setup --print               print what setup does, for:  homebody setup --print | sudo bash
   homebody open [feed|proof|studio|glance]   show a window of the running app
   homebody inspect <app> on|off        look inside an app's connections to trusted places
   homebody secrets <app> on|off        while looking inside, stop requests that carry a secret
@@ -115,30 +171,16 @@ async fn main() {
     match a(0) {
         "" | "help" | "-h" | "--help" => println!("{HELP}"),
         "daemon" => {
-            let engine = match Engine::start().await {
+            let engine = match engine_here().await {
                 Ok(e) => e,
                 Err(e) => {
                     eprintln!("{e}");
                     std::process::exit(1);
                 }
             };
-            let server = engine.clone();
-            let control_task = tokio::spawn(async move { control::serve(server).await });
-            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-            if control_task.is_finished() {
-                match control_task.await {
-                    Ok(Err(e)) => eprintln!("Could not start: {e}"),
-                    _ => eprintln!("Could not start the control socket."),
-                }
-                std::process::exit(1);
-            }
             eprintln!("homebody daemon running. Ctrl-C to stop.");
             // Stop cleanly however we are asked to: Ctrl-C, or a plain kill, logout or shutdown.
-            let mut term = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()).expect("signal handler");
-            tokio::select! {
-                _ = tokio::signal::ctrl_c() => {}
-                _ = term.recv() => {}
-            }
+            stop_signal().await;
             engine.shutdown().await;
             let _ = std::fs::remove_file(homebody_core::paths::control_socket());
         }
@@ -370,6 +412,13 @@ async fn main() {
             call("app_open", json!({ "appId": a(1) })).await;
         }
         "check" => print_status(&call("check_fence", Value::Null).await),
+        "ci" => std::process::exit(ci::run(&args[1..]).await),
+        // For machines with no one to click "approve": print exactly what setup does, to be run
+        // as administrator (`homebody setup --print | sudo bash`). Needs no running app.
+        "setup" if a(1) == "--print" => {
+            let cfg = homebody_core::config::Config::load(&homebody_core::paths::config_file());
+            print!("{}", homebody_core::fence::setup_script(&cfg.provisioned(), &homebody_core::fence::real_user()));
+        }
         "setup" => {
             let r = call("run_setup", Value::Null).await;
             println!("{}", s(&r, "message"));
@@ -386,9 +435,7 @@ async fn main() {
             let cwd = args.iter().position(|x| x == "--cwd").filter(|i| *i < sep).and_then(|i| args.get(i + 1)).cloned();
             let argv = call("fenced_argv", json!({ "appId": a(1), "program": program, "args": &args[sep + 2..], "cwd": cwd })).await;
             let argv: Vec<String> = argv.as_array().into_iter().flatten().filter_map(|v| v.as_str().map(str::to_string)).collect();
-            let err = std::process::Command::new(&argv[0]).args(&argv[1..]).current_dir("/").exec();
-            eprintln!("could not run: {err}");
-            std::process::exit(1);
+            run_in_place(&argv);
         }
         "call" => {
             let payload = if a(2).is_empty() { Value::Null } else { serde_json::from_str(a(2)).unwrap_or(Value::Null) };

@@ -6,42 +6,88 @@
 //! request:  `{"cmd": "set_mode", "args": {"mode": "private"}}`
 //! response: `{"ok": true, "result": ...}` or `{"ok": false, "error": "..."}`
 //! `{"cmd": "subscribe"}` turns the connection into a stream of `{"event": {...}}` lines.
-
-#![cfg(unix)]
+//!
+//! On Windows the same conversation runs over a named pipe that only its creator (and the system
+//! and administrators) can write to; a program in an app container cannot open it at all.
 
 use crate::engine::Engine;
 use crate::paths;
 use serde_json::{json, Value};
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::net::{UnixListener, UnixStream};
+use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader};
+
+#[cfg(unix)]
+mod os {
+    use super::*;
+    pub use tokio::net::UnixStream as Stream;
+    use tokio::net::UnixListener;
+
+    pub async fn connect() -> std::io::Result<Stream> {
+        Stream::connect(paths::control_socket()).await
+    }
+
+    pub async fn serve(engine: Engine) -> std::io::Result<()> {
+        let path = paths::control_socket();
+        let _ = std::fs::remove_file(&path);
+        let listener = UnixListener::bind(&path).map_err(|e| std::io::Error::new(e.kind(), format!("control socket at {}: {e}", path.display())))?;
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
+        }
+        loop {
+            let (stream, _) = listener.accept().await?;
+            let engine = engine.clone();
+            tokio::spawn(async move {
+                let _ = client(engine, stream).await;
+            });
+        }
+    }
+}
+
+#[cfg(windows)]
+mod os {
+    use super::*;
+    use tokio::net::windows::named_pipe::{ClientOptions, ServerOptions};
+    pub use tokio::net::windows::named_pipe::NamedPipeClient as Stream;
+
+    /// One pipe per data folder, so a development copy and the real one do not meet.
+    pub fn pipe_name() -> String {
+        use sha2::Digest;
+        let tag = hex::encode(&sha2::Sha256::digest(paths::data_dir().to_string_lossy().to_lowercase().as_bytes())[..6]);
+        format!(r"\\.\pipe\homebody-control-{tag}")
+    }
+
+    pub async fn connect() -> std::io::Result<Stream> {
+        ClientOptions::new().open(pipe_name())
+    }
+
+    pub async fn serve(engine: Engine) -> std::io::Result<()> {
+        let name = pipe_name();
+        let mut server = ServerOptions::new().first_pipe_instance(true).reject_remote_clients(true).create(&name)?;
+        loop {
+            server.connect().await?;
+            let stream = std::mem::replace(&mut server, ServerOptions::new().reject_remote_clients(true).create(&name)?);
+            let engine = engine.clone();
+            tokio::spawn(async move {
+                let _ = client(engine, stream).await;
+            });
+        }
+    }
+}
 
 pub async fn is_running() -> bool {
-    UnixStream::connect(paths::control_socket()).await.is_ok()
+    os::connect().await.is_ok()
 }
 
 /// Serve until the process ends. Fails if another engine already owns the socket.
 pub async fn serve(engine: Engine) -> std::io::Result<()> {
-    let path = paths::control_socket();
     if is_running().await {
         return Err(std::io::Error::new(std::io::ErrorKind::AddrInUse, "Homebody is already running."));
     }
-    let _ = std::fs::remove_file(&path);
-    let listener = UnixListener::bind(&path).map_err(|e| std::io::Error::new(e.kind(), format!("control socket at {}: {e}", path.display())))?;
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
-    }
-    loop {
-        let (stream, _) = listener.accept().await?;
-        let engine = engine.clone();
-        tokio::spawn(async move {
-            let _ = client(engine, stream).await;
-        });
-    }
+    os::serve(engine).await
 }
 
-async fn client(engine: Engine, stream: UnixStream) -> std::io::Result<()> {
-    let (read, mut write) = stream.into_split();
+async fn client<S: AsyncRead + AsyncWrite + Unpin>(engine: Engine, stream: S) -> std::io::Result<()> {
+    let (read, mut write) = tokio::io::split(stream);
     let mut lines = BufReader::new(read).lines();
     while let Some(line) = lines.next_line().await? {
         let Ok(req) = serde_json::from_str::<Value>(&line) else {
@@ -79,8 +125,8 @@ async fn client(engine: Engine, stream: UnixStream) -> std::io::Result<()> {
 
 /// Send one command to the running engine.
 pub async fn call(cmd: &str, args: Value) -> Result<Value, String> {
-    let stream = UnixStream::connect(paths::control_socket()).await.map_err(|_| "Homebody is not running. Open the app, or run `homebody daemon`.".to_string())?;
-    let (read, mut write) = stream.into_split();
+    let stream = os::connect().await.map_err(|_| "Homebody is not running. Open the app, or run `homebody daemon`.".to_string())?;
+    let (read, mut write) = tokio::io::split(stream);
     let mut line = serde_json::to_vec(&json!({ "cmd": cmd, "args": args })).unwrap_or_default();
     line.push(b'\n');
     write.write_all(&line).await.map_err(|e| e.to_string())?;
@@ -96,8 +142,8 @@ pub async fn call(cmd: &str, args: Value) -> Result<Value, String> {
 
 /// Stream events from the running engine to `on_event` until the connection ends.
 pub async fn subscribe(mut on_event: impl FnMut(Value)) -> Result<(), String> {
-    let stream = UnixStream::connect(paths::control_socket()).await.map_err(|_| "Homebody is not running.".to_string())?;
-    let (read, mut write) = stream.into_split();
+    let stream = os::connect().await.map_err(|_| "Homebody is not running.".to_string())?;
+    let (read, mut write) = tokio::io::split(stream);
     write.write_all(b"{\"cmd\":\"subscribe\"}\n").await.map_err(|e| e.to_string())?;
     let mut lines = BufReader::new(read).lines();
     while let Ok(Some(line)) = lines.next_line().await {

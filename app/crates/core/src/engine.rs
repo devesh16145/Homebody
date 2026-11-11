@@ -1458,8 +1458,9 @@ impl Engine {
 
     /// The whole log, exactly as written, with one signed line in front saying what it is.
     /// `homebody verify <file>` (or anyone's own code) can check it without this computer.
-    fn export_log(&self) -> Result<String, String> {
-        let dir = paths::downloads_dir().join(format!("Homebody export {}", chrono::Local::now().format("%Y-%m-%d %H.%M")));
+    fn export_log(&self, into: Option<std::path::PathBuf>) -> Result<String, String> {
+        // A pipeline names the folder itself (`homebody ci --report`); a person gets one in Downloads.
+        let dir = into.unwrap_or_else(|| paths::downloads_dir().join(format!("Homebody export {}", chrono::Local::now().format("%Y-%m-%d %H.%M"))));
         let fail = |what: &str, e: std::io::Error| format!("The {what} could not be saved: {e}");
         std::fs::create_dir_all(&dir).map_err(|e| fail("export", e))?;
         // 1. The whole log, exactly as written, with a signed first line. This is the evidence.
@@ -1830,7 +1831,12 @@ impl Engine {
             }
             "export_log" => {
                 let e = self.clone();
-                let path = tokio::task::spawn_blocking(move || e.export_log()).await.map_err(|e| e.to_string())??;
+                let into = match s("dir") {
+                    Some(d) if std::path::Path::new(&d).is_absolute() => Some(std::path::PathBuf::from(d)),
+                    Some(_) => return Err("The export folder must be a full path.".into()),
+                    None => None,
+                };
+                let path = tokio::task::spawn_blocking(move || e.export_log(into)).await.map_err(|e| e.to_string())??;
                 if args.get("reveal").and_then(Value::as_bool).unwrap_or(true) {
                     fence::reveal(&path, true).await;
                 }
@@ -2134,7 +2140,21 @@ impl Engine {
                 let program = req("program")?;
                 let program = if program.contains('/') { program } else { catalog::find_binary(&program).unwrap_or(program) };
                 let rest: Vec<String> = args.get("args").and_then(Value::as_array).map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect()).unwrap_or_default();
-                ok(&fence::fenced_argv(&app, &program, &rest, &[], s("cwd").as_deref()))
+                // Variables a pipeline hands over on purpose (an API key, say). Nothing else of the
+                // caller's environment reaches a protected program, and the ones that point it at
+                // its gate cannot be replaced.
+                let mut extra: Vec<(String, String)> = Vec::new();
+                if let Some(env) = args.get("env").and_then(Value::as_object) {
+                    let reserved: Vec<String> = fence::fenced_env(&app).into_iter().map(|(k, _)| k.to_ascii_uppercase()).collect();
+                    for (k, v) in env {
+                        let valid = !k.is_empty() && k.len() <= 80 && k.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') && !k.starts_with(|c: char| c.is_ascii_digit());
+                        if !valid || reserved.contains(&k.to_ascii_uppercase()) {
+                            return Err(format!("\"{k}\" cannot be handed to a protected program."));
+                        }
+                        extra.push((k.clone(), v.as_str().unwrap_or_default().to_string()));
+                    }
+                }
+                ok(&fence::fenced_argv(&app, &program, &rest, &extra, s("cwd").as_deref()))
             }
             other => Err(format!("Unknown command: {other}")),
         }
