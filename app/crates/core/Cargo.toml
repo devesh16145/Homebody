@@ -3,7 +3,7 @@ name = "sai-core"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Sandbox-ai core: destination rules, ask flow, signed ledger, local proxy, fence control"
+description = "Homebody core: destination rules, ask flow, signed ledger, local proxy, fence control"
 
 [dependencies]
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "io-util", "sync", "time", "process", "fs"] }

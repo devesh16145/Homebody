@@ -69,12 +69,12 @@ pub struct ProjectInfo {
 }
 
 /// A project may carry a small file naming places it needs, so they need not be typed in:
-/// `.sandbox-ai.json` with `{"trust": ["registry.npmjs.org", "pypi.org"]}`.
+/// `.homebody.json` with `{"trust": ["registry.npmjs.org", "pypi.org"]}`.
 ///
 /// It is only ever read from YOUR folder, never from the agent's copy, and nothing in it is
 /// applied by itself: the places are shown to the user, who decides. Otherwise an agent could
 /// write itself a list of places to reach.
-pub const SUGGESTIONS_FILE: &str = ".sandbox-ai.json";
+pub const SUGGESTIONS_FILE: &str = ".homebody.json";
 
 pub fn suggested_places(source: &Path) -> Vec<String> {
     let Ok(text) = std::fs::read_to_string(source.join(SUGGESTIONS_FILE)) else { return vec![] };

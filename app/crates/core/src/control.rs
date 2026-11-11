@@ -23,7 +23,7 @@ pub async fn is_running() -> bool {
 pub async fn serve(engine: Engine) -> std::io::Result<()> {
     let path = paths::control_socket();
     if is_running().await {
-        return Err(std::io::Error::new(std::io::ErrorKind::AddrInUse, "Sandbox-ai is already running."));
+        return Err(std::io::Error::new(std::io::ErrorKind::AddrInUse, "Homebody is already running."));
     }
     let _ = std::fs::remove_file(&path);
     let listener = UnixListener::bind(&path).map_err(|e| std::io::Error::new(e.kind(), format!("control socket at {}: {e}", path.display())))?;
@@ -79,13 +79,13 @@ async fn client(engine: Engine, stream: UnixStream) -> std::io::Result<()> {
 
 /// Send one command to the running engine.
 pub async fn call(cmd: &str, args: Value) -> Result<Value, String> {
-    let stream = UnixStream::connect(paths::control_socket()).await.map_err(|_| "Sandbox-ai is not running. Open the app, or run `sai daemon`.".to_string())?;
+    let stream = UnixStream::connect(paths::control_socket()).await.map_err(|_| "Homebody is not running. Open the app, or run `sai daemon`.".to_string())?;
     let (read, mut write) = stream.into_split();
     let mut line = serde_json::to_vec(&json!({ "cmd": cmd, "args": args })).unwrap_or_default();
     line.push(b'\n');
     write.write_all(&line).await.map_err(|e| e.to_string())?;
     let mut lines = BufReader::new(read).lines();
-    let resp = lines.next_line().await.map_err(|e| e.to_string())?.ok_or("No answer from Sandbox-ai.")?;
+    let resp = lines.next_line().await.map_err(|e| e.to_string())?.ok_or("No answer from Homebody.")?;
     let v: Value = serde_json::from_str(&resp).map_err(|e| e.to_string())?;
     if v.get("ok").and_then(Value::as_bool) == Some(true) {
         Ok(v.get("result").cloned().unwrap_or(Value::Null))
@@ -96,7 +96,7 @@ pub async fn call(cmd: &str, args: Value) -> Result<Value, String> {
 
 /// Stream events from the running engine to `on_event` until the connection ends.
 pub async fn subscribe(mut on_event: impl FnMut(Value)) -> Result<(), String> {
-    let stream = UnixStream::connect(paths::control_socket()).await.map_err(|_| "Sandbox-ai is not running.".to_string())?;
+    let stream = UnixStream::connect(paths::control_socket()).await.map_err(|_| "Homebody is not running.".to_string())?;
     let (read, mut write) = stream.into_split();
     write.write_all(b"{\"cmd\":\"subscribe\"}\n").await.map_err(|e| e.to_string())?;
     let mut lines = BufReader::new(read).lines();

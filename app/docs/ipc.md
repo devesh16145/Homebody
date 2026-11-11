@@ -222,7 +222,7 @@ interface PrivateFolders {
 | `ack_presets` | — | `Status` | the user has read `Status.presetNotes` |
 | `get_private_folders` | — | `PrivateFolders` | |
 | `add_private_folder` / `remove_private_folder` | `{ path }` | `PrivateFolders` | a folder whose text must never be sent. While an app's connections are looked inside, a request that repeats three or more long lines from a file in one of these folders is stopped. Must be a folder inside the user's home folder (not the home folder itself); at most 20 |
-| `check_update` | — | `{ current, latest, newer, url, message }` | asks where Sandbox-ai is published whether a newer version exists. Only ever runs when the user asks; nothing is downloaded. `message` is a sentence for the user |
+| `check_update` | — | `{ current, latest, newer, url, message }` | asks where Homebody is published whether a newer version exists. Only ever runs when the user asks; nothing is downloaded. `message` is a sentence for the user |
 | `get_proof` | — | `Proof` | |
 | `verify_chain` | — | `ChainCheck` | may take a moment on a large log |
 | `export_proof` | — | `{ path: string }` | writes a signed proof file to Downloads and reveals it |
@@ -238,9 +238,9 @@ interface PrivateFolders {
 | `app_remove` | `{ appId }` | `Status` | only apps added with `app_add`; also deletes its launcher |
 | `discover_apps` | — | `FoundApp[]` | known windowed AI apps in the Applications folders that are not on the list yet. `FoundApp = { name, path, canProtect, asks, note }`: `asks` false means it can only run cut off from the internet; `note` is a sentence for the user (the reason, when `canProtect` is false) |
 | `app_open` | `{ appId }` | `null` | open an app the way its kind is opened: a window or service is started, an agent gets a protected terminal. What a launcher calls |
-| `app_launcher` | `{ appId, reveal?: boolean }` | `{ path }` | writes `~/Applications/Sandbox-ai/<Name> (protected).app`, a small app that opens this one protected (starting Sandbox-ai first if needed), and reveals it in Finder. Created automatically for windowed apps when they are added |
+| `app_launcher` | `{ appId, reveal?: boolean }` | `{ path }` | writes `~/Applications/Homebody/<Name> (protected).app`, a small app that opens this one protected (starting Homebody first if needed), and reveals it in Finder. Created automatically for windowed apps when they are added |
 | `pick_program` | — | `string \| null` | shell only: the system file chooser |
-| `get_install` | — | `{ path: string \| null, installed: boolean, canInstall: boolean }` | where the desktop app is running from, and whether that is `/Applications/Sandbox-ai.app` |
+| `get_install` | — | `{ path: string \| null, installed: boolean, canInstall: boolean }` | where the desktop app is running from, and whether that is `/Applications/Homebody.app` |
 | `install_app` | — | `{ path }` | copies the app into Applications, replacing an older copy |
 | `install_and_restart` | — | `null` | shell only: `install_app`, then stop cleanly and reopen from Applications |
 | `get_login_item` / `set_login_item` | — / `{ on }` | `{ on: boolean }` | shell only: open the app at login (a per-user launch entry) |
@@ -255,7 +255,7 @@ interface PrivateFolders {
 | `app_stop` | `{ appId }` | `Status` | |
 | `app_open_terminal` | `{ appId, project?: string }` | `null` | agents: open a protected terminal in the workspace, or in a project's copy |
 | `get_projects` | `{ appId }` | `ProjectInfo[]` | |
-| `project_import` | `{ appId, path }` | `ProjectInfo & { suggested }` | copies the folder into the workspace (instant, copy-on-write) and keeps a private baseline to compare against. `suggested: { host, label, purpose }[]` lists the places the folder's `.sandbox-ai.json` asks for that are not trusted yet; nothing is trusted until the user agrees (`set_trust`) |
+| `project_import` | `{ appId, path }` | `ProjectInfo & { suggested }` | copies the folder into the workspace (instant, copy-on-write) and keeps a private baseline to compare against. `suggested: { host, label, purpose }[]` lists the places the folder's `.homebody.json` asks for that are not trusted yet; nothing is trusted until the user agrees (`set_trust`) |
 | `project_changes` | `{ appId, name }` | `ChangeSet` | what differs between the agent's copy and the baseline; `.git` is never compared |
 | `project_apply` | `{ appId, name, overwrite?: boolean }` | `ApplyResult` | writes the changes into the original folder as the user. Conflicts are skipped unless `overwrite` |
 | `project_remove` | `{ appId, name }` | `null` | deletes the copy and baseline; the original is not touched |
@@ -286,8 +286,8 @@ One channel, `sai:event`. Payload is `{ type, data }`:
 
 | Window | File | Size | Chrome |
 |---|---|---|---|
-| Main | `ui/main.html` | 980×680, min 760×520 | native title bar overlay: traffic lights sit on our toolbar; the toolbar is a drag region (`data-tauri-drag-region`); leave 78 px on the left of the toolbar free for the traffic lights |
-| Glance | `ui/glance.html` | 340×480 | frameless, transparent, native popover vibrancy behind it; the page draws nothing but its content on a transparent body; hides on blur |
+| Main | `ui/home.html` | 980×680, min 760×520 | native title bar overlay: the traffic lights sit on the floating sidebar, whose top is a drag region (`data-tauri-drag-region`), as is a strip across the top of the page |
+| Menu-bar panel | `ui/menubar.html` | 340×480 | window label `glance`; frameless, transparent, native popover vibrancy behind it; the page draws nothing but its content on a transparent body; hides on blur |
 | Prompt | `ui/prompt.html` | 380×128 | frameless, transparent, always on top, top-right of the screen; shows the oldest pending `Ask`; hides itself when none are pending |
 
 ## Rules the UI can rely on

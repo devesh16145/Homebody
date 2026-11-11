@@ -161,7 +161,7 @@ function actionsHtml(e) {
     return '<span class="ev-state">Refused by the fence. Protected apps can only reach the network through the gate.</span>';
   }
   if (e.reason === 'malformed' && !/^\d|:/.test(e.host || '') && e.label !== e.host) {
-    return '<span class="ev-state">Stopped by Sandbox-ai. The place itself is still trusted.</span>';
+    return '<span class="ev-state">Stopped by Homebody. The place itself is still trusted.</span>';
   }
   if (e.reason === 'malformed' || e.reason === 'local_address') {
     return '<span class="ev-state">This kind of address is always blocked.</span>';

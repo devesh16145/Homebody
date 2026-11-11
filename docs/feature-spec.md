@@ -1,4 +1,4 @@
-# Feature spec: Sandbox-ai (working name)
+# Feature spec: Homebody (working name)
 
 One line per feature. Tags: **[MVP]** macOS v0.1 · **[v0.2]** · **[v0.3]** · **[v1.0]** · **[v1.x]** · **[Win]** / **[Linux]** platform release. Everything is free and open source; untagged lines ship in the release named by their nearest tag above.
 

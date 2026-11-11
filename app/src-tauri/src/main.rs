@@ -1,4 +1,4 @@
-//! Sandbox-ai desktop shell.
+//! Homebody desktop shell.
 //!
 //! Deliberately thin: it owns the windows and the menu-bar icon, and forwards everything else to
 //! `sai-core`. The UI calls one command, `sai`, with `{cmd, args}` exactly as in docs/ipc.md, and
@@ -90,7 +90,7 @@ fn login_item_path() -> Option<std::path::PathBuf> {
     std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join("Library/LaunchAgents").join(format!("{LOGIN_ITEM}.plist")))
 }
 
-/// Open Sandbox-ai when the user logs in: a per-user launch entry pointing at this copy of the
+/// Open Homebody when the user logs in: a per-user launch entry pointing at this copy of the
 /// app. No administrator rights are involved, and switching it off removes the file again.
 fn set_login_item(on: bool) -> Result<(), String> {
     let path = login_item_path().ok_or("Your home folder could not be found.")?;
@@ -177,7 +177,7 @@ fn show_prompt(app: &AppHandle) {
 }
 
 fn build_windows(app: &AppHandle) -> tauri::Result<()> {
-    let main = WebviewWindowBuilder::new(app, "main", WebviewUrl::App("main.html".into())).title("Sandbox-ai").inner_size(980.0, 680.0).min_inner_size(760.0, 520.0).visible(false);
+    let main = WebviewWindowBuilder::new(app, "main", WebviewUrl::App("home.html".into())).title("Homebody").inner_size(980.0, 680.0).min_inner_size(760.0, 520.0).visible(false);
     #[cfg(target_os = "macos")]
     let main = main.title_bar_style(tauri::TitleBarStyle::Overlay).hidden_title(true);
     let main = main.build()?;
@@ -193,8 +193,8 @@ fn build_windows(app: &AppHandle) -> tauri::Result<()> {
         }
     });
 
-    let glance = WebviewWindowBuilder::new(app, "glance", WebviewUrl::App("glance.html".into()))
-        .title("Sandbox-ai")
+    let glance = WebviewWindowBuilder::new(app, "glance", WebviewUrl::App("menubar.html".into()))
+        .title("Homebody")
         .inner_size(GLANCE.0, GLANCE.1)
         .resizable(false)
         .decorations(false)
@@ -214,7 +214,7 @@ fn build_windows(app: &AppHandle) -> tauri::Result<()> {
     });
 
     WebviewWindowBuilder::new(app, "prompt", WebviewUrl::App("prompt.html".into()))
-        .title("Sandbox-ai")
+        .title("Homebody")
         .inner_size(PROMPT.0, PROMPT.1)
         .resizable(false)
         .decorations(false)
@@ -229,13 +229,13 @@ fn build_windows(app: &AppHandle) -> tauri::Result<()> {
 }
 
 fn build_tray(app: &AppHandle) -> tauri::Result<()> {
-    let open = MenuItem::with_id(app, "open", "Open Sandbox-ai", true, None::<&str>)?;
-    let quit = MenuItem::with_id(app, "quit", "Quit Sandbox-ai", true, None::<&str>)?;
+    let open = MenuItem::with_id(app, "open", "Open Homebody", true, None::<&str>)?;
+    let quit = MenuItem::with_id(app, "quit", "Quit Homebody", true, None::<&str>)?;
     let menu = Menu::with_items(app, &[&open, &quit])?;
     TrayIconBuilder::with_id("tray")
         .icon(tray_icon(Indicator::Attention))
         .icon_as_template(true)
-        .tooltip("Sandbox-ai")
+        .tooltip("Homebody")
         .menu(&menu)
         .show_menu_on_left_click(false)
         .on_menu_event(|app, event| match event.id.as_ref() {
@@ -280,7 +280,7 @@ fn pump_events(app: AppHandle, engine: Engine) {
                         }
                     }
                     if let Some(tray) = app.tray_by_id("tray") {
-                        let _ = tray.set_tooltip(Some(format!("Sandbox-ai: {}", s.sentence)));
+                        let _ = tray.set_tooltip(Some(format!("Homebody: {}", s.sentence)));
                     }
                 }
                 Event::Ask(_) => show_prompt(&app),
@@ -306,7 +306,7 @@ fn pump_events(app: AppHandle, engine: Engine) {
 /// Tell the user something from a process that has no window of its own.
 fn alert(message: &str) {
     let text: String = message.chars().filter(|c| !c.is_control()).map(|c| if c == '"' || c == '\\' { '\'' } else { c }).collect();
-    let _ = std::process::Command::new("/usr/bin/osascript").args(["-e", &format!("display alert \"Sandbox-ai\" message \"{text}\"")]).output();
+    let _ = std::process::Command::new("/usr/bin/osascript").args(["-e", &format!("display alert \"Homebody\" message \"{text}\"")]).output();
 }
 
 /// An answer that means "not ready yet, try again in a moment" rather than "no".
@@ -320,7 +320,7 @@ fn main() {
     let wanted = args.iter().position(|a| a == "--open-protected").and_then(|i| args.get(i + 1)).cloned();
     if let Some(id) = &wanted {
         if tauri::async_runtime::block_on(sai_core::control::is_running()) {
-            // Sandbox-ai is already running: hand the request over and leave.
+            // Homebody is already running: hand the request over and leave.
             tauri::async_runtime::block_on(async {
                 let mut last = String::new();
                 for _ in 0..40 {
@@ -342,7 +342,7 @@ fn main() {
             let handle = app.handle().clone();
             // One engine per user: if `sai daemon` or another copy of the app is running, bow out.
             if tauri::async_runtime::block_on(sai_core::control::is_running()) {
-                eprintln!("Sandbox-ai is already running.");
+                eprintln!("Homebody is already running.");
                 std::process::exit(0);
             }
             let engine = tauri::async_runtime::block_on(Engine::start())?;
@@ -415,7 +415,7 @@ fn main() {
             Ok(())
         })
         .build(tauri::generate_context!())
-        .expect("error while building Sandbox-ai")
+        .expect("error while building Homebody")
         .run(|app, event| {
             // Keep running in the menu bar when the last window is hidden.
             if let tauri::RunEvent::ExitRequested { api, code, .. } = &event {

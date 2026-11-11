@@ -98,6 +98,11 @@ function item(a, p) {
 }
 
 /** The Projects block for one agent's card. */
+/** Whether there is anything to show: a folder, one being brought in, or an error. */
+export function has(appId) {
+  return (lists.get(appId) || []).length > 0 || busy.has(appId) || errors.has(appId);
+}
+
 export function section(a) {
   const list = lists.get(a.id), err = errors.get(a.id), adding = busy.get(a.id);
   const rows = (list || []).map((p) => item(a, p)).join('');

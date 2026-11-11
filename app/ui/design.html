@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>Name and Identity</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fredoka:wght@500;600&family=Instrument+Serif&family=Unbounded:wght@500;600&display=swap">
+<link rel="stylesheet" href="css/tokens.css">
+<link rel="stylesheet" href="css/base.css">
+<link rel="stylesheet" href="css/identity.css">
+<style>
+  /* Review board only. Not part of the app. */
+  html, body { height: auto; }
+  body { display: block; overflow: auto; background: var(--ground); background-image: var(--ground-wash); background-attachment: fixed; color: var(--ink); }
+  .bd { max-width: 1120px; margin: 0 auto; padding: 36px max(20px, 4vw) 80px; display: grid; gap: 28px; }
+  .bd-top { display: flex; align-items: end; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+  .bd-top h1 { font: 700 30px/1.1 var(--font-round); letter-spacing: -.02em; }
+  .bd-top p { margin-top: 4px; color: var(--ink-2); }
+  .bd h2 { font: 650 12px/1 var(--font); letter-spacing: .07em; text-transform: uppercase; color: var(--ink-3); margin: 22px 0 -10px; }
+
+  .br { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr); gap: 0; border-radius: 24px; overflow: hidden; background: var(--surface); box-shadow: 0 0 0 1px var(--line), 0 10px 30px rgba(14, 26, 34, .06); }
+  .br-id { display: grid; align-content: start; gap: 18px; padding: 30px; }
+  .br-lock { display: flex; align-items: center; gap: 20px; }
+  .br-lock svg { flex: none; filter: drop-shadow(0 10px 22px rgba(8, 60, 70, .28)); }
+  .br-word { font-size: 58px; line-height: .95; color: var(--ink); }
+  .br-line { font-size: 19px; color: var(--ink); }
+  .br-idea { color: var(--ink-2); font-size: var(--fs-body); max-width: 46ch; }
+  .br-n { position: absolute; }
+  .br-side { display: grid; align-content: start; gap: 14px; padding: 30px; background: var(--ground); background-image: var(--ground-wash); }
+  .bar { display: flex; align-items: center; justify-content: space-between; height: 30px; padding: 0 14px; border-radius: 10px; color: var(--ink); }
+  .bar span { display: inline-flex; align-items: center; gap: 6px; font-size: var(--fs-cap); color: var(--ink-2); }
+  .bar svg { width: 18px; height: 18px; }
+  .hero { display: flex; align-items: center; gap: 14px; padding: 16px; border-radius: 18px; }
+  .hero b { display: block; font-size: 28px; line-height: 1; }
+  .hero small { display: block; margin-top: 4px; color: var(--ink-2); font-size: var(--fs-small); }
+  .voice { display: grid; gap: 6px; }
+  .voice p { justify-self: start; padding: 7px 12px; border-radius: 14px; background: var(--surface); box-shadow: 0 0 0 1px var(--line); font-size: var(--fs-small); }
+  .pick { justify-self: start; }
+
+  .aic { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  .aic > div { display: grid; gap: 16px; padding: 24px; border-radius: 24px; background: var(--surface); box-shadow: 0 0 0 1px var(--line); }
+  .aic h3 { display: flex; align-items: center; gap: 8px; font: 650 17px/1.2 var(--font-round); }
+  .aic h3 .tag { font-family: var(--font); }
+  .aic p { color: var(--ink-2); font-size: var(--fs-small); }
+  .dock { display: flex; flex-wrap: wrap; gap: 14px 10px; padding: 14px; border-radius: 20px; }
+  .dock figure { margin: 0; width: 70px; display: grid; justify-items: center; gap: 6px; font-size: var(--fs-cap); color: var(--ink-2); text-align: center; }
+  .dock img { width: 56px; height: 56px; display: block; }
+  .rec { padding: 3px 9px; border-radius: 999px; background: var(--tide); color: var(--on-tide); font: 600 11px/1.4 var(--font); }
+
+  @media (max-width: 820px) {
+    .br, .aic { grid-template-columns: 1fr; }
+    .br-word { font-size: 46px; }
+  }
+</style>
+</head>
+<body>
+<main class="bd">
+  <header class="bd-top">
+    <div><h1>Name and identity</h1><p>Three directions. The colours stay; each brings its own name, mark and voice.</p></div>
+    <a class="cap" href="dev.html?scenario=asking&amp;next=1">The screens so far</a>
+  </header>
+  <div id="brands" style="display:grid;gap:20px"></div>
+
+  <h2>Icons for your AI apps</h2>
+  <div class="aic">
+    <div>
+      <h3>Their own icon <span class="rec">Suggested</span></h3>
+      <div class="dock glass" id="real"></div>
+      <p>The icon people already know, taken from the maker’s Mac app when it’s installed. Otherwise a letter tile.</p>
+    </div>
+    <div>
+      <h3>Letter tiles</h3>
+      <div class="dock glass" id="tiles"></div>
+      <p>One consistent style for every app, in each maker’s colour.</p>
+    </div>
+  </div>
+</main>
+<script type="module">
+  import { initPage } from './js/util.js';
+  import { appTile } from './js/icons.js';
+  import { BRANDS } from './js/brands.js';
+  initPage();
+
+  const word = (b, text, size) => `<span style="font-family:${b.font};font-weight:${b.weight};letter-spacing:${b.tracking};${size ? `font-size:${size}` : ''}">${text}</span>`;
+  document.getElementById('brands').innerHTML = BRANDS.map((b) => `
+    <article class="br" aria-label="${b.name}">
+      <div class="br-id">
+        <div class="br-lock">${b.icon(116, b.id + 'L')}<span class="br-word">${word(b, b.name)}</span></div>
+        <p class="br-line">${word(b, b.line)}</p>
+        <p class="br-idea">${b.idea}</p>
+      </div>
+      <div class="br-side">
+        <div class="bar glass">${b.states.map(([s, label]) => `<span>${b.mark(18, s, b.id + 'b')}${label}</span>`).join('')}</div>
+        <div class="hero glass">${b.mark(52, 'private', b.id + 'h')}<div><b>${word(b, b.lower ? 'private' : 'Private')}</b><small>${b.voice[0]}</small></div></div>
+        <div class="voice">${b.voice.slice(1).map((v) => `<p>${v}</p>`).join('')}</div>
+      </div>
+    </article>`).join('');
+
+  const real = { 'Claude Code': '.local-icons/claude.png', 'Codex CLI': '.local-icons/chatgpt.png', 'Cursor CLI': '.local-icons/cursor.png' };
+  const apps = ['Claude Code', 'Codex CLI', 'Cursor CLI', 'Ollama', 'Gemini CLI', 'Aider', 'LM Studio'];
+  document.getElementById('real').innerHTML = apps.map((n) => `<figure>${real[n] ? `<img src="${real[n]}" alt="">` : appTile('generic', n, 56)}<figcaption>${n}</figcaption></figure>`).join('');
+  document.getElementById('tiles').innerHTML = apps.map((n) => `<figure>${appTile('generic', n, 56)}<figcaption>${n}</figcaption></figure>`).join('');
+</script>
+</body>
+</html>

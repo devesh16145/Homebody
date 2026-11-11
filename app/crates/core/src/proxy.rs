@@ -232,7 +232,7 @@ async fn handle(engine: Engine, app_id: String, mut client: TcpStream) -> std::i
     let req = match parse_request(&head) {
         Ok(r) => r,
         Err(why) => {
-            respond(&mut client, 400, &format!("Sandbox-ai could not understand this request ({why}).")).await;
+            respond(&mut client, 400, &format!("Homebody could not understand this request ({why}).")).await;
             return Ok(());
         }
     };
@@ -252,14 +252,14 @@ async fn handle(engine: Engine, app_id: String, mut client: TcpStream) -> std::i
         Ok(x) => x,
         Err(true) => {
             engine.record_local_address(&app_id, &host, req.port);
-            respond(&mut client, 403, "Blocked by Sandbox-ai: this name points at your own computer or network.").await;
+            respond(&mut client, 403, "Blocked by Homebody: this name points at your own computer or network.").await;
             return Ok(());
         }
         Err(false) => {
             if let Some(conn) = engine.record_conn(&app_id, &host, "", req.port, &decision) {
                 engine.record_end(conn, 0, 0, started.elapsed().as_millis() as u64, true);
             }
-            respond(&mut client, 502, &format!("Sandbox-ai allowed this, but {host} did not answer.")).await;
+            respond(&mut client, 502, &format!("Homebody allowed this, but {host} did not answer.")).await;
             return Ok(());
         }
     };
@@ -426,8 +426,8 @@ async fn inspected(engine: &Engine, app_id: &str, host: &str, decision: &Decisio
                     }
                     if let Err(t) = verdict {
                         let said = match &t {
-                            crate::inspect::Trouble::Refused(_) => Some("Blocked by Sandbox-ai: this address is switched off.".to_string()),
-                            crate::inspect::Trouble::Secret(found) => Some(format!("Blocked by Sandbox-ai: this request contained what looks like {}. It was not sent.", found.kind)),
+                            crate::inspect::Trouble::Refused(_) => Some("Blocked by Homebody: this address is switched off.".to_string()),
+                            crate::inspect::Trouble::Secret(found) => Some(format!("Blocked by Homebody: this request contained what looks like {}. It was not sent.", found.kind)),
                             _ => None,
                         };
                         if let Some(body) = said {

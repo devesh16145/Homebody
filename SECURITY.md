@@ -1,6 +1,6 @@
 # Security
 
-Sandbox-ai exists to stop data leaving a computer, so a way around it is the most important kind of bug there is. Reports are very welcome.
+Homebody exists to stop data leaving a computer, so a way around it is the most important kind of bug there is. Reports are very welcome.
 
 ## Reporting
 
@@ -16,7 +16,7 @@ This is a volunteer project with no paid support and no bounty. You will get an 
 - A protected app reads or writes files in your home folder, or in another protected app's space.
 - A protected app answers its own prompt, changes its own rules, or reaches the control socket.
 - A protected app sends more to a trusted place in an hour than the limit set for it, beyond the one piece that was being passed on when the limit was reached (a few kilobytes; up to 4 MB for an app with looking inside on and private folders in use, because a request is then held and passed whole).
-- A file in a project (`.sandbox-ai.json`) gets a place trusted without the user ticking it.
+- A file in a project (`.homebody.json`) gets a place trusted without the user ticking it.
 - The signed log can be changed, cut or reordered and still pass `sai verify`.
 - Anything in settings, an app name or a project that ends up running as administrator during setup.
 - With looking inside on: a request that reaches a site other than the approved one, a request the gate passed on without being able to follow it, anything after "?" or any content ending up in the log, the local certificate authority's key being readable by a protected app, any spelling of an address that is switched off reaching the real server, a secret of a recognised shape, sent as it is in the content of a request or of a web socket message, reaching the real server whole or in part, or anything at all reaching the real server on a connection the gate has stopped following.

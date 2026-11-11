@@ -67,13 +67,13 @@ impl Health {
         if !self.filter_ok {
             r.push("Protection was not restored after the last restart.".to_string());
         } else if !self.rules_current {
-            r.push("Protection needs a quick update for this version of Sandbox-ai.".to_string());
+            r.push("Protection needs a quick update for this version of Homebody.".to_string());
         }
         if !self.group_ok {
             r.push(format!("{app_name}'s private space needs an update so it cannot look into your home folder."));
         }
         if !self.can_run {
-            r.push(format!("Sandbox-ai is not yet allowed to start {app_name} in its private space."));
+            r.push(format!("Homebody is not yet allowed to start {app_name} in its private space."));
         } else if !self.seatbelt_ok {
             r.push(format!("The launch-time protection for {app_name} could not be confirmed."));
         }
@@ -105,7 +105,7 @@ pub fn real_home() -> String {
 ///   Its web traffic is pointed at its own gate, where the usual rules and questions apply.
 /// - The ways a program running as you could step outside the profile are closed: handing a link
 ///   or file to another app, driving another app, planting something that starts at login, and
-///   reaching Sandbox-ai's own settings, key and control socket.
+///   reaching Homebody's own settings, key and control socket.
 ///
 /// It can still read and change your files, as it can when you open it normally.
 fn window_profile(app: &AppConfig) -> String {
@@ -173,7 +173,7 @@ pub fn inspect_bundle(path: &str) -> Result<Bundle, String> {
     // a second sandbox on top of ours: the app would quit at once.
     let entitlements = std::process::Command::new("/usr/bin/codesign").args(["-d", "--entitlements", "-", "--xml"]).arg(app).output().map(|o| String::from_utf8_lossy(&o.stdout).into_owned()).unwrap_or_default();
     if app_sandboxed(&entitlements) {
-        return Err(format!("{name} already runs in Apple's own sandbox, and macOS does not allow a second one around it. Apps like this need the Network Extension version of Sandbox-ai."));
+        return Err(format!("{name} already runs in Apple's own sandbox, and macOS does not allow a second one around it. Apps like this need the Network Extension version of Homebody."));
     }
     Ok(Bundle { exe: exe.to_string_lossy().into_owned(), electron: app.join("Contents/Frameworks/Electron Framework.framework").exists() })
 }
@@ -249,7 +249,7 @@ pub fn system_roots_pem() -> String {
 }
 
 /// Where the desktop app would live once installed.
-pub const INSTALL_PATH: &str = "/Applications/Sandbox-ai.app";
+pub const INSTALL_PATH: &str = "/Applications/Homebody.app";
 
 /// The .app this executable is part of, if it is part of one.
 pub fn bundle_of(exe: &str) -> Option<String> {
@@ -263,7 +263,7 @@ pub async fn install_to_applications(bundle: &str) -> Result<String, String> {
         return Ok(INSTALL_PATH.to_string());
     }
     if !std::path::Path::new(bundle).join("Contents/MacOS").is_dir() {
-        return Err("Sandbox-ai could not find its own app to copy.".into());
+        return Err("Homebody could not find its own app to copy.".into());
     }
     // Copy next to the destination first, then swap, so a failed copy never leaves half an app.
     let staging = format!("{INSTALL_PATH}.installing");
@@ -272,9 +272,9 @@ pub async fn install_to_applications(bundle: &str) -> Result<String, String> {
         Some((true, _)) => {}
         Some((false, out)) => {
             let _ = tokio::fs::remove_dir_all(&staging).await;
-            return Err(format!("Sandbox-ai could not be copied into Applications: {}", out.trim()));
+            return Err(format!("Homebody could not be copied into Applications: {}", out.trim()));
         }
-        None => return Err("Copying Sandbox-ai into Applications took too long.".into()),
+        None => return Err("Copying Homebody into Applications took too long.".into()),
     }
     let old = format!("{INSTALL_PATH}.old");
     let _ = tokio::fs::remove_dir_all(&old).await;
@@ -284,7 +284,7 @@ pub async fn install_to_applications(bundle: &str) -> Result<String, String> {
             let _ = tokio::fs::rename(&old, INSTALL_PATH).await;
         }
         let _ = tokio::fs::remove_dir_all(&staging).await;
-        return Err(format!("Sandbox-ai could not be put into Applications: {e}"));
+        return Err(format!("Homebody could not be put into Applications: {e}"));
     }
     let _ = tokio::fs::remove_dir_all(&old).await;
     Ok(INSTALL_PATH.to_string())
@@ -323,10 +323,10 @@ pub fn discover(cfg: &Config) -> Vec<crate::model::FoundApp> {
 /// Where an app's launcher lives: a small app of its own that you can keep in the Dock or find
 /// with Spotlight, so that opening the protected copy is as easy as opening the ordinary one.
 pub fn launcher_path(app: &AppConfig) -> Option<std::path::PathBuf> {
-    Some(dirs::home_dir()?.join("Applications").join("Sandbox-ai").join(format!("{} (protected).app", app.name)))
+    Some(dirs::home_dir()?.join("Applications").join("Homebody").join(format!("{} (protected).app", app.name)))
 }
 
-/// Write the launcher. `opener` is the program that knows how to ask the running Sandbox-ai to
+/// Write the launcher. `opener` is the program that knows how to ask the running Homebody to
 /// open an app (this app's own executable); the launcher runs `opener --open-protected <id>`.
 pub fn write_launcher(app: &AppConfig, opener: &str) -> Result<String, String> {
     let path = launcher_path(app).ok_or("Your home folder could not be found.")?;
@@ -353,7 +353,7 @@ pub fn write_launcher(app: &AppConfig, opener: &str) -> Result<String, String> {
         id = xml(&app.id),
     );
     std::fs::write(path.join("Contents/Info.plist"), plist).map_err(fail)?;
-    // When Sandbox-ai is not running yet it is started the ordinary way, as its own app, and
+    // When Homebody is not running yet it is started the ordinary way, as its own app, and
     // told what to open. When it is running, the request is handed over directly.
     let bundle = std::path::Path::new(opener).ancestors().find(|a| a.extension().map(|e| e == "app").unwrap_or(false)).map(|a| a.to_string_lossy().into_owned());
     let start = match &bundle {
@@ -361,7 +361,7 @@ pub fn write_launcher(app: &AppConfig, opener: &str) -> Result<String, String> {
         None => format!("exec \"$OPENER\" --open-protected {}", sh_quote(&app.id)),
     };
     let script = format!(
-        "#!/bin/sh\n# Opens {name} protected by Sandbox-ai. Created by Sandbox-ai; safe to delete.\nOPENER={opener}\nif [ -x \"$OPENER\" ]; then\n  if /usr/bin/pgrep -qf \"^$OPENER\"; then exec \"$OPENER\" --open-protected {id}; fi\n  {start}\nfi\n/usr/bin/osascript -e 'display alert \"Sandbox-ai was not found\" message \"Open Sandbox-ai and use Show launcher again to refresh this shortcut.\"' >/dev/null 2>&1\n",
+        "#!/bin/sh\n# Opens {name} protected by Homebody. Created by Homebody; safe to delete.\nOPENER={opener}\nif [ -x \"$OPENER\" ]; then\n  if /usr/bin/pgrep -qf \"^$OPENER\"; then exec \"$OPENER\" --open-protected {id}; fi\n  {start}\nfi\n/usr/bin/osascript -e 'display alert \"Homebody was not found\" message \"Open Homebody and use Show launcher again to refresh this shortcut.\"' >/dev/null 2>&1\n",
         name = app.name,
         opener = sh_quote(opener),
         id = sh_quote(&app.id),
@@ -742,7 +742,7 @@ pub fn terminal_script(app: &AppConfig, binary: &str, dir: Option<&str>) -> Stri
     let argv = fenced_argv(app, binary, &[], &[], dir);
     let workspace = dir.map(str::to_string).or_else(|| app.workspace.clone()).unwrap_or_default();
     format!(
-        "#!/bin/zsh\ncd /\nclear\nprintf '\\033[1m%s, protected by Sandbox-ai\\033[0m\\n' {name}\nprintf 'It can only reach places you trust, and can only write in:\\n  %s\\n\\n' {ws}\n{cmd}\nprintf '\\n\\033[2mProtected session ended. You can close this window.\\033[0m\\n'\n",
+        "#!/bin/zsh\ncd /\nclear\nprintf '\\033[1m%s, protected by Homebody\\033[0m\\n' {name}\nprintf 'It can only reach places you trust, and can only write in:\\n  %s\\n\\n' {ws}\n{cmd}\nprintf '\\n\\033[2mProtected session ended. You can close this window.\\033[0m\\n'\n",
         name = sh_quote(&app.name),
         ws = sh_quote(&workspace),
         cmd = argv.iter().map(|a| sh_quote(a)).collect::<Vec<_>>().join(" "),
@@ -780,6 +780,8 @@ pub async fn reveal(path: &str, select: bool) {
 
 /// Packet filter rules for every protected app. Loopback is limited to the ports each app needs.
 pub fn filter_rules(cfg: &Config, own_servers: bool) -> String {
+    // The header keeps the old name: the installed copy is compared with this text, and changing it
+    // would ask everyone to approve setup again for nothing.
     let mut s = String::from("# Sandbox-ai packet filter rules. Generated by the app; changes are overwritten.\n");
     let (lo, hi) = (crate::catalog::GATE_PORTS.start(), crate::catalog::GATE_PORTS.end());
     if own_servers && cfg.apps.iter().any(wants_own_servers) {
@@ -818,7 +820,7 @@ fn own_rules(os_user: &str, ports: &[u16]) -> String {
 }
 
 const WATCHDOG: &str = r#"#!/bin/bash
-# Sandbox-ai fence watchdog. Runs as root from launchd and keeps the packet filter rules loaded,
+# Homebody fence watchdog. Runs as root from launchd and keeps the packet filter rules loaded,
 # including after restarts and after anything else reloads the system rules.
 ANCHOR=sandboxai
 RULES=/etc/pf.anchors/sandboxai
@@ -903,7 +905,7 @@ const DAEMON_PLIST: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
 pub fn setup_script(cfg: &Config, real_user: &str) -> String {
     let users: Vec<&str> = cfg.apps.iter().filter(|a| !a.windowed).map(|a| a.os_user.as_str()).collect();
     let mut s = String::new();
-    s.push_str("#!/bin/bash\n# Sandbox-ai one-time setup. Generated by the app. Safe to run again.\nset -Eeuo pipefail\n");
+    s.push_str("#!/bin/bash\n# Homebody one-time setup. Generated by the app. Safe to run again.\nset -Eeuo pipefail\n");
     s.push_str(&format!("REAL_USER={}\nGROUP={GROUP}\nSUPPORT={}\nWORKROOT={}\n", sh_quote(real_user), sh_quote(SYSTEM_DIR), sh_quote(WORKSPACE_ROOT)));
     s.push_str(r#"
 free_id() { # first id in 590..599 then 500..589 used by neither a user nor a group
@@ -925,7 +927,7 @@ if ! dscl . -read "/Groups/$GROUP" >/dev/null 2>&1; then
   gid="$(free_id)"
   dscl . -create "/Groups/$GROUP"
   dscl . -create "/Groups/$GROUP" PrimaryGroupID "$gid"
-  dscl . -create "/Groups/$GROUP" RealName "Sandbox-ai protected apps"
+  dscl . -create "/Groups/$GROUP" RealName "Homebody protected apps"
   dscl . -create "/Groups/$GROUP" Password '*'
 fi
 GID="$(dscl . -read "/Groups/$GROUP" PrimaryGroupID | awk '{print $2}')"
@@ -943,7 +945,7 @@ ensure_user() { # name home
     dscl . -create "/Users/$u"
     dscl . -create "/Users/$u" UniqueID "$uid"
     dscl . -create "/Users/$u" PrimaryGroupID "$GID"
-    dscl . -create "/Users/$u" RealName "Sandbox-ai protected app"
+    dscl . -create "/Users/$u" RealName "Homebody protected app"
     dscl . -create "/Users/$u" UserShell /bin/zsh
     dscl . -create "/Users/$u" IsHidden 1
     dscl . -passwd "/Users/$u" "$(head -c 32 /dev/urandom | base64)"
@@ -1060,7 +1062,7 @@ esac
 }
 
 pub fn remove_script(cfg: &Config) -> String {
-    let mut s = String::from("#!/bin/bash\n# Sandbox-ai: remove everything setup created. Workspace folders are kept.\nset -uo pipefail\n");
+    let mut s = String::from("#!/bin/bash\n# Homebody: remove everything setup created. Workspace folders are kept.\nset -uo pipefail\n");
     s.push_str(r#"launchctl bootout system/com.sandboxai.fence 2>/dev/null || true
 rm -f /Library/LaunchDaemons/com.sandboxai.fence.plist /etc/sudoers.d/sandbox-ai /etc/sudoers.d/sandbox-ai-agent
 pfctl -q -a sandboxai -F all 2>/dev/null || true
@@ -1073,7 +1075,7 @@ rm -rf "/Library/Application Support/SandboxAI"
         s.push_str(&format!("pkill -u {u} 2>/dev/null || true\ndscl . -delete /Users/{} 2>/dev/null || true\nrm -rf {}\n", app.os_user, sh_quote(&home_for(&app.os_user))));
     }
     // Private users left behind by apps that were added and later removed from the list.
-    s.push_str("for u in $(dscl . -list /Users | grep '^_sai'); do\n  if dscl . -read \"/Users/$u\" RealName 2>/dev/null | grep -q 'Sandbox-ai protected app'; then pkill -u \"$u\" 2>/dev/null || true; dscl . -delete \"/Users/$u\" 2>/dev/null || true; rm -rf \"/var/sai/${u#_sai}\"; fi\ndone\n");
+    s.push_str("for u in $(dscl . -list /Users | grep '^_sai'); do\n  if dscl . -read \"/Users/$u\" RealName 2>/dev/null | grep -Eq 'Sandbox-ai protected app|Homebody protected app'; then pkill -u \"$u\" 2>/dev/null || true; dscl . -delete \"/Users/$u\" 2>/dev/null || true; rm -rf \"/var/sai/${u#_sai}\"; fi\ndone\n");
     s.push_str(&format!("dscl . -delete /Groups/{GROUP} 2>/dev/null || true\necho removed\n"));
     s
 }
@@ -1122,11 +1124,11 @@ async fn run_as_admin(script: &str, name: &str, prompt: &str) -> SetupResult {
 }
 
 pub async fn run_setup(cfg: &Config) -> SetupResult {
-    run_as_admin(&setup_script(cfg, &real_user()), "setup.sh", "Sandbox-ai needs your approval to turn on protection.").await
+    run_as_admin(&setup_script(cfg, &real_user()), "setup.sh", "Homebody needs your approval to turn on protection.").await
 }
 
 pub async fn remove_setup(cfg: &Config) -> SetupResult {
-    run_as_admin(&remove_script(cfg), "remove.sh", "Sandbox-ai needs your approval to remove protection from this computer.").await
+    run_as_admin(&remove_script(cfg), "remove.sh", "Homebody needs your approval to remove protection from this computer.").await
 }
 
 #[cfg(test)]
@@ -1193,10 +1195,10 @@ mod tests {
     }
 
     #[test]
-    fn a_launcher_is_a_small_app_that_asks_sandbox_ai_to_open_the_real_one() {
+    fn a_launcher_is_a_small_app_that_asks_homebody_to_open_the_real_one() {
         let a = windowed("my-window", "/Applications/Nope.app");
         let path = launcher_path(&a).unwrap();
-        assert!(path.ends_with("Applications/Sandbox-ai/Window (protected).app"));
+        assert!(path.ends_with("Applications/Homebody/Window (protected).app"));
         let script_for = |opener: &str| {
             let dir = tempfile::tempdir().unwrap();
             let p = dir.path().join("l.sh");
@@ -1206,8 +1208,8 @@ mod tests {
             script
         };
         // A path with a quote and a space cannot break out of the script.
-        let s = script_for("/Apps/It's here/Sandbox-ai.app/Contents/MacOS/sandbox-ai");
-        assert!(s.contains("'/Apps/It'\\''s here/Sandbox-ai.app/Contents/MacOS/sandbox-ai'"));
+        let s = script_for("/Apps/It's here/Homebody.app/Contents/MacOS/sandbox-ai");
+        assert!(s.contains("'/Apps/It'\\''s here/Homebody.app/Contents/MacOS/sandbox-ai'"));
     }
 
     #[test]
@@ -1270,8 +1272,8 @@ mod tests {
 
     #[test]
     fn the_app_bundle_is_found_from_its_executable() {
-        assert_eq!(bundle_of("/Applications/Sandbox-ai.app/Contents/MacOS/sandbox-ai").as_deref(), Some("/Applications/Sandbox-ai.app"));
-        assert_eq!(bundle_of("/Volumes/Sandbox-ai/Sandbox-ai.app/Contents/MacOS/sandbox-ai").as_deref(), Some("/Volumes/Sandbox-ai/Sandbox-ai.app"));
+        assert_eq!(bundle_of("/Applications/Homebody.app/Contents/MacOS/sandbox-ai").as_deref(), Some("/Applications/Homebody.app"));
+        assert_eq!(bundle_of("/Volumes/Homebody/Homebody.app/Contents/MacOS/sandbox-ai").as_deref(), Some("/Volumes/Homebody/Homebody.app"));
         assert_eq!(bundle_of("/usr/local/bin/sai"), None);
     }
 

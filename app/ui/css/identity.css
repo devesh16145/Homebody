@@ -1,0 +1,189 @@
+/* Identity: Homebody. "Your AI stays home."
+   A small round face peeking over the windowsill: it sees the world but stays in.
+   Loaded after tokens.css by the redesigned pages. It defines the brand palette and the
+   Liquid Glass material, and points the older tokens at it so shared components follow.
+
+   Colour roles
+     tide      the brand. Private, allowed, the main button.
+     glow      light on the face. Highlights only, never text.
+     midnight  the windowsill. App icon, dark surfaces.
+     ask       a question is waiting.
+     danger    protection off, a secret caught, something to fix.
+   Blocked is not an error, so it is neutral grey, not red. */
+
+:root {
+  --font-round: "Fredoka", ui-rounded, "SF Pro Rounded", -apple-system, BlinkMacSystemFont, "Helvetica Neue", sans-serif;
+
+  --midnight: #0b1620;
+  --glow: #6fe8da;
+  --tide: #08808c;
+  --tide-text: #066b75;
+  --tide-soft: rgba(8, 128, 140, .11);
+  --tide-line: rgba(8, 128, 140, .32);
+  --on-tide: #ffffff;
+  --ask: #e8941a;
+  --ask-text: #8a5300;
+  --ask-soft: rgba(232, 148, 26, .14);
+  --danger: #e5484d;
+  --danger-text: #c2272d;
+  --danger-soft: rgba(229, 72, 77, .11);
+  --still: #8a959d;
+  --still-soft: rgba(110, 124, 134, .12);
+
+  --ink: #0e1a22;
+  --ink-2: #4e5d67;
+  --ink-3: #7f8c95;
+
+  /* the desk behind everything, and the solid content layer on top of it */
+  --ground: #e6ecef;
+  --ground-wash: radial-gradient(120% 80% at 0% 0%, rgba(111, 232, 218, .22), transparent 55%),
+                 radial-gradient(90% 70% at 100% 100%, rgba(8, 128, 140, .10), transparent 60%);
+  --surface: #ffffff;
+  --surface-2: #f4f7f8;
+  --line: rgba(14, 26, 34, .08);
+  --line-2: rgba(14, 26, 34, .14);
+
+  /* Liquid Glass: floats above content, never under text-heavy content */
+  --glass: rgba(255, 255, 255, .58);
+  --glass-strong: rgba(255, 255, 255, .78);
+  --glass-edge: rgba(255, 255, 255, .9);
+  --glass-rim: inset 0 1px 0 rgba(255, 255, 255, .95), inset 0 0 0 1px rgba(255, 255, 255, .5), inset 0 -1px 1px rgba(14, 26, 34, .05);
+  --glass-drop: 0 1px 2px rgba(14, 26, 34, .06), 0 10px 30px rgba(14, 26, 34, .10);
+  --blur: blur(28px) saturate(185%);
+
+  --r-win: 16px;
+  --r-panel: 18px;
+  --r-card: 16px;
+  --r-row: 12px;
+
+  /* older tokens, pointed at the identity */
+  --text: var(--ink);
+  --text-2: var(--ink-2);
+  --text-3: var(--ink-3);
+  --window: var(--surface);
+  --card: var(--surface-2);
+  --accent: var(--tide);
+  --on-accent: var(--on-tide);
+  --focus: rgba(8, 128, 140, .5);
+  --selected: var(--tide-soft);
+  --green: var(--tide);
+  --green-text: var(--tide-text);
+  --green-bg: var(--tide-soft);
+  --blue: var(--tide);
+  --blue-text: var(--tide-text);
+  --blue-bg: var(--tide-soft);
+  --amber: var(--ask);
+  --amber-text: var(--ask-text);
+  --amber-bg: var(--ask-soft);
+  --hairline: var(--line);
+  --hairline-strong: var(--line-2);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --tide: #2cc3cf; --tide-text: #62dbe4; --tide-soft: rgba(44, 195, 207, .15); --tide-line: rgba(44, 195, 207, .4); --on-tide: #03282c;
+    --ask: #f2a93b; --ask-text: #f7c46e; --ask-soft: rgba(242, 169, 59, .16);
+    --danger: #ff5d61; --danger-text: #ff8285; --danger-soft: rgba(255, 93, 97, .15);
+    --still: #7d8a93; --still-soft: rgba(160, 175, 185, .12);
+    --ink: #e8eff2; --ink-2: #9aa9b2; --ink-3: #6c7a83;
+    --ground: #0a1117;
+    --ground-wash: radial-gradient(120% 80% at 0% 0%, rgba(44, 195, 207, .13), transparent 55%),
+                   radial-gradient(90% 70% at 100% 100%, rgba(111, 232, 218, .05), transparent 60%);
+    --surface: #131c23; --surface-2: #18232b;
+    --line: rgba(232, 239, 242, .08); --line-2: rgba(232, 239, 242, .15);
+    --glass: rgba(28, 40, 49, .52); --glass-strong: rgba(30, 43, 52, .8); --glass-edge: rgba(255, 255, 255, .14);
+    --glass-rim: inset 0 1px 0 rgba(255, 255, 255, .14), inset 0 0 0 1px rgba(255, 255, 255, .06), inset 0 -1px 1px rgba(0, 0, 0, .3);
+    --glass-drop: 0 1px 2px rgba(0, 0, 0, .3), 0 12px 34px rgba(0, 0, 0, .4);
+    --focus: rgba(44, 195, 207, .6);
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --tide: #2cc3cf; --tide-text: #62dbe4; --tide-soft: rgba(44, 195, 207, .15); --tide-line: rgba(44, 195, 207, .4); --on-tide: #03282c;
+  --ask: #f2a93b; --ask-text: #f7c46e; --ask-soft: rgba(242, 169, 59, .16);
+  --danger: #ff5d61; --danger-text: #ff8285; --danger-soft: rgba(255, 93, 97, .15);
+  --still: #7d8a93; --still-soft: rgba(160, 175, 185, .12);
+  --ink: #e8eff2; --ink-2: #9aa9b2; --ink-3: #6c7a83;
+  --ground: #0a1117;
+  --ground-wash: radial-gradient(120% 80% at 0% 0%, rgba(44, 195, 207, .13), transparent 55%),
+                 radial-gradient(90% 70% at 100% 100%, rgba(111, 232, 218, .05), transparent 60%);
+  --surface: #131c23; --surface-2: #18232b;
+  --line: rgba(232, 239, 242, .08); --line-2: rgba(232, 239, 242, .15);
+  --glass: rgba(28, 40, 49, .52); --glass-strong: rgba(30, 43, 52, .8); --glass-edge: rgba(255, 255, 255, .14);
+  --glass-rim: inset 0 1px 0 rgba(255, 255, 255, .14), inset 0 0 0 1px rgba(255, 255, 255, .06), inset 0 -1px 1px rgba(0, 0, 0, .3);
+  --glass-drop: 0 1px 2px rgba(0, 0, 0, .3), 0 12px 34px rgba(0, 0, 0, .4);
+  --focus: rgba(44, 195, 207, .6);
+  color-scheme: dark;
+}
+
+/* ---------- material ---------- */
+.glass {
+  background: var(--glass);
+  -webkit-backdrop-filter: var(--blur); backdrop-filter: var(--blur);
+  box-shadow: var(--glass-rim), var(--glass-drop);
+}
+@media (prefers-reduced-transparency: reduce) { .glass { background: var(--glass-strong); -webkit-backdrop-filter: none; backdrop-filter: none; } }
+
+/* ---------- controls: capsules ---------- */
+.cap {
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 30px; padding: 0 14px;
+  border: 0; border-radius: 999px; font: 500 var(--fs-body)/1 var(--font); color: var(--ink); white-space: nowrap;
+  background: var(--glass-strong); box-shadow: var(--glass-rim), 0 1px 2px rgba(14, 26, 34, .08);
+  transition: transform var(--t-fast) var(--ease), filter var(--t-fast);
+}
+.cap .ic { width: 14px; height: 14px; }
+.cap:hover { filter: brightness(1.03); }
+.cap:active { transform: scale(.97); }
+.cap:focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
+.cap.tide { background: var(--tide); color: var(--on-tide); box-shadow: inset 0 1px 0 rgba(255, 255, 255, .3), 0 4px 14px var(--tide-line); }
+.cap.ask { background: var(--ask); color: #fff; }
+.cap.quiet { background: transparent; box-shadow: none; color: var(--ink-2); }
+.cap.quiet:hover { background: var(--still-soft); }
+.cap.danger { color: var(--danger-text); }
+.cap.lg { height: 38px; padding: 0 20px; font-size: var(--fs-title); font-weight: 600; }
+.cap.sm { height: 26px; padding: 0 11px; font-size: var(--fs-small); }
+.cap.icon { width: 30px; padding: 0; }
+.cap[disabled] { opacity: .4; pointer-events: none; }
+
+/* the switch takes the brand colour */
+.switch input:checked + i { background: var(--tide); }
+
+/* ---------- the mark: Homebody peeking over the sill ---------- */
+.mark { display: block; flex: none; overflow: visible; }
+.mark-live .hb-eyes { animation: blink 6.5s infinite; transform-origin: center; transform-box: fill-box; }
+@keyframes blink { 0%, 93%, 100% { transform: scaleY(1); } 95.5% { transform: scaleY(.1); } }
+@media (prefers-reduced-motion: reduce) { .mark-live .hb-eyes { animation: none; } }
+
+/* ---------- app icons: glass tiles ---------- */
+.tile {
+  position: relative; display: inline-grid; place-items: center; flex: none; overflow: hidden;
+  width: 20px; height: 20px; border-radius: 6px; color: #fff;
+  font: 700 11px/1 var(--font-round); letter-spacing: -.02em;
+  background: linear-gradient(160deg, var(--t1, #9aa8b1), var(--t2, #5c6b75));
+  box-shadow: inset 0 0 0 .5px rgba(255, 255, 255, .35), 0 1px 2px rgba(14, 26, 34, .18);
+}
+.tile::before {   /* the glass sheen across the top */
+  content: ""; position: absolute; inset: 0 0 46% 0; border-radius: inherit;
+  background: linear-gradient(180deg, rgba(255, 255, 255, .42), rgba(255, 255, 255, 0));
+}
+.tile > * { position: relative; }
+.tile.real { background: none; box-shadow: none; overflow: visible; }
+.tile.real::before, .tile.real .tile-g { display: none; }
+.tile-img { position: absolute; inset: -12%; width: 124%; height: 124%; max-width: none; }
+.tile.two .tile-g { font-size: .8em; letter-spacing: -.045em; }
+.tile.s16.two .tile-g { font-size: .72em; letter-spacing: -.07em; }
+.tile.ink-dark { color: #1b2228; }
+.tile.s16 { width: 16px; height: 16px; border-radius: 5px; font-size: 9px; }
+.tile.s24 { width: 24px; height: 24px; border-radius: 7px; font-size: 13px; }
+.tile.s28 { width: 28px; height: 28px; border-radius: 8px; font-size: 15px; }
+.tile.s36 { width: 36px; height: 36px; border-radius: 10px; font-size: 19px; }
+.tile.s44 { width: 44px; height: 44px; border-radius: 12px; font-size: 23px; }
+.tile.s56 { width: 56px; height: 56px; border-radius: 15px; font-size: 29px; }
+.tile.s72 { width: 72px; height: 72px; border-radius: 19px; font-size: 38px; box-shadow: inset 0 0 0 .5px rgba(255, 255, 255, .35), 0 6px 18px rgba(14, 26, 34, .22); }
+
+/* ---------- state dot in identity colours ---------- */
+.dot.d-private { background: var(--tide); box-shadow: 0 0 0 3px var(--tide-soft); }
+.dot.d-watching { background: transparent; box-shadow: inset 0 0 0 2.5px var(--tide); }
+.dot.d-asking, .dot.d-attention { background: var(--ask); box-shadow: 0 0 0 3px var(--ask-soft); }
+.dot.d-blocked { background: var(--ink); box-shadow: 0 0 0 3px var(--still-soft); }
+.dot.d-off { background: var(--danger); box-shadow: 0 0 0 3px var(--danger-soft); }

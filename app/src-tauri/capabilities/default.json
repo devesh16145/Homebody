@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Every Sandbox-ai window may talk to the core and listen for its events.",
+  "description": "Every Homebody window may talk to the core and listen for its events.",
   "windows": ["main", "glance", "prompt"],
   "permissions": ["core:default"]
 }

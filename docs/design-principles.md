@@ -84,7 +84,7 @@ All 88 features exist. About eight are visible in Glance and Feed. The rest live
 
 ## 7. Growth is built into the product, not bolted on
 
-- The proof card is the share unit. Signed, verifiable, pretty, and it names the app ("Protected by Sandbox-ai").
+- The proof card is the share unit. Signed, verifiable, pretty, and it names the app ("Protected by Homebody").
 - Presets are the contribution unit. Anyone can add an app in a small YAML file; the preset repo is where the community meets the product.
 - Developers are the distribution unit. They install it for their agents, then tell their family it also keeps Jan private.
 - The bypass corpus is the credibility unit. Every public test we publish is a reason a security engineer recommends us.

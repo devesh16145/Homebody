@@ -1,4 +1,4 @@
-//! `sai` — the Sandbox-ai command line.
+//! `sai` — the Homebody command line.
 //!
 //! Talks to the running app over its private control socket, or runs the engine itself with
 //! `sai daemon` when the app is not open. Same core, same rules, same log.
@@ -7,7 +7,7 @@ use sai_core::{control, Engine};
 use serde_json::{json, Value};
 use std::os::unix::process::CommandExt;
 
-const HELP: &str = "sai — Sandbox-ai command line
+const HELP: &str = "sai — Homebody command line
 
   sai status                      what is protected and how it is going
   sai feed [-n N]                 recent connections

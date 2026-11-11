@@ -46,6 +46,9 @@ fn provider() -> Arc<rustls::crypto::CryptoProvider> {
 fn ca_params() -> CertificateParams {
     let mut p = CertificateParams::default();
     let mut dn = DistinguishedName::new();
+    // Never change these: per-site certificates name their issuer with them, and they must match
+    // the authority already saved and handed to protected apps, or every connection fails.
+    // (Kept from before the app was called Homebody.)
     dn.push(DnType::CommonName, "Sandbox-ai local inspection");
     dn.push(DnType::OrganizationName, "Sandbox-ai, this computer only");
     p.distinguished_name = dn;

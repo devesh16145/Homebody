@@ -29,19 +29,89 @@ export function icon(name, cls = '') {
   return `<svg class="ic ${cls}" viewBox="0 0 16 16" aria-hidden="true">${P[name] || ''}</svg>`;
 }
 
-const TILES = { ollama: 'O', claude: 'C' };
+// App icons. An app shows its own icon when the maker's Mac app gives us one (setAppIcons);
+// otherwise a glass tile in the maker's colour with a short monogram. No brand logos are drawn here.
+// [top colour, bottom colour, letters, dark letters?]
+const TINTS = {
+  'claude code': ['#e9946c', '#b4502c', 'Cc'],
+  ollama: ['#ffffff', '#d5dbdf', 'O', true],
+  'codex cli': ['#3a3d42', '#0d0e10', 'Cx'],
+  'gemini cli': ['#7fb2ff', '#4b57e0', 'G'],
+  aider: ['#46cf95', '#178555', 'Ai'],
+  opencode: ['#59606a', '#1f2328', 'oc'],
+  'llama.cpp': ['#ffbe5c', '#d86f17', 'll'],
+  'cursor cli': ['#4a4a4e', '#121214', 'Cu'],
+  openclaw: ['#f7776a', '#c0372b', 'Cl'],
+  'lm studio': ['#9b8cff', '#5a47d6', 'LM'],
+};
+const SPARE = [['#8fd3e8', '#2f86a6'], ['#b9c6a0', '#5f7a3b'], ['#e7b7d0', '#a14d7d'], ['#c2b49c', '#7b6243'], ['#a9b6c2', '#4f6070']];
+const REAL = new Map();   // lower-case app name -> image URL
 
-/** Rounded monogram tile keyed by the contract's `icon` field. size: 16 | 20 | 28 | 36 */
-export function appTile(key, name = '', size = 20) {
-  const k = TILES[key] ? key : 'generic';
-  const glyph = TILES[k] || (name ? esc(name.trim().charAt(0).toUpperCase()) : icon('spark'));
-  return `<span class="tile t-${k}${size !== 20 ? ' s' + size : ''}" aria-hidden="true">${glyph}</span>`;
+/** Icons taken from the makers' own Mac apps, by app name. */
+export function setAppIcons(map) { for (const [k, v] of Object.entries(map || {})) REAL.set(k.toLowerCase(), v); }
+
+// In a browser preview, use icons copied from this Mac's own apps (app/ui/.local-icons, not in git).
+// In the real app the core supplies them. Missing files fall back to the tile.
+if (typeof window !== 'undefined' && !window.__TAURI__) {
+  setAppIcons({ 'Claude Code': '.local-icons/claude.png', 'Codex CLI': '.local-icons/chatgpt.png', 'Cursor CLI': '.local-icons/cursor.png' });
 }
 
-/** The product mark: a ring with a solid center. Used on setup and Proof. */
-export function mark(size = 44) {
-  return `<svg class="mark" width="${size}" height="${size}" viewBox="0 0 44 44" aria-hidden="true">
-    <circle cx="22" cy="22" r="20" fill="var(--green-bg)"/>
-    <circle cx="22" cy="22" r="12.5" fill="none" stroke="var(--green)" stroke-width="2.5"/>
-    <circle cx="22" cy="22" r="5" fill="var(--green)"/></svg>`;
+/** An app's icon. size: 16 | 20 | 24 | 28 | 36 | 44 | 56 | 72 */
+export function appTile(key, name = '', size = 20) {
+  const n = String(name).trim().toLowerCase();
+  let t = TINTS[n] || (key === 'claude' ? TINTS['claude code'] : key === 'ollama' ? TINTS.ollama : null);
+  if (!t) { let h = 0; for (const c of n) h = (h * 31 + c.charCodeAt(0)) >>> 0; t = SPARE[h % SPARE.length]; }
+  const letters = t[2] || (name ? name.trim().charAt(0).toUpperCase() : '');
+  const glyph = letters ? esc(letters) : icon('spark');
+  const real = REAL.get(n);
+  const img = real ? `<img class="tile-img" src="${esc(real)}" alt="" onerror="this.parentNode.classList.remove('real');this.remove()">` : '';
+  return `<span class="tile${real ? ' real' : ''}${t[3] ? ' ink-dark' : ''}${letters.length > 1 ? ' two' : ''}${size !== 20 ? ' s' + size : ''}" style="--t1:${t[0]};--t2:${t[1]}" aria-hidden="true"><span class="tile-g">${glyph}</span>${img}</span>`;
+}
+
+/* ---------- The Homebody mark: a small round face peeking over the windowsill. ---------- */
+
+let seq = 0;
+
+/**
+ * state: 'private' (peeking), 'ask' (looks up at you, amber), 'shut' (ducked down: everything blocked),
+ * 'off' (outline only: not protected). live: blinks now and then.
+ */
+export function mark(size = 44, state = 'private', live = false) {
+  const k = 'hb' + (++seq);
+  const headY = state === 'shut' ? 50 : 40;
+  const [dx, dy] = state === 'ask' ? [2.2, -2.2] : [0, 0];
+  const eyes = state === 'shut' ? '' : `<g class="hb-eyes"><ellipse cx="${25 + dx}" cy="${31 + dy}" rx="2.7" ry="3.8"/><ellipse cx="${39 + dx}" cy="${31 + dy}" rx="2.7" ry="3.8"/></g>`;
+  const tone = state === 'off' ? 'var(--ink-3)' : 'var(--tide)';
+  const head = state === 'ask' ? 'var(--ask)' : 'currentColor';
+  return `<svg class="mark${live ? ' mark-live' : ''}" width="${size}" height="${size}" viewBox="0 0 64 64" aria-hidden="true" style="color:${tone}">
+    <defs><mask id="${k}m"><rect width="64" height="64" fill="#fff"/><g fill="#000">${eyes}</g></mask><clipPath id="${k}c"><rect width="64" height="40"/></clipPath></defs>
+    <g clip-path="url(#${k}c)">${state === 'off'
+      ? `<path d="M13.75 40A18.25 18.25 0 0 1 50.25 40" fill="none" stroke="currentColor" stroke-width="3.5"/><g fill="currentColor">${eyes}</g>`
+      : `<path d="M12 ${headY}A20 20 0 0 1 52 ${headY}Z" style="fill:${head}" mask="url(#${k}m)"/>`}</g>
+    <rect x="6" y="40" width="52" height="6" rx="3" fill="currentColor"/>
+    ${state === 'shut' ? '' : '<circle cx="17.5" cy="40.5" r="3.6" fill="currentColor"/><circle cx="46.5" cy="40.5" r="3.6" fill="currentColor"/>'}
+  </svg>`;
+}
+
+/** The Homebody app icon, as drawn for the Dock. */
+export function appIcon(size = 128) {
+  const k = 'hbi' + (++seq);
+  return `<svg width="${size}" height="${size}" viewBox="0 0 100 100" aria-hidden="true" class="app-icon">
+    <defs>
+      <linearGradient id="${k}g" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#5ad6de"/><stop offset="1" stop-color="#077a86"/></linearGradient>
+      <linearGradient id="${k}f" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#ffffff"/><stop offset="1" stop-color="#d9f3f5"/></linearGradient>
+      <linearGradient id="${k}s" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#fff" stop-opacity=".28"/><stop offset=".5" stop-color="#fff" stop-opacity="0"/></linearGradient>
+      <clipPath id="${k}t"><rect x="4" y="4" width="92" height="92" rx="22"/></clipPath>
+    </defs>
+    <g clip-path="url(#${k}t)">
+      <rect x="4" y="4" width="92" height="96" fill="url(#${k}g)"/>
+      <path d="M22 66A28 28 0 0 1 78 66Z" fill="url(#${k}f)"/>
+      <ellipse cx="40" cy="52" rx="3.8" ry="5.3" fill="#0b1620"/><ellipse cx="60" cy="52" rx="3.8" ry="5.3" fill="#0b1620"/>
+      <rect x="4" y="66" width="92" height="34" fill="#0b1620" fill-opacity=".86"/>
+      <rect x="4" y="66" width="92" height="2" fill="#fff" fill-opacity=".25"/>
+      <circle cx="29" cy="66.5" r="5.2" fill="url(#${k}f)"/><circle cx="71" cy="66.5" r="5.2" fill="url(#${k}f)"/>
+      <rect x="4" y="4" width="92" height="92" fill="url(#${k}s)"/>
+    </g>
+    <rect x="4.5" y="4.5" width="91" height="91" rx="21.5" fill="none" stroke="#fff" stroke-opacity=".22"/>
+  </svg>`;
 }

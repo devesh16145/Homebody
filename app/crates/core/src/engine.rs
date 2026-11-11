@@ -349,11 +349,11 @@ impl Engine {
         let Some(host) = hostname::canonical(raw_host) else {
             let shown: String = raw_host.chars().filter(|c| !c.is_control()).take(120).collect();
             self.record_deny(app_id, &shown, port, Reason::Malformed);
-            return deny(Reason::Malformed, None, "Blocked by Sandbox-ai: this is not an ordinary destination name.");
+            return deny(Reason::Malformed, None, "Blocked by Homebody: this is not an ordinary destination name.");
         };
         if port != 443 && port != 80 {
             self.record_deny_detail(app_id, &host, port, Reason::Malformed, "port", "");
-            return deny(Reason::Malformed, Some(host), "Blocked by Sandbox-ai: only ordinary web connections are possible from a protected app.");
+            return deny(Reason::Malformed, Some(host), "Blocked by Homebody: only ordinary web connections are possible from a protected app.");
         }
 
         let found = {
@@ -362,15 +362,15 @@ impl Engine {
         };
         let Some((mode, lockdown, ask_enabled, app, rule)) = found else {
             self.record_deny(app_id, &host, port, Reason::NotTrusted);
-            return deny(Reason::NotTrusted, Some(host), "Blocked by Sandbox-ai.");
+            return deny(Reason::NotTrusted, Some(host), "Blocked by Homebody.");
         };
         let (label, _) = catalog::describe(&host);
-        let refused = format!("Blocked by Sandbox-ai: {} is not a trusted destination for {}.", label, app.name);
+        let refused = format!("Blocked by Homebody: {} is not a trusted destination for {}.", label, app.name);
         let allow = |reason: Reason, ask: Option<u64>| Decision { allow: true, reason, ask, host: Some(host.clone()), message: String::new() };
 
         if lockdown {
             self.record_deny(app_id, &host, port, Reason::Lockdown);
-            return deny(Reason::Lockdown, Some(host), "Blocked by Sandbox-ai: everything is blocked right now.");
+            return deny(Reason::Lockdown, Some(host), "Blocked by Homebody: everything is blocked right now.");
         }
         match mode {
             Mode::Off => return allow(Reason::ProtectionOff, None),
@@ -380,7 +380,7 @@ impl Engine {
         match rule {
             Some(r) if r.enabled && self.over_limit(app_id, &host) => {
                 self.record_deny_detail(app_id, &host, port, Reason::NotTrusted, "limit", &r.limit_mb.unwrap_or(0).to_string());
-                return deny(Reason::NotTrusted, Some(host), &format!("Blocked by Sandbox-ai: {} has sent as much to {} this hour as its limit allows.", app.name, label));
+                return deny(Reason::NotTrusted, Some(host), &format!("Blocked by Homebody: {} has sent as much to {} this hour as its limit allows.", app.name, label));
             }
             Some(r) if r.enabled => return allow(Reason::Trusted, None),
             Some(r) => {
@@ -587,10 +587,10 @@ impl Engine {
     /// takes its trusted certificates from the Mac itself never hears about it.
     fn cannot_inspect(app: &AppConfig) -> Option<String> {
         if app.windowed {
-            Some(format!("{} is a windowed app and takes its trusted certificates from your Mac, which Sandbox-ai does not change. Its connections cannot be looked inside yet.", app.name))
+            Some(format!("{} is a windowed app and takes its trusted certificates from your Mac, which Homebody does not change. Its connections cannot be looked inside yet.", app.name))
         } else if app.kind == "model" {
             // Seen on a real run: Ollama refused the certificate.
-            Some(format!("{} takes its trusted certificates from your Mac, which Sandbox-ai does not change. Its connections cannot be looked inside yet.", app.name))
+            Some(format!("{} takes its trusted certificates from your Mac, which Homebody does not change. Its connections cannot be looked inside yet.", app.name))
         } else {
             None
         }
@@ -760,7 +760,7 @@ impl Engine {
                 let title = if purpose == "Model download" { format!("{} wants to download a model", app.name) } else { format!("{} wants to reach {}", app.name, label) };
                 let body = match (purpose.as_str(), label == host) {
                     ("Model download", _) => format!("From {label} ({host}). Allow?"),
-                    ("", _) => "Sandbox-ai does not know this place. Allow?".to_string(),
+                    ("", _) => "Homebody does not know this place. Allow?".to_string(),
                     (p, true) => format!("{p}. Allow?"),
                     (p, false) => format!("{p} ({host}). Allow?"),
                 };
@@ -1074,14 +1074,14 @@ impl Engine {
         }
         let mut s = match row.reason {
             Reason::Trusted => format!("{label} is on {app_name}'s trusted list."),
-            Reason::YouAllowedOnce if row.detail == "self" => "Sandbox-ai itself contacted this place because you asked it to. It sent a fingerprint of the log, or asked whether there is a newer version; nothing from your apps.".into(),
+            Reason::YouAllowedOnce if row.detail == "self" => "Homebody itself contacted this place because you asked it to. It sent a fingerprint of the log, or asked whether there is a newer version; nothing from your apps.".into(),
             Reason::YouAllowedOnce => "You allowed this once.".into(),
             Reason::YouAlwaysAllow => "You chose to always allow this.".into(),
             Reason::YouBlocked => "You blocked this.".into(),
             Reason::NotTrusted if row.detail == "limit" => format!("{app_name} has sent as much to {label} this hour as the limit you set allows{}, so this was stopped. It can go on once the hour has moved on.", if row.other.is_empty() { String::new() } else { format!(" ({} MB)", row.other) }),
             Reason::NotTrusted if row.detail == "secret" => {
                 let kind = row.other.split('|').next().unwrap_or("a secret");
-                format!("{app_name} was about to send what looks like {kind} to {label}. Sandbox-ai stopped the request before it left.")
+                format!("{app_name} was about to send what looks like {kind} to {label}. Homebody stopped the request before it left.")
             }
             Reason::NotTrusted if row.detail == "path" => {
                 let (what, _) = catalog::describe_inside(&row.host, &row.other);
@@ -1099,9 +1099,9 @@ impl Engine {
                 "no_name" => format!("{app_name} asked for {label} but would not say who it was greeting, so the connection was cut."),
                 "not_encrypted" => format!("{app_name} asked for {label} but did not start an ordinary encrypted connection, so it was cut."),
                 "other_site" => format!("Inside its connection to {label}, {app_name} addressed a different site ({}). That is how a trusted name is used as cover, so the connection was cut.", row.other),
-                "not_followed" => format!("{app_name} sent {} to {label}. Sandbox-ai could not follow it, so it was not let through.", if row.other.is_empty() { "something unusual" } else { row.other.as_str() }),
-                "no_inspect" => format!("{app_name} did not accept Sandbox-ai's certificate for {label}, so nothing was sent. If this keeps happening, switch off \"Look inside\" for {app_name}: it does not support it."),
-                "real_certificate" => format!("The real {label} did not show a certificate that checks out, so Sandbox-ai did not connect {app_name} to it."),
+                "not_followed" => format!("{app_name} sent {} to {label}. Homebody could not follow it, so it was not let through.", if row.other.is_empty() { "something unusual" } else { row.other.as_str() }),
+                "no_inspect" => format!("{app_name} did not accept Homebody's certificate for {label}, so nothing was sent. If this keeps happening, switch off \"Look inside\" for {app_name}: it does not support it."),
+                "real_certificate" => format!("The real {label} did not show a certificate that checks out, so Homebody did not connect {app_name} to it."),
                 _ => "This was not an ordinary destination name, so it was blocked.".into(),
             },
             Reason::LocalAddress => "This name points at your own computer or network, so it was blocked.".into(),
@@ -1292,7 +1292,7 @@ impl Engine {
         };
         let setup_needed = matches!(fence, FenceState::Down | FenceState::NotInstalled) || !self.0.listen_errors.lock().unwrap().is_empty();
         if fence == FenceState::NotInstalled {
-            reasons = vec!["Sandbox-ai has not been set up on this computer yet.".into()];
+            reasons = vec!["Homebody has not been set up on this computer yet.".into()];
         }
 
         let recently_blocked = self.0.last_blocked.lock().unwrap().map(|t| t.elapsed() < BLOCKED_INDICATOR).unwrap_or(false);
@@ -1448,7 +1448,7 @@ impl Engine {
         });
         let signature = self.0.ledger.lock().unwrap().sign(ledger::canonical(&body).as_bytes());
         let file = json!({ "proof": body, "signature": signature, "how_to_check": "The signature is Ed25519 over the canonical JSON (sorted keys, no spaces) of \"proof\", made with \"publicKey\"." });
-        let name = format!("Sandbox-ai proof {}.json", chrono::Local::now().format("%Y-%m-%d %H.%M"));
+        let name = format!("Homebody proof {}.json", chrono::Local::now().format("%Y-%m-%d %H.%M"));
         let path = paths::downloads_dir().join(name);
         std::fs::write(&path, serde_json::to_vec_pretty(&file).unwrap_or_default()).map_err(|e| format!("The proof could not be saved: {e}"))?;
         Ok(path.to_string_lossy().into_owned())
@@ -1457,7 +1457,7 @@ impl Engine {
     /// The whole log, exactly as written, with one signed line in front saying what it is.
     /// `sai verify <file>` (or anyone's own code) can check it without this computer.
     fn export_log(&self) -> Result<String, String> {
-        let dir = paths::downloads_dir().join(format!("Sandbox-ai export {}", chrono::Local::now().format("%Y-%m-%d %H.%M")));
+        let dir = paths::downloads_dir().join(format!("Homebody export {}", chrono::Local::now().format("%Y-%m-%d %H.%M")));
         let fail = |what: &str, e: std::io::Error| format!("The {what} could not be saved: {e}");
         std::fs::create_dir_all(&dir).map_err(|e| fail("export", e))?;
         // 1. The whole log, exactly as written, with a signed first line. This is the evidence.
@@ -1477,7 +1477,7 @@ impl Engine {
                 let _ = std::fs::copy(e.path(), out.join(e.file_name()));
             }
         }
-        let readme = "Sandbox-ai export\n=================\n\nlog.jsonl      Every decision, exactly as it was written. The first line says what the file is and\n               carries the key to check it with; each following line is one record, linked to the one\n               before and signed. Check it on any computer with:  sai verify log.jsonl\n               Compare the key it prints with the one on the Proof screen to know whose log it is.\nactivity.csv   The same events as a table for a spreadsheet. Convenient to read; it is not signed.\nrules.json     The rules in force when this export was made.\ntimestamps/    Present if independent timestamps were asked for. Each .tsr is a statement by a public\n               time-stamping service that a log ending in a given record existed at that time. Check\n               one with:  openssl ts -reply -in <file>.tsr -text\n";
+        let readme = "Homebody export\n=================\n\nlog.jsonl      Every decision, exactly as it was written. The first line says what the file is and\n               carries the key to check it with; each following line is one record, linked to the one\n               before and signed. Check it on any computer with:  sai verify log.jsonl\n               Compare the key it prints with the one on the Proof screen to know whose log it is.\nactivity.csv   The same events as a table for a spreadsheet. Convenient to read; it is not signed.\nrules.json     The rules in force when this export was made.\ntimestamps/    Present if independent timestamps were asked for. Each .tsr is a statement by a public\n               time-stamping service that a log ending in a given record existed at that time. Check\n               one with:  openssl ts -reply -in <file>.tsr -text\n";
         std::fs::write(dir.join("README.txt"), readme).map_err(|e| fail("export", e))?;
         Ok(dir.to_string_lossy().into_owned())
     }
@@ -1504,7 +1504,7 @@ impl Engine {
 
     /// Ask a public time-stamping service to vouch that the log, as it stands, existed now.
     /// Only a fingerprint of the last record is sent: nothing from the log itself. The answer
-    /// is kept and goes into exports. This is Sandbox-ai itself contacting a server, so it
+    /// is kept and goes into exports. This is Homebody itself contacting a server, so it
     /// happens only when asked for, and it is written into the log like any other contact.
     async fn timestamp_log(&self) -> Result<Value, String> {
         const SERVICE: &str = "http://timestamp.digicert.com";
@@ -1543,18 +1543,19 @@ impl Engine {
     }
 
     /// Ask where the project is published whether there is a newer version. Only when the user
-    /// asks: it is Sandbox-ai itself contacting a server, and it is written into the log.
+    /// asks: it is Homebody itself contacting a server, and it is written into the log.
     async fn check_update(&self) -> Result<Value, String> {
+        // Where releases are published. Changes when the repository is re-created under the new name.
         const HOME: &str = "devesh16145/Sandbox-ai";
         let out = tokio::time::timeout(
             Duration::from_secs(15),
-            tokio::process::Command::new("/usr/bin/curl").args(["-sS", "--max-time", "10", "-H", "Accept: application/vnd.github+json", "-H", "User-Agent: sandbox-ai-update-check"]).arg(format!("https://api.github.com/repos/{HOME}/releases/latest")).output(),
+            tokio::process::Command::new("/usr/bin/curl").args(["-sS", "--max-time", "10", "-H", "Accept: application/vnd.github+json", "-H", "User-Agent: homebody-update-check"]).arg(format!("https://api.github.com/repos/{HOME}/releases/latest")).output(),
         )
         .await
         .ok()
         .and_then(|r| r.ok());
         self.append("conn", fields! { "app" => "sandbox-ai", "host" => "api.github.com", "port" => 443, "decision" => "allow", "reason" => "you_allowed_once", "detail" => "self" });
-        let Some(out) = out.filter(|o| o.status.success()) else { return Err("The place where Sandbox-ai is published could not be reached.".into()) };
+        let Some(out) = out.filter(|o| o.status.success()) else { return Err("The place where Homebody is published could not be reached.".into()) };
         let reply: Value = serde_json::from_slice(&out.stdout).unwrap_or(Value::Null);
         let latest = reply.get("tag_name").and_then(Value::as_str).map(|t| t.trim_start_matches('v').to_string());
         let newer = latest.as_deref().map(|l| newer_version(l, crate::VERSION)).unwrap_or(false);
@@ -1892,7 +1893,7 @@ impl Engine {
             "get_install" => Ok(self.install_info()),
             // Copies the app into Applications. The shell then restarts from the new copy.
             "install_app" => {
-                let bundle = self.0.opener.lock().unwrap().as_deref().and_then(fence::bundle_of).ok_or("Only the Sandbox-ai app can install itself.")?;
+                let bundle = self.0.opener.lock().unwrap().as_deref().and_then(fence::bundle_of).ok_or("Only the Homebody app can install itself.")?;
                 let path = fence::install_to_applications(&bundle).await?;
                 Ok(json!({ "path": path }))
             }
@@ -1914,7 +1915,7 @@ impl Engine {
             // A small app of its own for the Dock or Spotlight that opens this one protected.
             "app_launcher" => {
                 let app = self.0.cfg.lock().unwrap().app(&req("appId")?).cloned().ok_or("Unknown app.")?;
-                let opener = self.0.opener.lock().unwrap().clone().ok_or("Launchers are made by the Sandbox-ai app. Open it and try again.")?;
+                let opener = self.0.opener.lock().unwrap().clone().ok_or("Launchers are made by the Homebody app. Open it and try again.")?;
                 let path = fence::write_launcher(&app, &opener)?;
                 if args.get("reveal").and_then(Value::as_bool).unwrap_or(true) {
                     fence::reveal(&path, true).await;

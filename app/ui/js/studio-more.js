@@ -113,7 +113,7 @@ export const advanced = {
       : '<button class="btn danger" data-do="ad-ask" data-key="ad-ask">Remove protection from this computer</button>';
     patch(this.env.body(), `<div class="ad"><h2>Advanced</h2>
       <p class="lead">The technical details behind the switches. You never need to change anything here.</p>
-      ${this.install && this.install.path ? `<section><h3>Where Sandbox-ai lives</h3>
+      ${this.install && this.install.path ? `<section><h3>Where Homebody lives</h3>
         <div class="ad-switch"><span class="grow"><b>${this.install.installed ? 'In your Applications folder' : 'Not in your Applications folder yet'}</b><br><span class="muted mono sel">${esc(this.install.path)}</span></span>
           ${this.install.canInstall ? `<button class="btn" data-do="ad-install" data-key="ad-install"${this.installing ? ' disabled' : ''}>${this.installing ? 'Moving…' : 'Move to Applications'}</button>` : ''}</div>
         ${this.install.canInstall ? '<p class="muted ad-note">Copies the app into Applications and reopens it from there. Protected apps that are running are stopped first, and your launchers keep working.</p>' : ''}
@@ -126,8 +126,8 @@ export const advanced = {
           ${s.localServers ? '' : `<button class="btn" data-do="ad-local" data-key="ad-local"${this.localBusy ? ' disabled' : ''}>${this.localBusy ? 'Waiting for your approval…' : 'Test and turn on'}</button>`}</div>
         ${this.localNote ? `<div class="notice ${this.localNote.ok ? 'ok' : 'warn'}" role="status">${icon(this.localNote.ok ? 'check' : 'alert')}<span>${esc(this.localNote.text)}</span></div>` : ''}</section>
       ${this.login == null ? '' : `<section><h3>Start-up</h3>
-        <label class="ad-switch"><span class="grow"><b>Open Sandbox-ai when I log in</b><br><span class="muted">So protected apps are ready, and the menu-bar icon is there, without you starting anything.</span></span>
-          <span class="switch green"><input type="checkbox" role="switch" data-login data-key="ad-login" aria-label="Open Sandbox-ai when I log in"${this.login ? ' checked' : ''}><i></i></span></label></section>`}
+        <label class="ad-switch"><span class="grow"><b>Open Homebody when I log in</b><br><span class="muted">So protected apps are ready, and the menu-bar icon is there, without you starting anything.</span></span>
+          <span class="switch green"><input type="checkbox" role="switch" data-login data-key="ad-login" aria-label="Open Homebody when I log in"${this.login ? ' checked' : ''}><i></i></span></label></section>`}
       <section><h3>Health</h3>
         <div class="row"><button class="btn" data-do="ad-check" data-key="ad-check"${this.checking ? ' disabled' : ''}>Check protection now</button></div>${health}</section>
       <section><h3>Settings <span class="tag">Read-only</span></h3>${code}</section>
@@ -137,7 +137,7 @@ export const advanced = {
       <section><h3>Remove</h3>
         <p class="muted ad-note">Undoes everything the one-time setup created. You can set it up again at any time.</p>${removal}</section>
       <section><h3>Version</h3>
-        <div class="ad-switch"><span class="grow"><b>Version ${esc(s.version || '')}</b><br><span class="muted">${esc(this.updateText || 'Sandbox-ai never checks for updates by itself. Checking contacts the place where it is published, once, and is shown in the Feed.')}</span></span>
+        <div class="ad-switch"><span class="grow"><b>Version ${esc(s.version || '')}</b><br><span class="muted">${esc(this.updateText || 'Homebody never checks for updates by itself. Checking contacts the place where it is published, once, and is shown in the Feed.')}</span></span>
           <button class="btn" data-do="ad-update" data-key="ad-update"${this.updating ? ' disabled' : ''}>${this.updating ? 'Checking…' : 'Check for a newer version'}</button></div></section></div>`);
   },
 

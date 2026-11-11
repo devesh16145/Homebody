@@ -231,7 +231,7 @@ pub fn verify_export(path: &Path) -> (ChainCheck, Option<String>) {
     }
     let header: Value = serde_json::from_str(first.trim()).unwrap_or(Value::Null);
     if header.get("format").and_then(Value::as_str) != Some(EXPORT_FORMAT) {
-        return fail("This is not a Sandbox-ai log export.");
+        return fail("This is not a Homebody log export.");
     }
     let Some(key) = header.get("publicKey").and_then(Value::as_str).map(str::to_string) else { return fail("The export does not say which key signed it.") };
     let Some(vk) = b64().decode(&key).ok().and_then(|b| <[u8; 32]>::try_from(b).ok()).and_then(|k| VerifyingKey::from_bytes(&k).ok()) else { return fail("The public key is not valid.") };
@@ -417,7 +417,7 @@ mod tests {
 
         // Not an export at all.
         std::fs::write(&out, lines[1..].join("\n")).unwrap();
-        assert!(verify_export(&out).0.error.unwrap().contains("not a Sandbox-ai log export"));
+        assert!(verify_export(&out).0.error.unwrap().contains("not a Homebody log export"));
     }
 
     #[test]

@@ -327,7 +327,7 @@ export function createMock(scenarioName) {
     },
     async export_log() {
       await wait(500);
-      const path = `~/Downloads/Sandbox-ai log ${iso().slice(0, 16).replace('T', ' ').replace(':', '.')}.jsonl`;
+      const path = `~/Downloads/Homebody log ${iso().slice(0, 16).replace('T', ' ').replace(':', '.')}.jsonl`;
       host('note', { text: 'Wrote and revealed ' + path });
       return { path };
     },
@@ -362,7 +362,7 @@ export function createMock(scenarioName) {
     },
     async project_apply({ name, overwrite }) { const first = !mockApplied.has(name); mockApplied.add(name); return { applied: (first ? 4 : 0) + (overwrite ? 1 : 0), skipped: overwrite ? [] : ['README.md'] }; },
     async project_remove({ name }) { const i = mockProjects.findIndex((p) => p.name === name); if (i >= 0) mockProjects.splice(i, 1); return null; },
-    async get_setup_script() { return '#!/bin/bash\n# Sandbox-ai one-time setup (mock).\n# The real app shows the exact script here.\n'; },
+    async get_setup_script() { return '#!/bin/bash\n# Homebody one-time setup (mock).\n# The real app shows the exact script here.\n'; },
     async run_setup() {
       await wait(1600);
       if (flags.failSetup) return { ok: false, message: 'Setup was cancelled before it finished. Nothing was changed.' };
@@ -395,13 +395,13 @@ export function createMock(scenarioName) {
         { name: 'LM Studio', path: '/Applications/LM Studio.app', canProtect: true, asks: true, note: 'Everything it sends will go through the gate, so you are asked.' },
         { name: 'Cursor', path: '/Applications/Cursor.app', canProtect: true, asks: true, note: 'Everything it sends will go through the gate, so you are asked.' },
         { name: 'ChatGPT', path: '/Applications/ChatGPT.app', canProtect: true, asks: false, note: 'Can only be run cut off from the internet: this kind of app cannot be pointed at the gate yet.' },
-        { name: 'Draw Things', path: '/Applications/Draw Things.app', canProtect: false, asks: false, note: "Draw Things already runs in Apple's own sandbox, and macOS does not allow a second one around it. Apps like this need the Network Extension version of Sandbox-ai." },
+        { name: 'Draw Things', path: '/Applications/Draw Things.app', canProtect: false, asks: false, note: "Draw Things already runs in Apple's own sandbox, and macOS does not allow a second one around it. Apps like this need the Network Extension version of Homebody." },
       ];
       return all.filter((f) => !s.apps.some((a) => a.name === f.name));
     },
-    async app_launcher({ appId } = {}) { const a = needApp(appId); return { path: `~/Applications/Sandbox-ai/${a.name} (protected).app` }; },
+    async app_launcher({ appId } = {}) { const a = needApp(appId); return { path: `~/Applications/Homebody/${a.name} (protected).app` }; },
     async app_open({ appId } = {}) { needApp(appId).running = true; queueStatus(); return null; },
-    async get_install() { return s.installed ? { path: '/Applications/Sandbox-ai.app', installed: true, canInstall: false } : { path: '/Volumes/Sandbox-ai/Sandbox-ai.app', installed: false, canInstall: true }; },
+    async get_install() { return s.installed ? { path: '/Applications/Homebody.app', installed: true, canInstall: false } : { path: '/Volumes/Homebody/Homebody.app', installed: false, canInstall: true }; },
     async install_and_restart() { await wait(900); s.installed = true; host('note', { text: 'Copied to /Applications and restarted' }); return null; },
     async get_login_item() { return { on: !!s.loginItem }; },
     async set_login_item({ on } = {}) { s.loginItem = !!on; return { on: s.loginItem }; },
@@ -413,7 +413,7 @@ export function createMock(scenarioName) {
       if (s.apps.some((a) => a.name.toLowerCase() === clean.toLowerCase())) throw `There is already an app called ${clean}.`;
       const id = 'my-' + clean.toLowerCase().replace(/[^a-z0-9]+/g, '-');
       const win = String(program).trim().endsWith('.app');
-      if (win && /textedit|notes|safari/i.test(program)) throw `${clean} already runs in Apple's own sandbox, and macOS does not allow a second one around it. Apps like this need the Network Extension version of Sandbox-ai.`;
+      if (win && /textedit|notes|safari/i.test(program)) throw `${clean} already runs in Apple's own sandbox, and macOS does not allow a second one around it. Apps like this need the Network Extension version of Homebody.`;
       s.apps.push({ id, name: clean, kind: win ? 'window' : 'agent', icon: 'generic', workspace: win ? null : '/Users/Shared/SandboxAI/' + id, installed: true, protected: true, running: false, custom: true, problem: null });
       queueStatus();
       return status();
@@ -451,7 +451,7 @@ export function createMock(scenarioName) {
           places: [{ name: 'Ollama model library', times: 2, bytesOut: 8200 }], blockedPlaces: [{ name: 'Ollama website', times: 5 }] }] };
     },
     async timestamp_log() { await wait(900); return { records: s.seq || 1240, time: 'Nov 11 09:14:02 2026 GMT', service: 'http://timestamp.digicert.com', file: '~/Library/…/record-1240.tsr' }; },
-    async check_update() { await wait(700); host('note', { text: 'Asked where Sandbox-ai is published' }); return { current: '0.1.0', latest: null, newer: false, url: null, message: 'No version has been published yet.' }; },
+    async check_update() { await wait(700); host('note', { text: 'Asked where Homebody is published' }); return { current: '0.1.0', latest: null, newer: false, url: null, message: 'No version has been published yet.' }; },
     async app_set_secrets({ appId, on } = {}) { needApp(appId).secrets = !!on; queueStatus(); return status(); },
     async allow_secret({ appId, fingerprint, allowed } = {}) {
       s.events.forEach((e) => { if (e.secret && e.appId === appId && e.secret.fingerprint === fingerprint) e.secret.allowed = !!allowed; });
@@ -459,7 +459,7 @@ export function createMock(scenarioName) {
     },
     async app_set_inspect({ appId, on } = {}) {
       const a = needApp(appId);
-      if (a.kind !== 'agent') throw `${a.name} takes its trusted certificates from your Mac, which Sandbox-ai does not change. Its connections cannot be looked inside yet.`;
+      if (a.kind !== 'agent') throw `${a.name} takes its trusted certificates from your Mac, which Homebody does not change. Its connections cannot be looked inside yet.`;
       a.inspect = !!on; queueStatus(); return status();
     },
     async app_set_protected({ appId, protected: on } = {}) {

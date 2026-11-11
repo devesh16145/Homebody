@@ -8,6 +8,9 @@ Each release will list, in this order: what is new, what changed in the built-in
 
 New
 
+- The app is called Homebody now, with a new look: a face peeking over the windowsill, in the menu bar and the Dock.
+- A new main window organised around your apps: a sidebar with each app, a big Open button, and one list per app of the places it can reach, each with its own switch.
+- The menu-bar panel shows a tile per app: click it to open that app protected.
 - Web socket messages are read while looking inside, and examined for secrets like any other request.
 - A switch inside a trusted place can apply to one kind of request (refuse sending, allow reading).
 - Private folders: a request that repeats lines from a file in a folder you marked is stopped.
@@ -16,7 +19,7 @@ New
 - First run in three steps, ending with a choice between Private and Watch for an hour.
 - Proof shows the last seven days per app, and can add an independent timestamp.
 - The log exports as a folder an auditor can use: signed log, activity as a spreadsheet, rules in force, timestamps.
-- A project can suggest the places it needs in `.sandbox-ai.json`; nothing is trusted until you tick it.
+- A project can suggest the places it needs in `.homebody.json`; nothing is trusted until you tick it.
 - Check for a newer version, only when you ask.
 
 Built-in rules

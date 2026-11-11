@@ -38,6 +38,14 @@ export function initPage() {
   if (theme === 'light' || theme === 'dark') root.dataset.theme = theme;
   root.classList.add(inApp() ? 'in-app' : 'in-browser');
   if (window.parent !== window) root.classList.add('embedded');
+  // Browser previews only: borrow the Fredoka display face from Google Fonts. The app itself never
+  // contacts Google; it uses the Mac's rounded system font until Fredoka is bundled.
+  if (!inApp() && !document.querySelector('link[data-preview-font]')) {
+    const l = document.createElement('link');
+    l.rel = 'stylesheet'; l.dataset.previewFont = '';
+    l.href = 'https://fonts.googleapis.com/css2?family=Fredoka:wght@400..700&display=swap';
+    document.head.appendChild(l);
+  }
 }
 
 export function errText(e) {

@@ -3,7 +3,7 @@ name = "sai"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Sandbox-ai command line: talk to the running app, or run the engine headless"
+description = "Homebody command line: talk to the running app, or run the engine headless"
 
 [[bin]]
 name = "sai"

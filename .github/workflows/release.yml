@@ -66,8 +66,8 @@ jobs:
 
       - name: Say whether it is signed
         run: |
-          if codesign --verify --deep --strict target/release/bundle/macos/Sandbox-ai.app 2>/dev/null && \
-             codesign -dv target/release/bundle/macos/Sandbox-ai.app 2>&1 | grep -q "Developer ID"; then
+          if codesign --verify --deep --strict target/release/bundle/macos/Homebody.app 2>/dev/null && \
+             codesign -dv target/release/bundle/macos/Homebody.app 2>&1 | grep -q "Developer ID"; then
             echo "Signed with a Developer ID." >> "$GITHUB_STEP_SUMMARY"
           else
             echo "NOT signed with a Developer ID. macOS will warn people who download this build." >> "$GITHUB_STEP_SUMMARY"
@@ -75,7 +75,7 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: Sandbox-ai-macos
+          name: Homebody-macos
           path: app/target/release/bundle/dmg/*.dmg
           if-no-files-found: error
 
@@ -83,4 +83,4 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/v')
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" target/release/bundle/dmg/*.dmg --draft --generate-notes --title "Sandbox-ai $GITHUB_REF_NAME"
+        run: gh release create "$GITHUB_REF_NAME" target/release/bundle/dmg/*.dmg --draft --generate-notes --title "Homebody $GITHUB_REF_NAME"

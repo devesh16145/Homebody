@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en" data-window="main">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>Homebody</title>
+<link rel="stylesheet" href="css/tokens.css">
+<link rel="stylesheet" href="css/base.css">
+<link rel="stylesheet" href="css/main.css">
+<link rel="stylesheet" href="css/studio.css">
+<link rel="stylesheet" href="css/identity.css">
+<link rel="stylesheet" href="css/home.css">
+</head>
+<body class="hm">
+<!-- Two panels: a floating glass sidebar with your apps, and one solid page beside it. -->
+<div class="hm-shell">
+  <nav class="hm-side glass" aria-label="Homebody" data-tauri-drag-region>
+    <div class="hm-lights" data-tauri-drag-region></div>
+    <button class="hm-state" id="state" aria-haspopup="menu" aria-expanded="false"></button>
+    <div class="hm-nav scroll" id="nav"></div>
+  </nav>
+  <main class="hm-main" id="page">
+    <div class="hm-drag" data-tauri-drag-region></div>
+    <div class="hm-view scroll" id="view" tabindex="-1"></div>
+    <div class="hm-mount" id="mount-activity" hidden></div>
+    <div class="hm-mount" id="mount-report" hidden></div>
+  </main>
+</div>
+<div class="hm-menu glass" id="menu" role="menu" hidden></div>
+<div id="sheet" class="sheet" hidden></div>
+<div id="toast" class="toast" role="status" aria-live="polite"></div>
+<script type="module" src="js/home.js"></script>
+</body>
+</html>

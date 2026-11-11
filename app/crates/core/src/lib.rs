@@ -1,4 +1,4 @@
-//! Sandbox-ai core.
+//! Homebody core.
 //!
 //! Everything the product does that is not pixels lives here, so the desktop app, the CLI and
 //! (later) the fleet server share one implementation:
