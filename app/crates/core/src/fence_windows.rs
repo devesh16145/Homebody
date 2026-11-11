@@ -207,11 +207,22 @@ pub async fn serve_gate_pipe(app_id: String, port: u16) -> Result<(), String> {
     let sid_text = ContainerSid::for_app(&app_id)?.text()?;
     let security = PipeSecurity::for_container(&sid_text)?;
     let name = gate_pipe(&app_id);
+    // The address of the access list, in a wrapper that may cross threads: what it points at
+    // is written once (above) and only read after that.
+    struct Attributes(*mut c_void);
+    unsafe impl Send for Attributes {}
+    unsafe impl Sync for Attributes {}
+    impl Attributes {
+        fn get(&self) -> *mut c_void {
+            self.0
+        }
+    }
+    let attributes = Attributes(&security.attributes as *const SECURITY_ATTRIBUTES as *mut c_void);
     let make = |first: bool| {
         let mut o = ServerOptions::new();
         o.first_pipe_instance(first).reject_remote_clients(true);
         // SAFETY: `security` lives as long as this task; the pointer is to its attributes.
-        unsafe { o.create_with_security_attributes_raw(&name, &security.attributes as *const _ as *mut c_void) }
+        unsafe { o.create_with_security_attributes_raw(&name, attributes.get()) }
     };
     let mut server = make(true).map_err(|e| format!("The gate for {app_id} could not be opened to its private space: {e}"))?;
     loop {
@@ -406,7 +417,6 @@ mod tests {
     fn a_program_in_a_container_runs_but_cannot_reach_the_internet_or_your_files() {
         let sid = ContainerSid::for_app("unit-test").expect("container");
         let v = |a: &[&str]| a.iter().map(|s| s.to_string()).collect::<Vec<_>>();
-        let sys = std::env::var("SystemRoot").unwrap_or_else(|_| "C:\\Windows".into());
         let home = home_for("_hbunittest");
         ensure_dirs(&home, None, &sid.text().unwrap()).expect("folders");
         let env = base_env(&home);

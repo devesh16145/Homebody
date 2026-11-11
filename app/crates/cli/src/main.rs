@@ -80,6 +80,9 @@ const HELP: &str = "homebody: the Homebody command line
   homebody verify [file]               check the log (or an exported log file) has not been altered
   homebody export-log                  save the whole signed log to Downloads
   homebody policy [folder]             save the rules as Cedar policies, for formal review
+  homebody fleet                       whether this computer is in an organisation's fleet
+  homebody fleet join <url> <code> [--ca <file>]   join one: its rules come first, the log is sent to it
+  homebody fleet leave | sync          leave it, or talk to it now
   homebody mode watch [minutes]        Watch for a while (default 60; 0 = until switched off)
   homebody watched                     places contacted under Watch that are not decided yet
   homebody start|stop <app>            start or stop a protected model
@@ -263,6 +266,21 @@ async fn main() {
             println!("private for: {}   blocked: {}   allowed: {}", s(&p, "streakText"), p["blockedTotal"], p["allowedTotal"]);
             println!("log key: {}", s(&p, "publicKey"));
         }
+        // One computer's log from a fleet's evidence bundle: the folder holds the log as it was
+        // sent and a note of whose it is and where the kept part starts.
+        "verify" if std::path::Path::new(a(1)).join("computer.json").is_file() => {
+            let dir = std::path::Path::new(a(1));
+            let about: Value = std::fs::read(dir.join("computer.json")).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or(Value::Null);
+            let lines: Vec<String> = std::fs::read_to_string(dir.join("log.jsonl")).unwrap_or_default().lines().filter(|l| !l.trim().is_empty()).map(str::to_string).collect();
+            println!("computer: {} ({})   signed with key: {}", s(&about, "name"), s(&about, "user"), s(&about, "publicKey"));
+            match homebody_core::ledger::verify_continuation(&lines, s(&about, "publicKey"), about["afterSeq"].as_u64().unwrap_or(0), s(&about, "afterHash")) {
+                Ok((seq, _)) => println!("OK: {} records kept, up to record {seq}, chain intact, all signatures valid.", lines.len()),
+                Err(e) => {
+                    println!("FAILED: {e}");
+                    std::process::exit(2);
+                }
+            }
+        }
         "verify" if !a(1).is_empty() => {
             // A file exported with "Export": checked here, without the running app. Given the
             // export folder, the log inside it is the thing to check.
@@ -278,6 +296,27 @@ async fn main() {
             } else {
                 println!("FAILED after {} records: {}", c.count, c.error.unwrap_or_default());
                 std::process::exit(2);
+            }
+        }
+        "fleet" => {
+            let st = match a(1) {
+                "join" => {
+                    let ca = args.iter().position(|x| x == "--ca").and_then(|i| args.get(i + 1)).and_then(|p| std::path::absolute(p).ok()).map(|p| p.to_string_lossy().into_owned());
+                    call("fleet_join", json!({ "url": a(2), "code": a(3), "caFile": ca })).await
+                }
+                "leave" => call("fleet_leave", Value::Null).await,
+                "sync" => call("fleet_sync", Value::Null).await,
+                _ => call("fleet_status", Value::Null).await,
+            };
+            if st["joined"].as_bool() != Some(true) {
+                println!("This computer is not in a fleet. Its log stays here.");
+            } else {
+                println!("In the fleet of {} ({})", s(&st, "org"), s(&st, "url"));
+                println!("rules: version {}, {} rule(s){}", st["policyVersion"], st["rules"], if st["locked"].as_bool() == Some(true) { ", protection cannot be switched off" } else { "" });
+                println!("log: {} record(s) sent, {} waiting   last contact: {}", st["sent"], st["waiting"], s(&st, "lastSync"));
+                if !s(&st, "lastError").is_empty() {
+                    println!("last problem: {}", s(&st, "lastError"));
+                }
             }
         }
         "policy" => {

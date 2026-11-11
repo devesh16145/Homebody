@@ -399,6 +399,15 @@ export function createMock(scenarioName) {
       ];
       return all.filter((f) => !s.apps.some((a) => a.name === f.name));
     },
+    async fleet_status() { return s.fleet || { joined: false }; },
+    async fleet_join({ url, code } = {}) {
+      await wait(500);
+      if (!/^https:\/\//.test(String(url || ''))) throw 'The server\u2019s address has to start with https:// so that what is sent to it is encrypted.';
+      if (!String(code || '').trim()) throw 'Type the code your administrator gave you.';
+      s.fleet = { joined: true, org: 'Example Org', url, lastSync: new Date().toISOString(), lastError: null, sent: 120, waiting: 0, policyVersion: 3, rules: 2, locked: true };
+      return s.fleet;
+    },
+    async fleet_leave() { s.fleet = { joined: false }; return s.fleet; },
     async get_ai_sites({ appId } = {}) {
       const app = appId ? s.apps.find((a) => a.id === appId) : null;
       const on = (app && app.sites) || [];

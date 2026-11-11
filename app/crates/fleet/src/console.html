@@ -1,1 +1,262 @@
-<!doctype html><title>Homebody fleet</title>
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Homebody fleet</title>
+<style>
+:root {
+  --bg: #f3f7f8; --surface: #fff; --ink: #10262b; --ink-2: #4a6168; --ink-3: #7c9097; --line: #dfe8ea;
+  --tide: #2f7f8c; --tide-soft: #e2f1f3; --tide-text: #1f6370; --ask: #b7791f; --ask-soft: #fbf1dc; --danger: #b3403a; --danger-soft: #fbe9e7; --still: #eef2f3;
+  --r: 14px; --font: ui-rounded, "SF Pro Rounded", system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+@media (prefers-color-scheme: dark) {
+  :root { --bg: #0d1a1d; --surface: #152528; --ink: #e8f1f2; --ink-2: #a9bcc1; --ink-3: #7d9298; --line: #24393d; --tide: #5fb7c4; --tide-soft: #173b41; --tide-text: #8fd3dd; --ask: #e0b05c; --ask-soft: #3a2f17; --danger: #ee8b84; --danger-soft: #3d1f1d; --still: #1b2e32; }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.45 var(--font); }
+button, input, select { font: inherit; color: inherit; }
+main { max-width: 1040px; margin: 0 auto; padding: 20px 16px 60px; }
+header.top { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 18px; }
+header.top h1 { font-size: 20px; margin: 0; flex: 1 1 auto; }
+header.top small { color: var(--ink-3); font-weight: 400; font-size: 13px; margin-left: 6px; }
+nav { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 18px; }
+nav button, .cap { border: 0; border-radius: 999px; height: 34px; padding: 0 15px; background: var(--surface); box-shadow: inset 0 0 0 1px var(--line); cursor: pointer; }
+nav button[aria-current="page"] { background: var(--tide); color: #fff; box-shadow: none; font-weight: 600; }
+.cap.tide { background: var(--tide); color: #fff; box-shadow: none; font-weight: 600; }
+.cap.sm { height: 28px; padding: 0 11px; font-size: 13px; }
+.cap.danger { color: var(--danger); }
+.cap:disabled { opacity: .5; cursor: default; }
+button:focus-visible, input:focus-visible, select:focus-visible { outline: 3px solid var(--tide-soft); outline-offset: 1px; }
+.card { background: var(--surface); border-radius: var(--r); box-shadow: 0 0 0 1px var(--line); overflow: hidden; margin-bottom: 16px; }
+.card > h2 { font-size: 15px; margin: 0; padding: 14px 16px 0; }
+.card > .body { padding: 14px 16px; }
+table { width: 100%; border-collapse: collapse; }
+th, td { text-align: left; padding: 10px 16px; vertical-align: top; }
+th { font-size: 12px; font-weight: 600; color: var(--ink-3); border-bottom: 1px solid var(--line); white-space: nowrap; }
+tr + tr td { border-top: 1px solid var(--line); }
+td small { display: block; color: var(--ink-3); font-size: 12.5px; }
+.scroll { overflow-x: auto; }
+.tag { display: inline-block; padding: 1px 9px; border-radius: 999px; font-size: 12.5px; background: var(--still); color: var(--ink-2); white-space: nowrap; }
+.tag.ok { background: var(--tide-soft); color: var(--tide-text); }
+.tag.warn { background: var(--ask-soft); color: var(--ask); }
+.tag.bad { background: var(--danger-soft); color: var(--danger); }
+.row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.grow { flex: 1 1 160px; min-width: 0; }
+input[type=text], input[type=password], input[type=number], input[type=date], select { height: 34px; padding: 0 10px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); min-width: 0; }
+label { display: grid; gap: 4px; font-size: 13px; color: var(--ink-2); }
+.muted { color: var(--ink-3); }
+.empty { padding: 28px 16px; text-align: center; color: var(--ink-3); }
+.notice { padding: 10px 14px; border-radius: 10px; margin-bottom: 14px; background: var(--danger-soft); color: var(--danger); }
+.notice.good { background: var(--tide-soft); color: var(--tide-text); }
+.mono { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 13px; overflow-wrap: anywhere; }
+.signin { max-width: 340px; margin: 12vh auto 0; }
+.signin .card .body { display: grid; gap: 12px; }
+.code { font: 600 17px ui-monospace, Menlo, Consolas, monospace; padding: 12px 14px; background: var(--tide-soft); color: var(--tide-text); border-radius: 10px; overflow-wrap: anywhere; }
+</style>
+</head>
+<body>
+<main id="app" aria-live="polite"></main>
+<script>
+'use strict';
+const $ = (s, el = document) => el.querySelector(s);
+const esc = (v) => String(v == null ? '' : v).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const when = (iso) => { if (!iso) return 'never'; const d = new Date(iso), m = Math.round((Date.now() - d) / 60000); return m < 1 ? 'just now' : m < 60 ? m + ' min ago' : m < 1440 ? Math.round(m / 60) + ' h ago' : d.toLocaleDateString(); };
+const clock = (iso) => new Date(iso).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit' });
+const state = { me: null, tab: 'computers', error: '', good: '', data: {}, filter: { device: '', q: '', show: '' }, rules: null, newCode: null, sso: null };
+
+async function api(method, path, body) {
+  const opts = { method, headers: {}, credentials: 'same-origin' };
+  if (method !== 'GET') opts.headers['X-Homebody'] = 'console';
+  if (body !== undefined) { opts.headers['Content-Type'] = 'application/json'; opts.body = JSON.stringify(body); }
+  const r = await fetch(path, opts);
+  const text = await r.text();
+  let v = null; try { v = JSON.parse(text); } catch (e) { /* not JSON */ }
+  if (r.status === 401 && path !== '/api/login') { state.me = null; render(); throw new Error('Sign in first.'); }
+  if (!r.ok) throw new Error((v && v.error) || 'The server answered with an error.');
+  return v;
+}
+const can = (role) => ({ admin: 3, auditor: 2, viewer: 1 }[state.me.role] >= { admin: 3, auditor: 2, viewer: 1 }[role]);
+const fail = (e) => { state.error = e.message; state.good = ''; render(); };
+const done = (msg) => { state.good = msg; state.error = ''; };
+
+const TABS = [['computers', 'Computers', 'viewer'], ['activity', 'Activity', 'auditor'], ['rules', 'Rules', 'auditor'], ['join', 'Joining', 'admin'], ['people', 'People', 'admin'], ['settings', 'Settings', 'admin']];
+
+async function load() {
+  const t = state.tab;
+  try {
+    if (t === 'computers') state.data.devices = await api('GET', '/api/devices');
+    if (t === 'activity') {
+      if (!state.data.devices) state.data.devices = await api('GET', '/api/devices');
+      const f = state.filter, q = new URLSearchParams();
+      if (f.device) q.set('device', f.device); if (f.q) q.set('q', f.q); if (f.show) q.set('show', f.show);
+      state.data.activity = await api('GET', '/api/activity?' + q);
+    }
+    if (t === 'rules' && !state.rules) { const p = await api('GET', '/api/policy'); state.rules = { version: p.version, updatedAt: p.updatedAt, ask: p.ask === false ? 'block' : p.ask === true ? 'ask' : 'user', lockMode: !!p.lockMode, rules: p.rules.map((r) => ({ ...r })) }; }
+    if (t === 'join') state.data.codes = await api('GET', '/api/codes');
+    if (t === 'people') state.data.people = await api('GET', '/api/people');
+    if (t === 'settings') state.data.settings = await api('GET', '/api/settings');
+  } catch (e) { state.error = e.message; }
+  render();
+}
+
+function computers() {
+  const d = state.data.devices;
+  if (!d) return '<p class="empty">Loading…</p>';
+  if (!d.length) return '<div class="card"><p class="empty">No computer has joined yet. Make a code under Joining.</p></div>';
+  return `<div class="card scroll"><table><thead><tr><th>Computer</th><th>Team</th><th>Log</th><th>Rules</th><th>Last seen</th>${can('admin') ? '<th></th>' : ''}</tr></thead><tbody>${d.map((x) => `<tr>
+    <td><b>${esc(x.name)}</b><small>${esc(x.user)} · ${esc(x.os)} · Homebody ${esc(x.version)}</small></td>
+    <td>${esc(x.team) || '<span class="muted">—</span>'}</td>
+    <td><span class="tag ${x.intact ? 'ok' : 'bad'}">${x.intact ? 'Intact' : 'Problem'}</span><small>${x.intact ? esc(x.records) + ' records' : esc(x.problem)}</small></td>
+    <td><span class="tag ${x.rulesCurrent ? 'ok' : 'warn'}">${x.rulesCurrent ? 'Current' : 'Not yet fetched'}</span></td>
+    <td>${esc(when(x.lastSeen))}</td>
+    ${can('admin') ? `<td><button class="cap sm danger" data-remove-device="${esc(x.id)}" data-name="${esc(x.name)}">Remove</button></td>` : ''}</tr>`).join('')}</tbody></table></div>`;
+}
+
+function activity() {
+  const rows = state.data.activity, f = state.filter, devs = state.data.devices || [];
+  const bar = `<div class="row" style="margin-bottom:12px">
+    <select data-filter="device" aria-label="Computer"><option value="">Every computer</option>${devs.map((d) => `<option value="${esc(d.id)}"${f.device === d.id ? ' selected' : ''}>${esc(d.name)}</option>`).join('')}</select>
+    <select data-filter="show" aria-label="Show">${[['', 'Everything'], ['blocked', 'Blocked'], ['allowed', 'Allowed'], ['changes', 'Changes']].map(([v, l]) => `<option value="${v}"${f.show === v ? ' selected' : ''}>${l}</option>`).join('')}</select>
+    <input type="text" class="grow" data-filter="q" value="${esc(f.q)}" placeholder="Search a place or an app" aria-label="Search">
+    <form class="row" data-export><input type="date" name="from" aria-label="From"><input type="date" name="to" aria-label="To"><button class="cap">Export evidence</button></form></div>`;
+  if (!rows) return bar + '<p class="empty">Loading…</p>';
+  if (!rows.length) return bar + '<div class="card"><p class="empty">Nothing matches.</p></div>';
+  const tag = { allowed: 'ok', blocked: 'bad', asked: 'warn', change: '' };
+  return bar + `<div class="card scroll"><table><thead><tr><th>When</th><th>Computer</th><th>App</th><th>Place</th><th>Outcome</th></tr></thead><tbody>${rows.map((r) => `<tr>
+    <td style="white-space:nowrap">${esc(clock(r.ts))}</td><td>${esc(r.deviceName)}<small>${esc(r.user)}</small></td><td>${esc(r.app) || '<span class="muted">—</span>'}</td>
+    <td class="mono">${esc(r.host) || '<span class="muted">—</span>'}</td><td><span class="tag ${tag[r.outcome]}">${esc(r.outcome === 'change' ? 'Change' : r.outcome[0].toUpperCase() + r.outcome.slice(1))}</span><small>${esc(r.detail)}</small></td></tr>`).join('')}</tbody></table></div>
+    <p class="muted">The newest ${rows.length} rows. Export evidence saves every computer's full signed log.</p>`;
+}
+
+function rules() {
+  const p = state.rules;
+  if (!p) return '<p class="empty">Loading…</p>';
+  const edit = can('admin'), dis = edit ? '' : ' disabled';
+  return `<div class="card"><div class="body row">
+      <label class="grow">Places with no rule<select data-rule-ask${dis}>${[['user', 'Each person decides'], ['block', 'Always blocked'], ['ask', 'Always ask the person']].map(([v, l]) => `<option value="${v}"${p.ask === v ? ' selected' : ''}>${l}</option>`).join('')}</select></label>
+      <label class="row" style="align-self:end;height:34px"><input type="checkbox" data-rule-lock${p.lockMode ? ' checked' : ''}${dis}> Protection cannot be switched off</label>
+    </div></div>
+    <div class="card scroll"><table><thead><tr><th>App</th><th>Place</th><th>Decision</th>${edit ? '<th></th>' : ''}</tr></thead><tbody>
+    ${p.rules.map((r, i) => `<tr><td><input type="text" value="${esc(r.app)}" data-rule="${i}" data-field="app" size="14" aria-label="App"${dis}></td>
+      <td><input type="text" value="${esc(r.host)}" data-rule="${i}" data-field="host" size="30" aria-label="Place"${dis}></td>
+      <td><select data-rule="${i}" data-field="enabled" aria-label="Decision"${dis}><option value="true"${r.enabled ? ' selected' : ''}>Trusted</option><option value="false"${r.enabled ? '' : ' selected'}>Blocked</option></select></td>
+      ${edit ? `<td><button class="cap sm danger" data-rule-remove="${i}">Remove</button></td>` : ''}</tr>`).join('') || `<tr><td colspan="4" class="empty">No rules yet. Each person's own rules apply.</td></tr>`}
+    </tbody></table></div>
+    ${edit ? '<div class="row"><button class="cap" data-rule-add>Add rule</button><button class="cap tide" data-rule-save>Save and send to computers</button></div>' : ''}
+    <p class="muted">Version ${esc(p.version)}, ${esc(when(p.updatedAt))}. App is an app's id such as <span class="mono">claude-code</span>, or <span class="mono">*</span> for every app. A place is a name such as <span class="mono">example.com</span> or <span class="mono">*.example.com</span>. These rules come before each person's own.</p>`;
+}
+
+function join() {
+  const c = state.data.codes;
+  const made = state.newCode ? `<div class="card"><h2>New code</h2><div class="body"><p class="code">${esc(state.newCode.code)}</p>
+    <p>On the computer: Homebody → Settings → Organisation, or<br><span class="mono">homebody fleet join ${esc(state.newCode.url)} ${esc(state.newCode.code)}</span></p>
+    <p class="muted">Shown this once.</p><a class="cap" style="display:inline-flex;align-items:center;text-decoration:none" href="/api/mdm-profile?code=${encodeURIComponent(state.newCode.code)}">Download a management profile for Macs</a></div></div>` : '';
+  return `${made}<div class="card"><h2>Make a joining code</h2><form class="body row" data-code>
+      <label class="grow">Team (optional)<input type="text" name="team" maxlength="40"></label>
+      <label>Computers<input type="number" name="uses" value="1" min="1" max="10000" style="width:110px"></label>
+      <label>Valid for (days)<input type="number" name="days" value="7" min="1" max="365" style="width:110px"></label>
+      <button class="cap tide" style="align-self:end">Make code</button></form></div>
+    <div class="card scroll">${!c ? '<p class="empty">Loading…</p>' : !c.length ? '<p class="empty">No codes.</p>' : `<table><thead><tr><th>Team</th><th>Left</th><th>Expires</th><th></th></tr></thead><tbody>${c.map((x) => `<tr>
+      <td>${esc(x.team) || '<span class="muted">—</span>'}</td><td>${x.live ? esc(x.usesLeft) + ' computers' : '<span class="tag">Used up or expired</span>'}</td><td>${esc(new Date(x.expiresAt).toLocaleDateString())}</td>
+      <td><button class="cap sm danger" data-code-remove="${esc(x.id)}">Withdraw</button></td></tr>`).join('')}</tbody></table>`}</div>`;
+}
+
+function people() {
+  const p = state.data.people;
+  const role = (v, name) => `<select data-person-role="${esc(name)}" aria-label="Role">${['admin', 'auditor', 'viewer'].map((r) => `<option${r === v ? ' selected' : ''}>${r}</option>`).join('')}</select>`;
+  return `<div class="card"><h2>Add a person</h2><form class="body row" data-person>
+      <label class="grow">Name<input type="text" name="name" autocomplete="off"></label>
+      <label>Role<select name="role"><option>viewer</option><option>auditor</option><option>admin</option></select></label>
+      <label class="grow">Password (ten characters or more)<input type="password" name="password" autocomplete="new-password"></label>
+      <button class="cap tide" style="align-self:end">Add</button></form></div>
+    <div class="card scroll">${!p ? '<p class="empty">Loading…</p>' : `<table><thead><tr><th>Name</th><th>Role</th><th>Access</th><th></th></tr></thead><tbody>${p.map((x) => `<tr>
+      <td><b>${esc(x.name)}</b>${x.name === state.me.name ? '<small>You</small>' : ''}</td><td>${role(x.role, x.name)}</td>
+      <td><span class="tag ${x.active ? 'ok' : ''}">${x.active ? 'On' : 'Off'}</span></td>
+      <td class="row"><button class="cap sm" data-person-active="${esc(x.name)}" data-to="${!x.active}">${x.active ? 'Switch off' : 'Switch on'}</button><button class="cap sm" data-person-password="${esc(x.name)}">New password</button></td></tr>`).join('')}</tbody></table>`}</div>
+    <p class="muted">Viewers see computers. Auditors also see activity and rules, and can export. Administrators can change everything.</p>`;
+}
+
+function settings() {
+  const s = state.data.settings;
+  if (!s) return '<p class="empty">Loading…</p>';
+  return `<div class="card"><form class="body" data-settings style="display:grid;gap:14px;max-width:440px">
+      <label>Organisation's name<input type="text" name="name" value="${esc(s.name)}" maxlength="80"></label>
+      <label>Keep logs for (days, 0 = for ever)<input type="number" name="retentionDays" value="${esc(s.retentionDays)}" min="0" max="3650"></label>
+      <button class="cap tide" style="justify-self:start">Save</button></form></div>
+    <div class="card"><div class="body"><p><b>Fleet key</b></p><p class="mono">${esc(state.me.fleetKey)}</p><p class="muted">Computers pin this key when they join and only accept rules signed with it.</p>
+      <p>Sign-in through an identity provider: <span class="tag ${s.sso ? 'ok' : ''}">${s.sso ? 'On' : 'Off'}</span> &nbsp; Provisioning (SCIM): <span class="tag ${s.scim ? 'ok' : ''}">${s.scim ? 'On' : 'Off'}</span></p>
+      <p class="muted">Both are switched on with options when the server is started.</p>
+      <a class="cap" style="display:inline-flex;align-items:center;text-decoration:none" href="/api/audit">Download this console's own log</a></div></div>`;
+}
+
+function render() {
+  const app = $('#app');
+  const note = (state.error ? `<p class="notice" role="alert">${esc(state.error)}</p>` : '') + (state.good ? `<p class="notice good">${esc(state.good)}</p>` : '');
+  if (!state.me) {
+    app.innerHTML = `<div class="signin"><h1 style="font-size:22px">Homebody fleet</h1>${note}<div class="card"><form class="body" data-login>
+      <label>Name<input type="text" name="name" autocomplete="username" autofocus></label>
+      <label>Password<input type="password" name="password" autocomplete="current-password"></label>
+      <button class="cap tide">Sign in</button>
+      ${state.sso && state.sso.enabled ? `<a class="cap" style="display:flex;align-items:center;justify-content:center;text-decoration:none" href="/auth/login">Sign in with ${esc(state.sso.name)}</a>` : ''}</form></div></div>`;
+    return;
+  }
+  const tabs = TABS.filter(([, , role]) => can(role));
+  const view = { computers, activity, rules, join, people, settings }[state.tab]();
+  app.innerHTML = `<header class="top"><h1>${esc(state.me.org)}<small>Homebody fleet</small></h1><span class="muted">${esc(state.me.name)} · ${esc(state.me.role)}</span><button class="cap sm" data-logout>Sign out</button></header>
+    <nav aria-label="Sections">${tabs.map(([id, label]) => `<button data-tab="${id}"${state.tab === id ? ' aria-current="page"' : ''}>${label}</button>`).join('')}</nav>${note}${view}`;
+}
+
+document.addEventListener('submit', async (ev) => {
+  ev.preventDefault();
+  const f = ev.target, v = Object.fromEntries(new FormData(f));
+  try {
+    if (f.matches('[data-login]')) { await api('POST', '/api/login', v); state.error = ''; await start(); return; }
+    if (f.matches('[data-code]')) { state.newCode = await api('POST', '/api/codes', { team: v.team, uses: Number(v.uses), days: Number(v.days) }); done('Code made.'); }
+    if (f.matches('[data-person]')) { await api('POST', '/api/people', v); done(v.name + ' was added.'); }
+    if (f.matches('[data-settings]')) { await api('PUT', '/api/settings', { name: v.name, retentionDays: Number(v.retentionDays) }); state.me = await api('GET', '/api/me'); done('Saved.'); }
+    if (f.matches('[data-export]')) { const q = new URLSearchParams(); if (v.from) q.set('from', v.from); if (v.to) q.set('to', v.to); location.href = '/api/export?' + q; return; }
+    load();
+  } catch (e) { fail(e); }
+});
+document.addEventListener('click', async (ev) => {
+  const b = ev.target.closest('button');
+  if (!b) return;
+  const d = b.dataset;
+  try {
+    if (d.tab) { state.tab = d.tab; state.error = ''; state.good = ''; if (d.tab !== 'join') state.newCode = null; render(); return load(); }
+    if ('logout' in d) { await api('POST', '/api/logout'); state.me = null; state.rules = null; state.data = {}; return render(); }
+    if (d.removeDevice) { if (!confirm(`Remove ${d.name}? Its log is deleted from this server and it stops receiving rules.`)) return; await api('DELETE', '/api/devices/' + encodeURIComponent(d.removeDevice)); done(d.name + ' was removed.'); return load(); }
+    if ('ruleAdd' in d) { state.rules.rules.push({ app: '*', host: '', enabled: false }); return render(); }
+    if (d.ruleRemove) { state.rules.rules.splice(Number(d.ruleRemove), 1); return render(); }
+    if ('ruleSave' in d) {
+      const p = state.rules;
+      const saved = await api('PUT', '/api/policy', { rules: p.rules, lockMode: p.lockMode, ...(p.ask === 'user' ? {} : { ask: p.ask === 'ask' }) });
+      state.rules = null; done(`Saved as version ${saved.version}. Computers take it within a minute.`); return load();
+    }
+    if (d.codeRemove) { await api('DELETE', '/api/codes/' + encodeURIComponent(d.codeRemove)); return load(); }
+    if (d.personActive) { await api('PUT', '/api/people/' + encodeURIComponent(d.personActive), { active: d.to === 'true' }); return load(); }
+    if (d.personPassword) { const pw = prompt(`New password for ${d.personPassword} (ten characters or more):`); if (!pw) return; await api('PUT', '/api/people/' + encodeURIComponent(d.personPassword), { password: pw }); done('Password changed.'); return load(); }
+  } catch (e) { fail(e); }
+});
+document.addEventListener('change', async (ev) => {
+  const t = ev.target, d = t.dataset;
+  try {
+    if (d.filter) { state.filter[d.filter] = t.value; return load(); }
+    if (d.rule !== undefined && d.field) { state.rules.rules[Number(d.rule)][d.field] = d.field === 'enabled' ? t.value === 'true' : t.value.trim(); return; }
+    if ('ruleAsk' in d) { state.rules.ask = t.value; return; }
+    if ('ruleLock' in d) { state.rules.lockMode = t.checked; return; }
+    if (d.personRole) { await api('PUT', '/api/people/' + encodeURIComponent(d.personRole), { role: t.value }); done('Role changed.'); return load(); }
+  } catch (e) { fail(e); load(); }
+});
+
+async function start() {
+  try { state.sso = await api('GET', '/api/sso'); } catch (e) { state.sso = null; }
+  try { state.me = await api('GET', '/api/me'); } catch (e) { state.me = null; state.error = ''; return render(); }
+  if (!TABS.some(([id, , role]) => id === state.tab && can(role))) state.tab = 'computers';
+  load();
+}
+start();
+</script>
+</body>
+</html>

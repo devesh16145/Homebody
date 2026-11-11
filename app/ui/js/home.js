@@ -6,7 +6,7 @@
 // app's page lists the places it reaches, what happened there, and the switch for each.
 
 import { invoke, onEvent } from './api.js';
-import { $, $$, esc, on, patch, initPage, errText, dot, fmtBytes, fmtCount, secondsLeft } from './util.js';
+import { $, $$, esc, on, patch, initPage, errText, dot, fmtBytes, fmtCount, secondsLeft, relTime } from './util.js';
 import { icon, appTile, mark, markMove, markReset, startBlinking, isNew, setAppIcons } from './icons.js';
 import * as proof from './proof.js';
 import * as feed from './feed.js';
@@ -447,11 +447,32 @@ async function addApp(name, program, key) {
 
 // ---------- Settings ----------
 
-const set = { folders: null, login: null, update: '', checking: false, error: '' };
+const set = { folders: null, login: null, update: '', checking: false, error: '', fleet: null, joining: false, fleetUrl: '', fleetCode: '' };
+
+/** Organisation: joined or not. Joining sends the log there, so the words say so before the button. */
+function fleetHtml() {
+  const f = set.fleet;
+  if (!f) return '';
+  if (f.joined) {
+    const last = f.lastError ? `Last try failed: ${esc(f.lastError)}` : f.lastSync ? `In touch ${esc(relTime(f.lastSync))}${f.waiting ? ` · ${fmtCount(f.waiting)} records waiting` : ''}` : 'Not in touch yet';
+    return `<section class="hm-block"><h2>Organisation</h2>
+      <div class="hm-set"><span class="grow"><b>${esc(f.org)}</b><small>Its rules come first. This Mac’s record is sent to it. ${last}</small></span>
+        <button class="cap" data-do="fleet-leave">Leave…</button></div></section>`;
+  }
+  return `<section class="hm-block"><h2>Organisation</h2>
+    ${set.joining ? `<form class="hm-addform" data-fleet>
+        <label>Server <input name="fleetUrl" value="${esc(set.fleetUrl)}" placeholder="https://fleet.example.org" autocomplete="off" data-key="fleet-url"></label>
+        <label>Code <input name="fleetCode" value="${esc(set.fleetCode)}" autocomplete="off" data-key="fleet-code"></label>
+        <p class="hm-sub">Joining sends this Mac’s record of what your AI apps reach to that server, and lets it set rules here.</p>
+        <span class="row"><button class="cap tide" type="submit">Join</button><button class="cap" type="button" data-do="fleet-cancel">Cancel</button></span></form>`
+      : `<div class="hm-set"><span class="grow"><b>Not in a fleet</b><small>Everything stays on this Mac.</small></span><button class="cap" data-do="fleet-join">Join one…</button></div>`}
+  </section>`;
+}
 
 async function loadSettings() {
   try { set.folders = await invoke('get_private_folders'); } catch (e) { set.folders = { folders: [] }; }
   try { set.login = (await invoke('get_login_item')).on; } catch (e) { set.login = null; }
+  try { set.fleet = await invoke('fleet_status'); } catch (e) { set.fleet = null; }
   if (route === 'settings') render();
 }
 
@@ -481,6 +502,7 @@ function settingsHtml() {
       <div class="hm-set"><span class="grow"><b>Version ${esc(s.version)}</b><small>${esc(set.update || 'Checks only when you ask. Nothing is downloaded.')}</small></span>
         <button class="cap" data-do="update"${set.checking ? ' disabled' : ''}>${set.checking ? 'Checking…' : 'Check for updates'}</button></div>
     </section>
+    ${fleetHtml()}
     <section class="hm-block"><h2>For someone else</h2>
       <div class="hm-set"><span class="grow"><b>Export the record</b><small>A signed folder anyone can check.</small></span>
         <button class="cap" data-do="export">Export…</button></div>
@@ -500,6 +522,9 @@ async function settingsDo(what, b) {
     if (what === 'update') { set.checking = true; render(); try { set.update = (await invoke('check_update')).message; } finally { set.checking = false; render(); } }
     if (what === 'export') { const r = await invoke('export_log', { reveal: true }); ctx.toast('Saved to ' + r.path.replace(/^\/Users\/[^/]+\//, '~/')); }
     if (what === 'folder-add') { const p = await invoke('pick_folder'); if (p) { set.folders = await invoke('add_private_folder', { path: p }); render(); } }
+    if (what === 'fleet-join') { set.joining = true; render(); }
+    if (what === 'fleet-cancel') { set.joining = false; render(); }
+    if (what === 'fleet-leave') { if (confirm(`Leave ${set.fleet.org}? Its rules stop applying and nothing more is sent to it.`)) { set.fleet = await invoke('fleet_leave'); refresh(); render(); } }
     if (what === 'folder-remove') { set.folders = await invoke('remove_private_folder', { path: b.dataset.folderRemove }); render(); }
   } catch (e) { ctx.toast(errText(e)); }
 }
@@ -572,8 +597,13 @@ on(el.view, 'click', '[data-folder-remove]', (ev, b) => settingsDo('folder-remov
 on(el.view, 'click', '[data-add-found]', (ev, b) => addApp(b.dataset.name, b.dataset.addFound, b.dataset.addFound));
 on(el.view, 'click', '[data-web-site]', (ev, b) => { const id = b.dataset.webSite; if (web.picked.has(id)) web.picked.delete(id); else web.picked.add(id); render(); });
 on(el.view, 'click', '[data-web-add]', (ev, b) => addBrowser(b.dataset.webAdd));
-on(el.view, 'input', '.hm-addform input', (ev, i) => { add[i.name] = i.value; });
-on(el.view, 'submit', '.hm-addform', (ev) => { ev.preventDefault(); addApp(add.name.trim(), add.program.trim(), 'form'); });
+on(el.view, 'input', '.hm-addform input', (ev, i) => { if (i.name in set) set[i.name] = i.value; else add[i.name] = i.value; });
+on(el.view, 'submit', 'form[data-fleet]', async (ev) => {
+  ev.preventDefault(); ev.stopImmediatePropagation();
+  try { set.fleet = await invoke('fleet_join', { url: set.fleetUrl.trim(), code: set.fleetCode.trim() }); set.joining = false; set.fleetCode = ''; ctx.toast(`Joined ${set.fleet.org}.`); refresh(); render(); }
+  catch (e) { ctx.toast(errText(e)); }
+});
+on(el.view, 'submit', '.hm-addform', (ev, f) => { ev.preventDefault(); if (f.matches('[data-fleet]')) return; addApp(add.name.trim(), add.program.trim(), 'form'); });
 on(el.view, 'change', 'input[data-protect]', async (ev, i) => {
   try { ctx.setStatus(await invoke('app_set_protected', { appId: i.dataset.protect, protected: i.checked })); }
   catch (e) { i.checked = !i.checked; ctx.toast(errText(e)); }

@@ -1129,6 +1129,7 @@ impl Engine {
         }
         let mut s = match row.reason {
             Reason::Trusted => format!("{label} is on {app_name}'s trusted list."),
+            Reason::YouAllowedOnce if row.detail == "fleet" => "Homebody itself joined your organisation's fleet here. From now on it takes the organisation's rules from this server and sends it the log.".into(),
             Reason::YouAllowedOnce if row.detail == "self" => "Homebody itself contacted this place because you asked it to. It sent a fingerprint of the log, or asked whether there is a newer version; nothing from your apps.".into(),
             Reason::YouAllowedOnce => "You allowed this once.".into(),
             Reason::YouAlwaysAllow => "You chose to always allow this.".into(),
@@ -1748,7 +1749,7 @@ impl Engine {
         let public_key = self.0.ledger.lock().unwrap().public_key_b64();
         let name = std::process::Command::new(if cfg!(windows) { "hostname.exe" } else { "/bin/hostname" }).output().ok().map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string()).filter(|n| !n.is_empty()).unwrap_or_else(|| "computer".into());
         let body = json!({ "code": code, "deviceName": name, "user": fence::real_user(), "publicKey": public_key, "os": std::env::consts::OS, "version": crate::VERSION });
-        self.append("conn", fields! { "app" => "homebody", "host" => fleet::host_of(&url), "port" => 443, "decision" => "allow", "reason" => "you_allowed_once", "detail" => "self" });
+        self.append("conn", fields! { "app" => "homebody", "host" => fleet::host_of(&url), "port" => 443, "decision" => "allow", "reason" => "you_allowed_once", "detail" => "fleet" });
         let reply = fleet::request("POST", &format!("{url}/v1/join"), None, Some(&body), ca_file.as_deref()).await?;
         let field = |k: &str| reply.get(k).and_then(Value::as_str).map(str::to_string).ok_or_else(|| "The server's answer was not understood. Is that a Homebody fleet server?".to_string());
         let m = fleet::Membership { url, device_id: field("deviceId")?, secret: field("secret")?, fleet_key: field("fleetKey")?, org: field("org")?, ca_file, joined_at: now_iso(), sent_seq: 0, last_sync: None, last_error: None };

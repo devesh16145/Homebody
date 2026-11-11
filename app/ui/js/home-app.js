@@ -75,7 +75,9 @@ function activityText(r) {
 
 function placeRow(appId, r) {
   const k = `${appId}|${r.host}`, b = rowBusy === k;
+  const org = r.rule && r.rule.source === 'org';
   const tags = [
+    org ? `<span class="tag">${esc(env.ctx.status().org || 'Organisation')}</span>` : '',
     r.rule && r.rule.recommended ? '<span class="tag">Needed</span>' : '',
     r.rule && r.rule.limitMb ? `<span class="tag">${r.rule.limitMb === 2 ? 'Downloads only' : `${r.rule.limitMb} MB/h`}</span>` : '',
   ].join('');
@@ -84,7 +86,7 @@ function placeRow(appId, r) {
     <span class="pl-ic" aria-hidden="true">${initial}</span>
     <div class="grow pl-name"><b>${esc(r.label)}</b>${tags}<small>${esc(activityText(r))}</small></div>
     ${r.state === 'ask' ? '<span class="pl-state">Asks</span>' : ''}
-    <span class="switch"><input type="checkbox" data-place="${esc(r.host)}" aria-label="Allow ${esc(r.label)}"${r.state === 'allowed' ? ' checked' : ''}${b ? ' disabled' : ''}><i></i></span>
+    <span class="switch"><input type="checkbox" data-place="${esc(r.host)}" aria-label="Allow ${esc(r.label)}"${r.state === 'allowed' ? ' checked' : ''}${b || org ? ' disabled' : ''}><i></i></span>
   </li>`;
 }
 

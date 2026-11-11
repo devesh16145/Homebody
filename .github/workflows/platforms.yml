@@ -56,6 +56,9 @@ jobs:
       - name: Fence, end to end (Linux)
         if: runner.os == 'Linux' && !cancelled()
         run: bash tests/linux-fence.sh --remove
+      - name: Fleet server tests (Linux)
+        if: runner.os == 'Linux' && !cancelled()
+        run: cargo test -p homebody-fleet 2>&1 | tail -25
       - name: The engine builds to the same file twice (Linux)
         if: runner.os == 'Linux' && !cancelled()
         run: bash scripts/repro-check.sh 2>&1 | tail -4

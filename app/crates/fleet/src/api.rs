@@ -448,7 +448,7 @@ pub fn activity(store: &Store, device: Option<&str>, q: Option<&str>, show: Opti
                 }
             }
             let (what, outcome) = match kind {
-                "conn" if s(&r, "detail") == "self" => continue,
+                "conn" if s(&r, "app") == "homebody" => continue,
                 "conn" if s(&r, "decision") == "allow" => ("connection", "allowed"),
                 "conn" => ("connection", "blocked"),
                 "ask" => ("question", "asked"),
@@ -472,6 +472,7 @@ pub fn activity(store: &Store, device: Option<&str>, q: Option<&str>, show: Opti
                 "fleet" => format!("fleet: {}", s(&r, "event")),
                 "app" => format!("app {}", s(&r, "action")),
                 "fence" => format!("protection: {}", s(&r, "event")),
+                _ if s(&r, "detail") == "org" => "the organisation's rules".to_string(),
                 _ => s(&r, "reason").replace('_', " "),
             };
             rows.push(json!({ "device": d.id, "deviceName": d.name, "user": d.user, "team": d.team, "ts": ts, "seq": r["seq"], "what": what, "outcome": outcome, "app": s(&r, "app"), "host": s(&r, "host"), "port": r["port"], "detail": detail }));
