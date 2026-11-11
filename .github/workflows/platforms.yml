@@ -41,3 +41,21 @@ jobs:
       - name: Core unit tests
         if: always()
         run: cargo test -p homebody-core 2>&1 | tail -120
+
+      # Linux only from here: the gate against the bypass corpus, then the fence itself, set up
+      # for real on this throwaway machine and attacked from inside.
+      - name: Start the engine (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          (./target/debug/homebody daemon > /tmp/homebody-daemon.log 2>&1 &)
+          sleep 4
+          ./target/debug/homebody status
+      - name: Bypass corpus, gate half (Linux)
+        if: runner.os == 'Linux'
+        run: SAI=$PWD/target/debug/homebody bash tests/bypass-corpus.sh gate
+      - name: Fence, end to end (Linux)
+        if: runner.os == 'Linux'
+        run: bash tests/linux-fence.sh --remove
+      - name: What the engine said (Linux)
+        if: runner.os == 'Linux' && always()
+        run: tail -40 /tmp/homebody-daemon.log; cat ~/.local/share/Homebody/logs/* 2>/dev/null | tail -40 || true

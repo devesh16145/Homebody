@@ -399,6 +399,31 @@ export function createMock(scenarioName) {
       ];
       return all.filter((f) => !s.apps.some((a) => a.name === f.name));
     },
+    async get_ai_sites({ appId } = {}) {
+      const app = appId ? s.apps.find((a) => a.id === appId) : null;
+      const on = (app && app.sites) || [];
+      const sites = [['chatgpt', 'ChatGPT', 'https://chatgpt.com/'], ['claude', 'Claude', 'https://claude.ai/'], ['gemini', 'Gemini', 'https://gemini.google.com/'], ['copilot', 'Copilot', 'https://copilot.microsoft.com/'],
+        ['perplexity', 'Perplexity', 'https://www.perplexity.ai/'], ['mistral', 'Le Chat', 'https://chat.mistral.ai/'], ['deepseek', 'DeepSeek', 'https://chat.deepseek.com/'], ['grok', 'Grok', 'https://grok.com/']]
+        .map(([id, name, url]) => ({ id, name, url, on: on.includes(id), places: [{ host: url.replace(/^https:\/\//, '').replace(/\/$/, ''), purpose: 'The site itself' }] }));
+      const added = s.apps.find((a) => a.kind === 'browser');
+      return { browsers: [{ name: 'Google Chrome', path: '/Applications/Google Chrome.app', appId: added ? added.id : null }], sites };
+    },
+    async browser_add({ browser, sites = [] } = {}) {
+      await wait(400);
+      if (s.apps.some((a) => a.kind === 'browser')) throw 'There is already an AI profile for Google Chrome.';
+      s.apps.push({ id: 'ai-chrome', name: 'AI in Chrome', kind: 'browser', icon: 'generic', workspace: null, installed: true, protected: true, running: false, custom: true, problem: null, sites: [...sites] });
+      for (const id of sites) s.trust.push({ appId: 'ai-chrome', host: id + '.example', label: id, purpose: 'The site itself', enabled: true, source: 'site', recommended: true });
+      for (const h of ['clients2.google.com', 'update.googleapis.com', '*.sentry.io']) s.trust.push({ appId: 'ai-chrome', host: h, label: h, purpose: 'Updates, statistics, advertising or crash reports', enabled: false, source: 'preset', recommended: false });
+      queueStatus();
+      return { ...status(), addedId: 'ai-chrome' };
+    },
+    async browser_set_site({ appId, site, on } = {}) {
+      const a = needApp(appId);
+      a.sites = (a.sites || []).filter((x) => x !== site);
+      s.trust = s.trust.filter((t) => !(t.appId === appId && t.host === site + '.example'));
+      if (on) { a.sites.push(site); s.trust.push({ appId, host: site + '.example', label: site, purpose: 'The site itself', enabled: true, source: 'site', recommended: true }); }
+      return trustList(appId);
+    },
     async app_launcher({ appId } = {}) { const a = needApp(appId); return { path: `~/Applications/Homebody/${a.name} (protected).app` }; },
     async app_open({ appId } = {}) { needApp(appId).running = true; queueStatus(); return null; },
     async get_app_icons() { return {}; },   // the preview uses .local-icons instead (icons.js)

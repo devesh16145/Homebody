@@ -345,3 +345,6 @@ body.hm { display: block; background: var(--ground); background-image: var(--gro
   .hm .proof-in > :nth-child(3) { animation-delay: .1s; }
   .hm .proof-in > :nth-child(n+4) { animation-delay: .15s; }
 }
+
+/* Add app: AI websites */
+.chips { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }

@@ -25,12 +25,13 @@ function matches(pattern, host) {
 }
 
 async function load(appId) {
-  const [events, trust, inside] = await Promise.all([
+  const [events, trust, inside, web] = await Promise.all([
     invoke('get_feed', { appId, limit: 500 }).catch(() => []),
     invoke('get_trust', { appId }).catch(() => []),
     invoke('get_inside_rules', { appId }).catch(() => []),
+    invoke('get_ai_sites', { appId }).catch(() => null),
   ]);
-  data.set(appId, { events, trust: trust.filter((t) => t.appId === appId), inside: inside.filter((r) => r.appId === appId), loadedAt: Date.now() });
+  data.set(appId, { events, trust: trust.filter((t) => t.appId === appId), inside: inside.filter((r) => r.appId === appId), sites: (web && web.sites) || [], loadedAt: Date.now() });
   if (shownId === appId) env.render();
 }
 
@@ -97,6 +98,28 @@ function autoRow(auto) {
   </li>`;
 }
 
+/** A browser profile's AI sites, each with one switch for all the places it needs. */
+function sitesHtml(a, d) {
+  const rows = d.sites.map((s) => `<li class="pl ${s.on ? 'pl-allowed' : 'pl-blocked'}" title="${esc(s.places.map((p) => p.host).join(', '))}">
+    <span class="pl-ic" aria-hidden="true">${esc(s.name.charAt(0))}</span>
+    <div class="grow pl-name"><b>${esc(s.name)}</b><small>${esc(s.url.replace(/^https:\/\//, '').replace(/\/$/, ''))}</small></div>
+    <span class="switch"><input type="checkbox" data-site="${esc(s.id)}" aria-label="Allow ${esc(s.name)}"${s.on ? ' checked' : ''}${rowBusy === `${a.id}|site:${s.id}` ? ' disabled' : ''}><i></i></span>
+  </li>`).join('');
+  return `<section class="hm-block"><h2>Sites</h2><ul class="pls">${rows}</ul>
+    <p class="hm-sub">Pages here can’t read your home folder, only Downloads. The browser’s own warning about its sandbox is expected: Homebody holds the pages instead.</p></section>`;
+}
+
+/** One line standing for every place a browser profile starts with switched off. */
+function upkeepRow(rows) {
+  if (!rows.length) return '';
+  const stopped = rows.reduce((n, r) => n + r.todayBlocked, 0);
+  return `<li class="pl pl-auto" title="${esc(rows.map((r) => r.host).join(', '))}">
+    <span class="pl-ic" aria-hidden="true">${icon('shield')}</span>
+    <div class="grow pl-name"><b>Trackers and browser upkeep</b><small>${fmtCount(rows.length)} places${stopped ? ` · stopped ${fmtCount(stopped)}× today` : ''}</small></div>
+    <span class="pl-fixed">Blocked</span>
+  </li>`;
+}
+
 function moreHtml(a, d) {
   const allowed = d.trust.filter((t) => t.enabled);
   const insideRows = d.inside.map((r) => `<li class="hm-row"><span class="grow"><b>${esc(r.label || r.path)}</b><small>${esc(r.hostLabel)} · <span class="mono">${r.method ? esc(r.method) + ' ' : ''}${esc(r.path)}</span></small></span>
@@ -135,7 +158,10 @@ export function render(view, a, e) {
   const [cls, line] = env.appLine(a);
   const qs = s.pending.filter((q) => q.appId === a.id);
   const err = env.appErrors.get(a.id) || error;
-  const { list, auto } = d ? places(d, s.ask !== false) : { list: [], auto: { total: 0 } };
+  const { list: every, auto } = d ? places(d, s.ask !== false) : { list: [], auto: { total: 0 } };
+  // A browser profile starts with a long list of trackers switched off; they are one line here.
+  const isUpkeep = (r) => a.kind === 'browser' && r.rule && r.rule.source === 'preset' && !r.rule.enabled;
+  const list = every.filter((r) => !isUpkeep(r)), upkeep = every.filter(isUpkeep);
   const folderBtn = a.kind === 'agent' && a.canStart
     ? `<button class="cap" data-do="proj-add" data-key="folder-${esc(a.id)}">${icon('folder')}Folder…</button>` : '';
   const askWord = s.ask !== false ? 'Anything new: you’re asked' : 'Anything new: blocked';
@@ -149,9 +175,10 @@ export function render(view, a, e) {
     ${err ? `<div class="notice error" role="alert">${icon('alert')}<span>${esc(err)}</span></div>` : ''}
     ${qs.length ? `<div class="hm-qs">${qs.map((q) => env.questionHtml(q, false)).join('')}</div>` : ''}
     ${a.kind === 'agent' && projects.has(a.id) ? `<section class="hm-block hm-proj"><h2>Folders</h2>${projects.section(a)}</section>` : ''}
+    ${a.kind === 'browser' && d ? sitesHtml(a, d) : ''}
     <section class="hm-block">
-      <h2>Can reach</h2>
-      ${d ? `${list.length || auto.total ? `<ul class="pls">${list.map((r) => placeRow(a.id, r)).join('')}${autoRow(auto)}</ul>`
+      <h2>${a.kind === 'browser' ? 'Every place' : 'Can reach'}</h2>
+      ${d ? `${list.length || auto.total || upkeep.length ? `<ul class="pls">${list.map((r) => placeRow(a.id, r)).join('')}${upkeepRow(upkeep)}${autoRow(auto)}</ul>`
           : `<p class="hm-empty">Nothing yet. ${s.ask !== false ? 'You’re asked' : 'It’s blocked'} the first time ${esc(a.name)} tries somewhere.</p>`}
         <div class="pl-foot">${adding ? `<form class="pl-add"><input name="host" value="${esc(addText)}" placeholder="example.com" aria-label="Place to allow" data-key="pl-add" autocomplete="off" autofocus><button class="cap tide sm" type="submit">Allow</button><button class="cap quiet sm" type="button" data-do="add-cancel">Cancel</button></form>`
           : `<button class="cap sm" data-do="add-place">${icon('plus')}Add place</button>`}<span class="muted">${askWord}</span></div>`
@@ -178,6 +205,10 @@ function bind(view) {
       if (t.matches('[data-place]')) {
         rowBusy = `${appId}|${t.dataset.place}`;
         await invoke('set_trust', { appId, host: t.dataset.place, enabled: t.checked });
+        rowBusy = ''; await load(appId);
+      } else if (t.matches('[data-site]')) {
+        rowBusy = `${appId}|site:${t.dataset.site}`;
+        await invoke('browser_set_site', { appId, site: t.dataset.site, on: t.checked });
         rowBusy = ''; await load(appId);
       } else if (t.matches('[data-inspect]')) env.ctx.setStatus(await invoke('app_set_inspect', { appId, on: t.checked }));
       else if (t.matches('[data-secrets]')) env.ctx.setStatus(await invoke('app_set_secrets', { appId, on: t.checked }));

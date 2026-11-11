@@ -282,7 +282,12 @@ async fn handle(engine: Engine, app_id: String, mut client: TcpStream) -> std::i
                     return Ok(());
                 }
                 _ => {
-                    engine.record_refusal(&app_id, &host, req.port, Reason::Malformed, "not_encrypted", "");
+                    // A browser opens connections ahead of need and often never uses them. One
+                    // that was closed, or timed out, before sending a single byte carried
+                    // nothing and is not worth a line; anything else that is not a greeting is.
+                    if !first.is_empty() {
+                        engine.record_refusal(&app_id, &host, req.port, Reason::Malformed, "not_encrypted", "");
+                    }
                     return Ok(());
                 }
             }

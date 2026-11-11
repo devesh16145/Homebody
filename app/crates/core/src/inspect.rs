@@ -160,6 +160,11 @@ fn pem_to_der(pem: &str) -> Option<CertificateDer<'static>> {
 /// Where protected apps can read the certificate. They cannot enter the user's home, so it
 /// lives in the shared folder, in a subfolder that belongs to the user.
 pub fn public_dir() -> PathBuf {
+    #[cfg(unix)]
+    if cfg!(target_os = "linux") {
+        // Setup makes the folder above this one and hands it to you.
+        return PathBuf::from(crate::fence_linux::shared_dir(&crate::fence::real_user())).join("certificates");
+    }
     PathBuf::from(format!("/Users/Shared/Homebody-certificates/{}", crate::fence::real_user()))
 }
 

@@ -21,7 +21,15 @@ pub const GROUP: &str = "_homebody";
 pub const SYSTEM_DIR: &str = "/Library/Application Support/Homebody";
 pub const FILTER_STATUS: &str = "/var/run/homebody.fence";
 pub const FILTER_ANCHOR: &str = "homebody";
+#[cfg(target_os = "linux")]
+pub const WORKSPACE_ROOT: &str = "/var/lib/homebody/work";
+#[cfg(windows)]
+pub const WORKSPACE_ROOT: &str = "C:/ProgramData/Homebody/work";
+#[cfg(not(any(target_os = "linux", windows)))]
 pub const WORKSPACE_ROOT: &str = "/Users/Shared/Homebody";
+
+/// This build is for Linux, where the fence is made of different parts (see `fence_linux`).
+const LINUX: bool = cfg!(target_os = "linux");
 
 #[derive(Clone, Debug, Default)]
 pub struct Health {
@@ -135,7 +143,40 @@ fn window_profile(app: &AppConfig) -> String {
     if home.starts_with("/Users/") && safe(&home) {
         p.push_str(&format!("(deny file-write* (subpath \"{home}/Library/LaunchAgents\"))\n"));
     }
+    if app.kind == "browser" {
+        // A browser's own inner sandbox cannot start inside this profile, so pages are held by
+        // this one instead, and it is made tighter than for other windowed apps: nothing in
+        // your home folder can be read or changed, apart from the profile's own folder and
+        // Downloads (for files you save from, or hand to, a site).
+        let dir = browser_profile_dir(app).to_string_lossy().into_owned();
+        if home.starts_with("/Users/") && safe(&home) && safe(&dir) {
+            p.push_str(&format!("(deny file-read* file-write* (subpath \"{home}\"))\n"));
+            p.push_str(&format!("(allow file-read* file-write* (subpath \"{dir}\"))\n"));
+            p.push_str(&format!("(allow file-read* file-write* (subpath \"{home}/Downloads\"))\n"));
+            p.push_str(&format!("(allow file-read* (subpath \"{home}/Library/Fonts\"))\n"));
+            // The browser keeps the key that encrypts this profile's cookies in your keychain,
+            // as it does for your everyday profile. Without it the cookies would be readable
+            // by anything that can read the folder.
+            p.push_str(&format!("(allow file-read* file-write* (subpath \"{home}/Library/Keychains\"))\n"));
+            // Finding its own folder means looking at (not into) the folders on the way there.
+            let mut at = std::path::PathBuf::from(&dir);
+            while at.pop() && at.starts_with(&home) {
+                p.push_str(&format!("(allow file-read-metadata (literal \"{}\"))\n", at.to_string_lossy()));
+            }
+        }
+    }
     p
+}
+
+/// Where a browser profile kept for AI sites stores its own data: outside Homebody's data folder
+/// (which every windowed app is shut out of) and apart from the browser's everyday profile.
+pub fn browser_profile_dir(app: &AppConfig) -> std::path::PathBuf {
+    dirs::data_dir().unwrap_or_else(|| std::path::PathBuf::from(real_home()).join("Library/Application Support")).join("Homebody Browser").join(&app.id)
+}
+
+/// The addresses a browser profile opens with: the sites switched on (the first few).
+fn browser_start_urls(app: &AppConfig) -> Vec<String> {
+    app.sites.iter().filter_map(|s| crate::catalog::ai_site(s)).map(|s| s.url.to_string()).take(4).collect()
 }
 
 /// What we need to know about a windowed app before wrapping it.
@@ -198,6 +239,30 @@ pub fn window_argv(app: &AppConfig) -> Result<Vec<String>, String> {
     // Parts of these apps are plain Node programs, which ignore the app's own gate setting
     // unless told to read it from the environment.
     v.extend(["NO_PROXY=localhost,127.0.0.1".to_string(), "no_proxy=localhost,127.0.0.1".to_string(), "NODE_USE_ENV_PROXY=1".to_string(), "HOMEBODY=1".to_string(), bundle.exe]);
+    if app.kind == "browser" {
+        let dir = browser_profile_dir(app);
+        std::fs::create_dir_all(&dir).map_err(|e| format!("The profile folder could not be made: {e}"))?;
+        v.extend([
+            format!("--user-data-dir={}", dir.to_string_lossy()),
+            "--no-first-run".to_string(),
+            "--no-default-browser-check".to_string(),
+            "--no-sandbox".to_string(),
+            format!("--proxy-server={gate}"),
+            "--proxy-bypass-list=<-loopback>;127.0.0.1;localhost".to_string(),
+            // Ways a browser reaches the network that a web gate cannot carry: switched off, so
+            // they do not show up as a stream of refusals.
+            "--disable-quic".to_string(),
+            "--force-webrtc-ip-handling-policy=disable_non_proxied_udp".to_string(),
+            // The browser maker's own background traffic (updates, statistics, sync).
+            "--disable-background-networking".to_string(),
+            "--disable-component-update".to_string(),
+            "--disable-sync".to_string(),
+            "--disable-domain-reliability".to_string(),
+            "--no-pings".to_string(),
+        ]);
+        v.extend(browser_start_urls(app));
+        return Ok(v);
+    }
     if bundle.electron {
         v.extend(["--no-sandbox".to_string(), format!("--proxy-server={gate}"), "--proxy-bypass-list=<-loopback>;127.0.0.1;localhost".to_string()]);
     }
@@ -208,6 +273,11 @@ pub fn window_argv(app: &AppConfig) -> Result<Vec<String>, String> {
 /// a second start just hands over to the first, which may be an unprotected one.
 pub async fn window_running(app: &AppConfig) -> bool {
     let Ok(bundle) = inspect_bundle(&app.binary) else { return false };
+    if app.kind == "browser" {
+        // Your everyday browser may well be open; only a copy using this profile counts.
+        let flag = format!("--user-data-dir={}", browser_profile_dir(app).to_string_lossy());
+        return run(&["/usr/bin/pgrep", "-f", &regex_escape(&flag)], Duration::from_secs(4)).await.map(|r| r.0).unwrap_or(false);
+    }
     run(&["/usr/bin/pgrep", "-f", &format!("^{}", regex_escape(&bundle.exe))], Duration::from_secs(4)).await.map(|r| r.0).unwrap_or(false)
 }
 
@@ -239,6 +309,10 @@ fn wants_own_servers(app: &AppConfig) -> bool {
 /// The certificate authorities this computer trusts out of the box, as text. Programs that take
 /// one file of trusted authorities get these plus ours (see `inspect::publish`).
 pub fn system_roots_pem() -> String {
+    #[cfg(unix)]
+    if LINUX {
+        return crate::fence_linux::system_roots_pem();
+    }
     std::process::Command::new("/usr/bin/security")
         .args(["find-certificate", "-a", "-p", "/System/Library/Keychains/SystemRootCertificates.keychain"])
         .output()
@@ -449,6 +523,10 @@ pub fn parse_violation(message: &str) -> Option<Violation> {
 /// JSON record; hand `eventMessage` to [`parse_violation`]. Only records written by the kernel
 /// are accepted, because any program can write to the log under any name.
 pub fn violation_stream() -> std::io::Result<tokio::process::Child> {
+    #[cfg(unix)]
+    if LINUX {
+        return crate::fence_linux::violation_stream();
+    }
     tokio::process::Command::new("/usr/bin/log")
         .args(["stream", "--style", "ndjson", "--predicate"])
         .arg(format!("process == \"kernel\" AND sender == \"Sandbox\" AND eventMessage CONTAINS \"{VIOLATION_TAG}\""))
@@ -461,6 +539,10 @@ pub fn violation_stream() -> std::io::Result<tokio::process::Child> {
 
 /// The refusal in one record of [`violation_stream`]'s output, if it is one of ours.
 pub fn violation_in(line: &str) -> Option<Violation> {
+    #[cfg(unix)]
+    if LINUX {
+        return crate::fence_linux::violation_in(line);
+    }
     let rec: serde_json::Value = serde_json::from_str(line.trim()).ok()?;
     if rec.get("processImagePath").and_then(|v| v.as_str()) != Some("/kernel") || rec.get("processID").and_then(|v| v.as_u64()) != Some(0) {
         return None;
@@ -470,6 +552,10 @@ pub fn violation_in(line: &str) -> Option<Violation> {
 
 /// Home folder of a protected app's OS user.
 pub fn home_for(os_user: &str) -> String {
+    #[cfg(unix)]
+    if LINUX {
+        return crate::fence_linux::home_for(os_user);
+    }
     let name = os_user.trim_start_matches("_hb").trim_start_matches('_');
     // Private users made before the app was called Homebody keep their home folder where it was:
     // macOS does not let anyone, administrator included, move a user's home folder.
@@ -537,8 +623,8 @@ pub fn fenced_env(app: &AppConfig) -> Vec<(String, String)> {
         ("HOME".into(), home.clone()),
         ("USER".into(), app.os_user.clone()),
         ("LOGNAME".into(), app.os_user.clone()),
-        ("SHELL".into(), "/bin/zsh".into()),
-        ("PATH".into(), "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin".into()),
+        ("SHELL".into(), if LINUX { "/bin/bash" } else { "/bin/zsh" }.into()),
+        ("PATH".into(), if LINUX { "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" } else { "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin" }.into()),
         ("TERM".into(), std::env::var("TERM").unwrap_or_else(|_| "xterm-256color".into())),
         ("LANG".into(), "en_US.UTF-8".into()),
         ("HTTPS_PROXY".into(), gate.clone()),
@@ -572,6 +658,11 @@ pub fn fenced_env(app: &AppConfig) -> Vec<(String, String)> {
 /// The full command line that runs `program` protected: as the app's OS user, under its seatbelt
 /// profile, with a clean environment, in `cwd`.
 pub fn fenced_argv(app: &AppConfig, program: &str, args: &[String], extra_env: &[(String, String)], cwd: Option<&str>) -> Vec<String> {
+    #[cfg(unix)]
+    if LINUX {
+        let env: Vec<(String, String)> = fenced_env(app).into_iter().chain(extra_env.iter().cloned()).collect();
+        return crate::fence_linux::fenced_argv(app, program, args, &env, cwd);
+    }
     if app.windowed {
         // As you, under the windowed app's profile, with the same pointers to its gate.
         let gate = format!("http://127.0.0.1:{}", app.proxy_port);
@@ -651,6 +742,19 @@ async fn profile_holds(wrap: impl Fn(&str, &[&str]) -> Vec<String>) -> bool {
 }
 
 pub async fn probe(app: &AppConfig, expected_rules: &str) -> Health {
+    #[cfg(unix)]
+    if LINUX {
+        // Somewhere it must not be able to reach although something is listening there: the
+        // gate of another app.
+        let mut other = None;
+        for port in crate::catalog::GATE_PORTS.filter(|p| *p != app.proxy_port) {
+            if is_port_open(port).await {
+                other = Some(port);
+                break;
+            }
+        }
+        return crate::fence_linux::probe(app, expected_rules, other, &fenced_env(app)).await;
+    }
     let t = Duration::from_secs(6);
     let mut h = Health { checked: true, ..Default::default() };
     h.installed = crate::catalog::find_binary(&app.binary).is_some();
@@ -728,6 +832,10 @@ pub async fn stop_all(app: &AppConfig) {
     if app.windowed {
         return; // runs as you; the engine stops the one process it started (see `stop_pid`)
     }
+    #[cfg(unix)]
+    if LINUX {
+        return crate::fence_linux::stop_all(app).await;
+    }
     let _ = run(&["/usr/bin/sudo", "-n", "-u", &app.os_user, "/bin/sh", "-c", "kill -TERM -1"], Duration::from_secs(5)).await;
 }
 
@@ -759,6 +867,10 @@ pub fn terminal_script(app: &AppConfig, binary: &str, dir: Option<&str>) -> Stri
 /// Open a Terminal window running the agent protected, in its workspace.
 pub async fn open_terminal(app: &AppConfig, dir: Option<&str>) -> Result<(), String> {
     let binary = crate::catalog::find_binary(&app.binary).ok_or_else(|| format!("{} is not installed on this computer.", app.name))?;
+    if LINUX {
+        // Linux desktops have no one terminal program to hand a script to.
+        return Err(format!("Open a terminal and run:  homebody run {} -- {}", app.id, app.binary));
+    }
     let run_dir = crate::paths::data_dir().join("run");
     std::fs::create_dir_all(&run_dir).map_err(|e| e.to_string())?;
     let script = run_dir.join(format!("{}.command", app.id));
@@ -777,6 +889,12 @@ pub async fn open_terminal(app: &AppConfig, dir: Option<&str>) -> Result<(), Str
 }
 
 pub async fn reveal(path: &str, select: bool) {
+    if LINUX {
+        // No "select this file" on Linux desktops in general: open the folder it is in.
+        let dir = if select { std::path::Path::new(path).parent().map(|p| p.to_string_lossy().into_owned()).unwrap_or_else(|| path.to_string()) } else { path.to_string() };
+        let _ = run(&["xdg-open", &dir], Duration::from_secs(10)).await;
+        return;
+    }
     let args: Vec<&str> = if select { vec!["/usr/bin/open", "-R", path] } else { vec!["/usr/bin/open", path] };
     let _ = run(&args, Duration::from_secs(10)).await;
 }
@@ -787,6 +905,10 @@ pub async fn reveal(path: &str, select: bool) {
 
 /// Packet filter rules for every protected app. Loopback is limited to the ports each app needs.
 pub fn filter_rules(cfg: &Config, own_servers: bool) -> String {
+    #[cfg(unix)]
+    if LINUX {
+        return crate::fence_linux::filter_rules(cfg);
+    }
     let mut s = String::from("# Homebody packet filter rules. Generated by the app; changes are overwritten.\n");
     let (lo, hi) = (crate::catalog::GATE_PORTS.start(), crate::catalog::GATE_PORTS.end());
     if own_servers && cfg.apps.iter().any(wants_own_servers) {
@@ -908,6 +1030,10 @@ const DAEMON_PLIST: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
 
 /// The script the administrator approves. Idempotent: running it again repairs and updates.
 pub fn setup_script(cfg: &Config, real_user: &str) -> String {
+    #[cfg(unix)]
+    if LINUX {
+        return crate::fence_linux::setup_script(cfg, real_user, &real_home());
+    }
     let users: Vec<&str> = cfg.apps.iter().filter(|a| !a.windowed).map(|a| a.os_user.as_str()).collect();
     let mut s = String::new();
     s.push_str("#!/bin/bash\n# Homebody one-time setup. Generated by the app. Safe to run again.\nset -Eeuo pipefail\n");
@@ -1104,6 +1230,10 @@ esac
 }
 
 pub fn remove_script(cfg: &Config) -> String {
+    #[cfg(unix)]
+    if LINUX {
+        return crate::fence_linux::remove_script();
+    }
     let mut s = String::from("#!/bin/bash\n# Homebody: remove everything setup created. Workspace folders are kept.\nset -uo pipefail\n");
     s.push_str(r#"launchctl bootout system/com.sandboxai.fence 2>/dev/null || true
 rm -f /Library/LaunchDaemons/com.sandboxai.fence.plist /etc/sudoers.d/sandbox-ai /etc/pf.anchors/sandboxai /var/run/sandboxai.fence
@@ -1128,6 +1258,10 @@ rm -rf "/Library/Application Support/Homebody"
 
 /// Run a script as root after the OS's own administrator prompt. We never see the password.
 async fn run_as_admin(script: &str, name: &str, prompt: &str) -> SetupResult {
+    #[cfg(unix)]
+    if LINUX {
+        return crate::fence_linux::run_as_admin(script, name).await;
+    }
     let dir = match crate::paths::ensure_data_dir() {
         Ok(d) => d.join("run"),
         Err(e) => return SetupResult { ok: false, message: format!("Could not prepare setup: {e}") },

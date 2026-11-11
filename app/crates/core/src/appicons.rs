@@ -46,6 +46,9 @@ fn app_dirs() -> Vec<PathBuf> {
 
 /// The Mac app whose icon stands for `app`, if one is installed.
 pub fn source(app: &AppConfig) -> Option<PathBuf> {
+    if !cfg!(target_os = "macos") {
+        return None; // icons are drawn by macOS; elsewhere the interface uses letter tiles
+    }
     if app.binary.ends_with(".app") && Path::new(&app.binary).is_dir() {
         return Some(PathBuf::from(&app.binary));
     }

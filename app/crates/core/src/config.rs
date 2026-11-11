@@ -105,6 +105,10 @@ pub struct AppConfig {
     /// path of the .app, and `os_user` is a placeholder that is never created or used.
     #[serde(default)]
     pub windowed: bool,
+    /// For a browser profile kept for AI sites (kind "browser"): the sites switched on, by their
+    /// id in `catalog::AI_SITES`. Each brings the places it needs as rules with source "site".
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sites: Vec<String>,
     #[serde(default)]
     pub projects: Vec<ProjectConfig>,
     pub trust: Vec<TrustRule>,
@@ -148,7 +152,7 @@ fn valid_id(id: &str) -> bool {
 }
 
 fn valid_workspace(w: &str) -> bool {
-    w.strip_prefix("/Users/Shared/Homebody/").map(valid_id).unwrap_or(false)
+    w.strip_prefix(crate::fence::WORKSPACE_ROOT).and_then(|r| r.strip_prefix('/')).map(valid_id).unwrap_or(false)
 }
 
 /// A display name with nothing in it but letters, digits, spaces and a little punctuation.
@@ -234,12 +238,13 @@ impl Config {
                         serves_port: p.serves_port,
                         loopback_all: p.loopback_all,
                         protected: true,
-                        workspace: if p.kind == "agent" { Some(format!("/Users/Shared/Homebody/{}", p.id)) } else { None },
+                        workspace: if p.kind == "agent" { Some(format!("{}/{}", crate::fence::WORKSPACE_ROOT, p.id)) } else { None },
                         custom: false,
                         inspect: false,
                         secrets: true,
                         allowed_secrets: vec![],
                         windowed: false,
+                        sites: vec![],
                         projects: vec![],
                         trust: vec![],
                         inside: vec![],
@@ -318,7 +323,13 @@ impl Config {
             a.name = clean_name(&a.name).unwrap_or_else(|| a.id.clone());
             if a.custom {
                 // What an added app may reach on this computer is ours to define, as for presets.
-                a.kind = if a.windowed { "window" } else { "agent" }.into();
+                let browser = a.windowed && a.kind == "browser";
+                a.kind = if browser { "browser" } else if a.windowed { "window" } else { "agent" }.into();
+                if browser {
+                    a.sites.retain(|s| catalog::ai_site(s).is_some());
+                } else {
+                    a.sites.clear();
+                }
                 a.local_ports = if a.windowed { vec![] } else { catalog::LOCAL_MODEL_PORTS.to_vec() };
                 a.serves_port = None;
                 a.loopback_all = a.windowed;
@@ -328,6 +339,7 @@ impl Config {
                 }
             } else {
                 a.windowed = false;
+                a.sites.clear();
             }
             if a.windowed {
                 // A windowed app decides for itself whom it trusts; it cannot be told about ours.
@@ -394,17 +406,90 @@ impl Config {
             serves_port: None,
             loopback_all: windowed,
             protected: true,
-            workspace: if windowed { None } else { Some(format!("/Users/Shared/Homebody/{id}")) },
+            workspace: if windowed { None } else { Some(format!("{}/{id}", crate::fence::WORKSPACE_ROOT)) },
             custom: true,
             inspect: false,
             secrets: true,
             allowed_secrets: vec![],
             windowed,
+            sites: vec![],
             projects: vec![],
             trust: vec![],
             inside: vec![],
         });
         Ok(id)
+    }
+
+    /// A browser profile kept only for AI sites. It runs like any windowed app (as you, under the
+    /// launch-time profile, its traffic through its own gate) with a profile folder of its own,
+    /// so nothing of your everyday browsing is in it and it can reach only the sites switched on.
+    pub fn add_browser(&mut self, browser: &str, sites: &[String]) -> Result<String, String> {
+        let stem = Path::new(browser).file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+        if !browser.starts_with('/') || !browser.ends_with(".app") || !catalog::KNOWN_BROWSERS.iter().any(|b| b.eq_ignore_ascii_case(&stem)) {
+            return Err("Choose Chrome, Brave, Edge, Chromium or Vivaldi. Other browsers cannot be pointed at the gate yet.".into());
+        }
+        crate::fence::inspect_bundle(browser)?;
+        if self.apps.iter().any(|a| a.kind == "browser" && a.binary == browser) {
+            return Err(format!("There is already an AI profile for {stem}."));
+        }
+        let short = stem.replace("Google ", "").replace("Microsoft ", "").replace(" Browser", "");
+        let name = format!("AI in {short}");
+        let port = (catalog::FIRST_CUSTOM_PORT..=*catalog::GATE_PORTS.end()).find(|p| !self.apps.iter().any(|a| a.proxy_port == *p)).ok_or("No more apps can be added.")?;
+        let n = (1..100).find(|n| !self.apps.iter().any(|a| a.os_user == format!("_hbwin{n}"))).ok_or("No more apps can be added.")?;
+        let base = format!("ai-{}", short.to_lowercase());
+        let id = (0..100).map(|i| if i == 0 { base.clone() } else { format!("{base}-{i}") }).find(|id| valid_id(id) && self.app(id).is_none()).ok_or("No more apps can be added.")?;
+        self.apps.push(AppConfig {
+            id: id.clone(),
+            name,
+            kind: "browser".into(),
+            icon: "generic".into(),
+            binary: browser.to_string(),
+            os_user: format!("_hbwin{n}"),
+            proxy_port: port,
+            local_ports: vec![],
+            serves_port: None,
+            loopback_all: true,
+            protected: true,
+            workspace: None,
+            custom: true,
+            inspect: false,
+            secrets: true,
+            allowed_secrets: vec![],
+            windowed: true,
+            sites: vec![],
+            projects: vec![],
+            trust: vec![],
+            inside: vec![],
+        });
+        let app = self.apps.last_mut().unwrap();
+        for host in catalog::BROWSER_BACKGROUND {
+            app.trust.push(TrustRule { host: host.to_string(), enabled: false, source: "preset".into(), recommended: false, limit_mb: None });
+        }
+        for s in sites {
+            self.set_site(&id, s, true)?;
+        }
+        Ok(id)
+    }
+
+    /// Switch an AI site on or off for a browser profile. On: the places it needs are trusted
+    /// (a place you blocked yourself stays blocked). Off: they are forgotten again, unless
+    /// another site that is still on needs the same place or you added the rule yourself.
+    pub fn set_site(&mut self, app_id: &str, site_id: &str, on: bool) -> Result<(), String> {
+        let site = catalog::ai_site(site_id).ok_or("Unknown site.")?;
+        let app = self.app_mut(app_id).filter(|a| a.kind == "browser").ok_or("That is not a browser profile.")?;
+        app.sites.retain(|s| s != site_id);
+        if on {
+            app.sites.push(site_id.to_string());
+            for (host, _) in site.hosts {
+                if !app.trust.iter().any(|r| r.host == *host) {
+                    app.trust.push(TrustRule { host: host.to_string(), enabled: true, source: "site".into(), recommended: true, limit_mb: None });
+                }
+            }
+        } else {
+            let still: Vec<&str> = app.sites.iter().filter_map(|s| catalog::ai_site(s)).flat_map(|s| s.hosts.iter().map(|(h, _)| *h)).collect();
+            app.trust.retain(|r| r.source != "site" || still.contains(&r.host.as_str()) || !site.hosts.iter().any(|(h, _)| *h == r.host));
+        }
+        Ok(())
     }
 
     /// Forget an app the user added. Its private user and workspace stay on disk until setup is
@@ -486,12 +571,38 @@ mod tests {
     }
 
     #[test]
+    fn switching_a_site_brings_its_places_and_takes_only_those_away() {
+        let mut cfg = Config::fresh();
+        let mut b = cfg.apps[0].clone();
+        b.id = "ai-chrome".into();
+        b.kind = "browser".into();
+        b.windowed = true;
+        b.trust.clear();
+        cfg.apps.push(b);
+        cfg.set_site("ai-chrome", "chatgpt", true).unwrap();
+        cfg.set_site("ai-chrome", "claude", true).unwrap();
+        let hosts = |c: &Config| c.app("ai-chrome").unwrap().trust.iter().map(|r| r.host.clone()).collect::<Vec<_>>();
+        assert!(hosts(&cfg).contains(&"chatgpt.com".to_string()) && hosts(&cfg).contains(&"claude.ai".to_string()));
+        // A rule of the user's own survives; a place both sites need stays while one is on.
+        cfg.app_mut("ai-chrome").unwrap().trust.push(TrustRule { host: "example.com".into(), enabled: true, source: "you".into(), recommended: false, limit_mb: None });
+        cfg.set_site("ai-chrome", "chatgpt", false).unwrap();
+        let left = hosts(&cfg);
+        assert!(!left.contains(&"chatgpt.com".to_string()) && left.contains(&"claude.ai".to_string()));
+        assert!(left.contains(&"challenges.cloudflare.com".to_string()) && left.contains(&"example.com".to_string()));
+        cfg.set_site("ai-chrome", "claude", false).unwrap();
+        assert_eq!(hosts(&cfg), vec!["example.com".to_string()]);
+        // Only browser profiles have sites.
+        assert!(cfg.set_site("claude-code", "chatgpt", true).is_err());
+        assert!(cfg.set_site("ai-chrome", "nope", true).is_err());
+    }
+
+    #[test]
     fn adding_your_own_app_gives_it_a_user_a_gate_and_a_workspace() {
         let mut c = Config::fresh();
         let id = c.add_custom("My Script!", "/bin/sh").unwrap();
         let a = c.app(&id).unwrap().clone();
         assert_eq!((a.id.as_str(), a.name.as_str(), a.os_user.as_str(), a.proxy_port), ("my-my-script", "My Script", "_hbapp1", catalog::FIRST_CUSTOM_PORT));
-        assert_eq!(a.workspace.as_deref(), Some("/Users/Shared/Homebody/my-my-script"));
+        assert_eq!(a.workspace, Some(format!("{}/my-my-script", crate::fence::WORKSPACE_ROOT)));
         assert!(a.custom && a.protected && a.trust.is_empty() && a.kind == "agent");
         // A second one gets the next user and port; names must differ.
         assert!(c.add_custom("my script", "/bin/sh").unwrap_err().contains("already"));
@@ -537,7 +648,7 @@ mod tests {
         elsewhere.id = "elsewhere".into();
         elsewhere.os_user = "_hbelse".into();
         elsewhere.proxy_port = 47132;
-        elsewhere.workspace = Some("/Users/Shared/Homebody/../../etc".into());
+        elsewhere.workspace = Some(format!("{}/../../etc", crate::fence::WORKSPACE_ROOT));
         c.apps.push(elsewhere);
         let mut clash = c.app(&id).unwrap().clone();
         clash.id = "clash".into();
@@ -607,7 +718,7 @@ mod tests {
         let back = Config::load(&f);
         let a = back.app("claude-code").unwrap();
         assert_eq!(a.os_user, "_hbagent");
-        assert_eq!(a.workspace.as_deref(), Some("/Users/Shared/Homebody/claude-code"));
+        assert_eq!(a.workspace, Some(format!("{}/claude-code", crate::fence::WORKSPACE_ROOT)));
         let _ = std::fs::remove_dir_all(&dir);
     }
 

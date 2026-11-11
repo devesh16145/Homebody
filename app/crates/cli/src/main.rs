@@ -89,6 +89,7 @@ const HELP: &str = "homebody: the Homebody command line
   homebody run <app> -- <command...>   run a command protected, in this terminal
   homebody ci [options] <app> -- <command...>   the same with nobody at the keyboard (homebody ci --help)
   homebody setup --print               print what setup does, for:  homebody setup --print | sudo bash
+  homebody setup --print-remove        print what removes everything setup created
   homebody open [feed|proof|studio|glance]   show a window of the running app
   homebody inspect <app> on|off        look inside an app's connections to trusted places
   homebody secrets <app> on|off        while looking inside, stop requests that carry a secret
@@ -418,6 +419,10 @@ async fn main() {
         "setup" if a(1) == "--print" => {
             let cfg = homebody_core::config::Config::load(&homebody_core::paths::config_file());
             print!("{}", homebody_core::fence::setup_script(&cfg.provisioned(), &homebody_core::fence::real_user()));
+        }
+        "setup" if a(1) == "--print-remove" => {
+            let cfg = homebody_core::config::Config::load(&homebody_core::paths::config_file());
+            print!("{}", homebody_core::fence::remove_script(&cfg));
         }
         "setup" => {
             let r = call("run_setup", Value::Null).await;

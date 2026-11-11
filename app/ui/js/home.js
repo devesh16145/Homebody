@@ -371,6 +371,42 @@ async function loadFound() {
   if (route === 'add') render();
 }
 
+// AI websites: a separate browser profile that reaches only the sites switched on.
+const web = { data: null, picked: new Set(['chatgpt', 'claude']), busy: '' };
+
+async function loadWeb() {
+  try { web.data = await invoke('get_ai_sites'); } catch (e) { web.data = { browsers: [], sites: [] }; }
+  if (route === 'add') render();
+}
+
+function webHtml() {
+  if (web.data === null) { loadWeb(); return ''; }
+  const { browsers, sites } = web.data;
+  if (!browsers.length) return '<section class="hm-block"><h2>AI websites</h2><p class="muted">Needs Chrome, Brave, Edge, Chromium or Vivaldi.</p></section>';
+  const fresh = browsers.filter((b) => !b.appId);
+  const chips = sites.map((s) => `<button type="button" class="chip" data-web-site="${esc(s.id)}" aria-pressed="${web.picked.has(s.id)}">${esc(s.name)}</button>`).join('');
+  const rows = browsers.map((b) => {
+    const short = b.name.replace(/^(Google|Microsoft) /, '').replace(/ Browser$/, '');
+    return `<li class="hm-row">${appTile('generic', short, 28)}
+      <div class="grow"><b>${esc(short)}</b><small>${b.appId ? 'Already set up' : 'Its own profile. Reaches only these sites.'}</small></div>
+      ${b.appId ? `<button class="cap sm" data-go="app:${esc(b.appId)}">Show</button>`
+        : `<button class="cap tide sm" data-web-add="${esc(b.path)}"${web.busy === b.path || !web.picked.size ? ' disabled' : ''}>${web.busy === b.path ? 'Adding…' : 'Add'}</button>`}</li>`;
+  }).join('');
+  return `<section class="hm-block"><h2>AI websites</h2>
+    ${fresh.length ? `<div class="chips" role="group" aria-label="Sites to switch on">${chips}</div>` : ''}
+    <ul class="hm-list">${rows}</ul></section>`;
+}
+
+async function addBrowser(path) {
+  web.busy = path; add.error = ''; render();
+  try {
+    const st = await invoke('browser_add', { browser: path, sites: [...web.picked] });
+    web.busy = ''; web.data = null;
+    ctx.setStatus(st);
+    if (st.addedId) go('app:' + st.addedId);
+  } catch (e) { web.busy = ''; add.error = errText(e); render(); }
+}
+
 function addHtml() {
   if (add.found === null) loadFound();
   const known = status.apps.filter((a) => !a.custom && (!a.installed || !a.protected));
@@ -384,6 +420,7 @@ function addHtml() {
     <section class="hm-block"><h2>Found on this Mac</h2>
       ${add.found === null ? '<p class="muted">Looking…</p>' : found ? `<ul class="hm-list">${found}</ul>` : '<p class="muted">No other AI apps were found in your Applications folders.</p>'}
     </section>
+    ${webHtml()}
     <section class="hm-block"><h2>Something else</h2>
       <form class="hm-addform">
         <label>Name <input name="name" value="${esc(add.name)}" placeholder="For example, LM Studio" autocomplete="off" data-key="add-name"></label>
@@ -533,6 +570,8 @@ on(el.view, 'click', '[data-do]', (ev, b) => {
 });
 on(el.view, 'click', '[data-folder-remove]', (ev, b) => settingsDo('folder-remove', b));
 on(el.view, 'click', '[data-add-found]', (ev, b) => addApp(b.dataset.name, b.dataset.addFound, b.dataset.addFound));
+on(el.view, 'click', '[data-web-site]', (ev, b) => { const id = b.dataset.webSite; if (web.picked.has(id)) web.picked.delete(id); else web.picked.add(id); render(); });
+on(el.view, 'click', '[data-web-add]', (ev, b) => addBrowser(b.dataset.webAdd));
 on(el.view, 'input', '.hm-addform input', (ev, i) => { add[i.name] = i.value; });
 on(el.view, 'submit', '.hm-addform', (ev) => { ev.preventDefault(); addApp(add.name.trim(), add.program.trim(), 'form'); });
 on(el.view, 'change', 'input[data-protect]', async (ev, i) => {

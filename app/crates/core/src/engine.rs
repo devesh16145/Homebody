@@ -897,7 +897,14 @@ impl Engine {
         let mut out = Vec::new();
         for a in cfg.apps.iter().filter(|a| app_id.map(|id| id == a.id).unwrap_or(true)) {
             for r in &a.trust {
-                let (label, purpose) = catalog::describe_pattern(&r.host);
+                let (mut label, mut purpose) = catalog::describe_pattern(&r.host);
+                // A place switched on with an AI site is named after the site and what it is for.
+                if let (true, Some((site, why))) = (label == r.host, catalog::ai_site_for(&r.host).filter(|_| a.kind == "browser")) {
+                    label = format!("{}: {}", site.name, why.to_lowercase());
+                    purpose = why.to_string();
+                } else if a.kind == "browser" && label == r.host && catalog::BROWSER_BACKGROUND.contains(&r.host.as_str()) {
+                    purpose = "Updates, statistics, advertising or crash reports: not needed to use an AI site".to_string();
+                }
                 let sent_mb = r.limit_mb.map(|_| (self.sent_last_hour(&a.id, &r.host) as f64 / 1_048_576.0 * 10.0).round() / 10.0);
                 out.push(TrustEntry { app_id: a.id.clone(), host: r.host.clone(), label, purpose, enabled: r.enabled, source: r.source.clone(), recommended: r.recommended, limit_mb: r.limit_mb, sent_mb });
             }
@@ -1897,6 +1904,57 @@ impl Engine {
                 }
                 self.check_fence().await;
                 ok(&self.status())
+            }
+            // A browser profile kept for AI sites: which browsers can have one, and which sites exist.
+            "get_ai_sites" => {
+                let cfg = self.0.cfg.lock().unwrap();
+                let app = s("appId").and_then(|id| cfg.app(&id).cloned());
+                let mut browsers = Vec::new();
+                let mut dirs = vec![std::path::PathBuf::from("/Applications")];
+                if let Some(home) = dirs::home_dir() {
+                    dirs.push(home.join("Applications"));
+                }
+                for name in catalog::KNOWN_BROWSERS {
+                    if let Some(path) = dirs.iter().map(|d| d.join(format!("{name}.app"))).find(|p| p.is_dir()) {
+                        let path = path.to_string_lossy().into_owned();
+                        let added = cfg.apps.iter().find(|a| a.kind == "browser" && a.binary == path).map(|a| a.id.clone());
+                        browsers.push(json!({ "name": name, "path": path, "appId": added }));
+                    }
+                }
+                let sites: Vec<Value> = catalog::AI_SITES
+                    .iter()
+                    .map(|site| json!({ "id": site.id, "name": site.name, "url": site.url, "on": app.as_ref().map(|a| a.sites.iter().any(|x| x == site.id)).unwrap_or(false), "places": site.hosts.iter().map(|(h, why)| json!({ "host": h, "purpose": why })).collect::<Vec<_>>() }))
+                    .collect();
+                Ok(json!({ "browsers": browsers, "sites": sites }))
+            }
+            "browser_add" => {
+                let sites: Vec<String> = args.get("sites").and_then(Value::as_array).map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect()).unwrap_or_default();
+                let (id, port) = {
+                    let mut cfg = self.0.cfg.lock().unwrap();
+                    let id = cfg.add_browser(&req("browser")?, &sites)?;
+                    let port = cfg.app(&id).map(|a| a.proxy_port).unwrap_or(0);
+                    (id, port)
+                };
+                self.save_cfg();
+                self.append("app", fields! { "action" => "added", "app" => id.as_str(), "sites" => sites.join(",") });
+                self.ensure_gate(port).await;
+                let added = self.0.cfg.lock().unwrap().app(&id).cloned();
+                let opener = self.0.opener.lock().unwrap().clone();
+                if let (Some(app), Some(opener)) = (added, opener) {
+                    let _ = fence::write_launcher(&app, &opener);
+                }
+                self.check_fence().await;
+                let mut st = serde_json::to_value(self.status()).map_err(|e| e.to_string())?;
+                st["addedId"] = json!(id);
+                Ok(st)
+            }
+            "browser_set_site" => {
+                let (app, site, on) = (req("appId")?, req("site")?, b("on")?);
+                self.0.cfg.lock().unwrap().set_site(&app, &site, on)?;
+                self.save_cfg();
+                self.append("trust", fields! { "app" => app.as_str(), "site" => site.as_str(), "enabled" => on, "via" => "site" });
+                self.touch();
+                ok(&self.trust_list(Some(&app)))
             }
             "get_install" => Ok(self.install_info()),
             // Each protected app's own icon, from its maker's Mac app when installed: { appId: dataUrl }.

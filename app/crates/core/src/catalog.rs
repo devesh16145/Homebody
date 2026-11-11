@@ -109,6 +109,80 @@ pub fn describe_pattern(pattern: &str) -> (String, String) {
     }
 }
 
+/// A website where an AI is used, and the places a browser needs to show it and sign in.
+///
+/// These are a starting set, read from each site with a fresh browser profile. A site may need
+/// another place later (after sign-in, or when it changes); that place asks like any other.
+pub struct AiSite {
+    pub id: &'static str,
+    pub name: &'static str,
+    pub url: &'static str,
+    /// (place, what it is for)
+    pub hosts: &'static [(&'static str, &'static str)],
+}
+
+const PERSON_CHECK: (&str, &str) = ("challenges.cloudflare.com", "The check that you are a person");
+
+pub const AI_SITES: &[AiSite] = &[
+    AiSite { id: "chatgpt", name: "ChatGPT", url: "https://chatgpt.com/", hosts: &[
+        ("chatgpt.com", "The site itself"), ("*.chatgpt.com", "The site itself"), ("*.openai.com", "Sign-in and the AI itself"),
+        ("*.oaistatic.com", "Its scripts and images"), ("*.oaiusercontent.com", "Files and images in your chats"), PERSON_CHECK,
+    ] },
+    AiSite { id: "claude", name: "Claude", url: "https://claude.ai/", hosts: &[
+        ("claude.ai", "The site itself"), ("*.claude.ai", "The site itself"), ("*.anthropic.com", "Sign-in and the AI itself"),
+        ("*.claudeusercontent.com", "Files and images in your chats"), PERSON_CHECK, ("*.hcaptcha.com", "The check that you are a person"),
+    ] },
+    AiSite { id: "gemini", name: "Gemini", url: "https://gemini.google.com/", hosts: &[
+        ("gemini.google.com", "The site itself"), ("accounts.google.com", "Google sign-in"), ("www.google.com", "Google's shared pages"),
+        ("*.gstatic.com", "Its scripts and images"), ("*.googleusercontent.com", "Files and images in your chats"),
+        ("*.googleapis.com", "Google services the site calls"), ("ogs.google.com", "The Google account menu"), ("apis.google.com", "Google services the site calls"),
+        ("waa-pa.clients6.google.com", "The check that you are a person"),
+    ] },
+    AiSite { id: "copilot", name: "Copilot", url: "https://copilot.microsoft.com/", hosts: &[
+        ("copilot.microsoft.com", "The site itself"), ("*.copilot.microsoft.com", "The site itself"), ("copilot.com", "The site itself"), ("*.copilot.com", "The site itself"),
+        ("login.microsoftonline.com", "Microsoft sign-in"),
+        ("login.live.com", "Microsoft sign-in"), ("*.msauth.net", "Microsoft sign-in"), ("*.msftauth.net", "Microsoft sign-in"), ("*.bing.com", "Search and images in answers"),
+    ] },
+    AiSite { id: "perplexity", name: "Perplexity", url: "https://www.perplexity.ai/", hosts: &[
+        ("www.perplexity.ai", "The site itself"), ("*.perplexity.ai", "The site itself"), PERSON_CHECK,
+    ] },
+    AiSite { id: "mistral", name: "Le Chat", url: "https://chat.mistral.ai/", hosts: &[
+        ("chat.mistral.ai", "The site itself"), ("*.mistral.ai", "Sign-in and the AI itself"),
+    ] },
+    AiSite { id: "deepseek", name: "DeepSeek", url: "https://chat.deepseek.com/", hosts: &[
+        ("chat.deepseek.com", "The site itself"), ("*.deepseek.com", "Sign-in and the AI itself"), ("*.awswaf.com", "The check that you are a person"),
+    ] },
+    AiSite { id: "grok", name: "Grok", url: "https://grok.com/", hosts: &[
+        ("grok.com", "The site itself"), ("*.grok.com", "The site itself"), ("*.x.ai", "Sign-in and the AI itself"),
+    ] },
+];
+
+pub fn ai_site(id: &str) -> Option<&'static AiSite> {
+    AI_SITES.iter().find(|s| s.id == id)
+}
+
+/// The site (and purpose) a browser rule belongs to, for labelling it.
+pub fn ai_site_for(pattern: &str) -> Option<(&'static AiSite, &'static str)> {
+    AI_SITES.iter().find_map(|s| s.hosts.iter().find(|(h, _)| *h == pattern).map(|(_, why)| (s, *why)))
+}
+
+/// The browser maker's own background traffic: update checks, statistics, lists it downloads.
+/// None of it is needed to use an AI site, so a browser profile starts with these switched off
+/// instead of asking about each one. They can be switched on like any other place.
+pub const BROWSER_BACKGROUND: &[&str] = &[
+    "clients2.google.com", "update.googleapis.com", "optimizationguide-pa.googleapis.com", "safebrowsing.googleapis.com", "content-autofill.googleapis.com",
+    "clientservices.googleapis.com", "*.gvt1.com", "*.gvt2.com", "android.clients.google.com",
+    "go-updater.brave.com", "variations.brave.com", "*.bravesoftware.com", "p3a.brave.com",
+    "edge.microsoft.com", "config.edge.skype.com", "msedge.api.cdp.microsoft.com", "*.vivaldi.com",
+    // Statistics, advertising and crash reports that sites load: also not needed to use them.
+    "www.googletagmanager.com", "*.google-analytics.com", "*.doubleclick.net", "play.google.com", "ogads-pa.clients6.google.com",
+    "*.sentry.io", "static.cloudflareinsights.com", "cloudflareinsights.com", "*.datadoghq.com", "browser-intake-datadoghq.com",
+    "cdn.segment.com", "api.segment.io", "*.amplitude.com", "*.mixpanel.com", "*.hotjar.com", "*.clarity.ms",
+];
+
+/// Browsers that can keep a separate profile pointed at a gate, by the name of the .app.
+pub const KNOWN_BROWSERS: &[&str] = &["Google Chrome", "Brave Browser", "Microsoft Edge", "Chromium", "Vivaldi"];
+
 pub fn companions(host: &str) -> &'static [&'static str] {
     lookup(host).map(|d| d.companions).unwrap_or(&[])
 }
@@ -401,6 +475,31 @@ mod tests {
         assert_eq!(describe("api.anthropic.com").0, "Anthropic API");
         assert_eq!(describe("o123.ingest.sentry.io").1, "Crash reports");
         assert_eq!(describe("unknown.example.org"), ("unknown.example.org".to_string(), String::new()));
+    }
+
+    #[test]
+    fn browser_background_places_are_valid_and_no_site_depends_on_one() {
+        for b in BROWSER_BACKGROUND {
+            assert!(hostname::valid_pattern(b), "{b}");
+            for s in AI_SITES {
+                assert!(!s.hosts.iter().any(|(h, _)| h == b), "{b} is needed by {}", s.id);
+            }
+        }
+    }
+
+    #[test]
+    fn every_ai_site_names_valid_places_and_a_secure_address() {
+        let mut ids = std::collections::HashSet::new();
+        for s in AI_SITES {
+            assert!(ids.insert(s.id), "{} twice", s.id);
+            assert!(s.url.starts_with("https://") && !s.hosts.is_empty(), "{}", s.id);
+            for (h, why) in s.hosts {
+                assert!(hostname::valid_pattern(h) && !why.is_empty(), "{h}");
+            }
+            // The address the browser opens must itself be among the places switched on.
+            let host = s.url.trim_start_matches("https://").trim_end_matches('/');
+            assert!(s.hosts.iter().any(|(h, _)| hostname::matches(h, host)), "{} cannot reach its own address", s.id);
+        }
     }
 
     #[test]
