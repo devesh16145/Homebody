@@ -1,7 +1,7 @@
-// Prompt banner: shows the oldest unanswered ask with exactly three answers.
+// The question pop-up: the oldest unanswered question, three answers, and a ring counting down.
 import { invoke, onEvent } from './api.js';
-import { $, esc, on, initPage, errText, drain, secondsLeft, verbChip } from './util.js';
-import { appTile } from './icons.js';
+import { $, esc, on, initPage, errText, secondsLeft } from './util.js';
+import { appTile, mark } from './icons.js';
 
 initPage();
 
@@ -29,44 +29,58 @@ function render() {
   idle = false;
   if (ask.id === shownId) return updateCount(ask);
   shownId = ask.id;
-  root.innerHTML = `<section class="p-card" role="alertdialog" aria-labelledby="p-title" aria-describedby="p-body">
-    <div class="p-top">${appTile(ask.appIcon, ask.appName, 36)}
-      <div class="p-text"><div class="p-title" id="p-title" title="${esc(ask.title)}">${esc(ask.title)}</div>
-        <div class="p-body" id="p-body">${esc(ask.body)}</div></div>
-      <div class="p-side"><span class="num" id="p-secs" aria-label="Seconds left"></span><span class="p-more" id="p-more"></span></div></div>
+  const where = ask.label || ask.host;
+  root.innerHTML = `<section class="p-card" role="alertdialog" aria-labelledby="p-where" aria-describedby="p-who">
+    <div class="p-top">${appTile(ask.appIcon, ask.appName, 44)}
+      <div class="p-text"><div class="p-who" id="p-who">${esc(ask.appName)} wants to reach</div>
+        <div class="p-where" id="p-where" title="${esc(ask.title || '')}">${esc(where)}</div>
+        <div class="p-host mono" title="${esc(ask.purpose || '')}">${esc(ask.host)}</div></div>
+      <div class="p-ring" title="Blocked if you don't answer"><svg viewBox="0 0 34 34" aria-hidden="true"><circle class="track" cx="17" cy="17" r="14"/><circle class="left" cx="17" cy="17" r="14"/></svg><span id="p-secs" aria-label="Seconds left"></span></div>
+      <span class="p-more" id="p-more" hidden></span></div>
     <div class="p-btns" role="group" aria-label="Your answer">
-      <button class="btn" data-choice="once">Allow once</button>
-      <button class="btn" data-choice="always">Always allow</button>
-      <button class="btn" data-choice="block">Block</button></div>
-    <div class="p-bar"><i></i></div></section>`;
-  drain($('.p-bar i', root), ask);
+      <button class="cap" data-choice="block" title="Not sure? Block it. You can allow it later.">Block</button>
+      <button class="cap" data-choice="once">Once</button>
+      <button class="cap tide" data-choice="always">Always</button></div></section>`;
+  ring(ask);
   updateCount(ask);
   // Silence means Block, so Block is where the keyboard starts.
   $('[data-choice="block"]', root).focus({ preventScroll: true });
 }
 
+/** The ring empties over the time that is left. */
+function ring(ask) {
+  const c = $('.p-ring .left', root);
+  if (!c || !c.animate) return;
+  const end = new Date(ask.expiresAt).getTime();
+  const total = Math.max(1, end - new Date(ask.createdAt).getTime());
+  const left = Math.max(0, end - Date.now());
+  const full = 87.96;
+  const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  c.animate([{ strokeDashoffset: full * (1 - Math.min(1, left / total)) }, { strokeDashoffset: full }],
+    { duration: left, easing: reduced ? `steps(${Math.max(1, Math.ceil(left / 1000))}, end)` : 'linear', fill: 'forwards' });
+}
+
 function updateCount(ask) {
   const secs = $('#p-secs', root), more = $('#p-more', root);
-  const tick = () => { if (secs) secs.textContent = secondsLeft(ask) + ' s'; };
+  const tick = () => { if (secs) secs.textContent = secondsLeft(ask); };
   tick();
   clearInterval(ticker);
   ticker = setInterval(tick, 500);
   const others = queue.length - 1;
-  if (more) more.textContent = others > 0 ? `+${others} more` : ask.waiting > 1 ? `${ask.waiting} waiting` : '';
+  if (more) { more.textContent = others > 0 ? `+${others} more` : ''; more.hidden = others <= 0; }
 }
 
 function renderOutcome() {
   const a = outcome.ask;
   shownId = null; idle = false;
-  root.innerHTML = `<section class="p-card" role="status"><div class="p-done">${appTile(a.appIcon, a.appName, 36)}
-    <div class="p-text"><div class="p-title">No answer, so it was blocked.</div>
-    <div class="p-body">${esc(a.appName)} did not reach ${esc(a.host)}. You can change this in the Feed.</div></div>
-    ${verbChip('blocked')}</div></section>`;
+  root.innerHTML = `<section class="p-card" role="status"><div class="p-done">${mark(44, 'shut', false, 'duck')}
+    <div class="p-text"><div class="p-where">No answer, so it was blocked</div>
+    <div class="p-who">${esc(a.appName)} didn’t reach ${esc(a.label || a.host)}. You can allow it on its page.</div></div></div></section>`;
 }
 
 function showError(msg) {
-  const body = $('#p-body', root);
-  if (body) body.textContent = msg;
+  const who = $('#p-who', root);
+  if (who) who.textContent = msg;
 }
 
 async function answer(choice) {

@@ -401,6 +401,7 @@ export function createMock(scenarioName) {
     },
     async app_launcher({ appId } = {}) { const a = needApp(appId); return { path: `~/Applications/Homebody/${a.name} (protected).app` }; },
     async app_open({ appId } = {}) { needApp(appId).running = true; queueStatus(); return null; },
+    async get_app_icons() { return {}; },   // the preview uses .local-icons instead (icons.js)
     async get_install() { return s.installed ? { path: '/Applications/Homebody.app', installed: true, canInstall: false } : { path: '/Volumes/Homebody/Homebody.app', installed: false, canInstall: true }; },
     async install_and_restart() { await wait(900); s.installed = true; host('note', { text: 'Copied to /Applications and restarted' }); return null; },
     async get_login_item() { return { on: !!s.loginItem }; },

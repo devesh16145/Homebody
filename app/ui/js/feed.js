@@ -1,12 +1,12 @@
-// Feed: one live, chronological list. Rows are keyed by event id and patched in place.
+// Activity: one live list, newest first, grouped by day. Rows are keyed by event id and patched in place.
 import { invoke } from './api.js';
 import {
   $, esc, on, patch, errText, isToday, feedTime, fullTime, fmtBytes, fmtDuration, fmtCount, verbChip, trustKey,
 } from './util.js';
-import { icon, appTile } from './icons.js';
+import { icon, appTile, mark } from './icons.js';
 
 const PAGE = 200;
-let root, ctx, bar, list;
+let root, ctx, bar, list, sum;
 let loaded = false, loading = false, visible = false, loadError = '', hasMore = false;
 const byId = new Map();     // id -> FeedEvent
 let order = [];             // ids, newest first
@@ -27,8 +27,8 @@ export function init(el, context) {
 function build() {
   if (root.querySelector('.feed')) return;
   root.__html = null;
-  root.innerHTML = '<div class="feed"><div class="feed-bar" role="toolbar" aria-label="Filters"></div><div class="feed-list scroll"></div></div>';
-  bar = $('.feed-bar', root); list = $('.feed-list', root);
+  root.innerHTML = '<div class="feed"><header class="feed-head"><h1>Activity</h1><span class="feed-sum num"></span></header><div class="feed-bar" role="toolbar" aria-label="Filters"></div><div class="feed-list scroll"></div></div>';
+  bar = $('.feed-bar', root); list = $('.feed-list', root); sum = $('.feed-sum', root);
 }
 
 export function show() {
@@ -55,8 +55,8 @@ export function onEvent({ type, data }) {
   const li = list.querySelector(`.ev[data-id="${data.id}"]`);
   if (li) return patch(li, liInner(data));
   if (!isNew || !matches(data)) return;
-  const ul = list.querySelector('ul');
-  if (!ul || order[0] !== data.id) return renderList();
+  const ul = list.querySelector('.feed-day ul');
+  if (!ul || order[0] !== data.id || list.querySelector('.feed-day h2').textContent !== dayLabel(data.ts)) return renderList();
   ul.insertAdjacentHTML('afterbegin', liHtml(data, true));
 }
 
@@ -121,23 +121,25 @@ function renderBar() {
   if (!bar || !s) return;
   const chip = (id, label, extra = '') => `<button class="chip" data-filter="${esc(id)}" data-key="f-${esc(id)}" aria-pressed="${filter === id}">${extra}${esc(label)}</button>`;
   const apps = s.apps.filter((a) => a.installed).map((a) => chip('app:' + a.id, a.name, appTile(a.icon, a.name, 16))).join('');
-  patch(bar, chip('all', 'All') + chip('today', 'Today') + chip('blocked', 'Blocked') + (apps ? '<span class="sep"></span>' + apps : '')
-    + `<span class="feed-sum num">Today: ${fmtCount(s.today.allowed)} allowed · ${fmtCount(s.today.blocked)} blocked</span>`);
+  patch(bar, chip('all', 'All') + chip('today', 'Today') + chip('blocked', 'Blocked') + (apps ? '<span class="sep"></span>' + apps : ''));
+  patch(sum, `Today <b>${fmtCount(s.today.allowed)}</b> allowed · <b>${fmtCount(s.today.blocked)}</b> stopped`);
 }
 
 function bytesCell(e) {
   if (e.open && e.verb !== 'asked') return '<span class="live">Live</span>';
   if ((e.verb === 'allowed' || e.verb === 'seen') && e.bytesOut != null) {
-    return `<span title="Sent ${esc(fmtBytes(e.bytesOut))}${e.bytesIn != null ? ', received ' + esc(fmtBytes(e.bytesIn)) : ''}">${esc(fmtBytes(e.bytesOut))}<small>sent</small></span>`;
+    return `<span title="Sent ${esc(fmtBytes(e.bytesOut))}${e.bytesIn != null ? ', received ' + esc(fmtBytes(e.bytesIn)) : ''}">${esc(fmtBytes(e.bytesOut))}<small>out</small></span>`;
   }
   return '';
 }
 
 function rowHtml(e, open) {
+  // Homebody's own contacts (the update check, a timestamp) carry the cat.
+  const who = e.appId === 'sandbox-ai' ? mark(28, 'private') : appTile(e.appIcon, e.appName, 28);
   return `<button class="ev-row" data-key="row" aria-expanded="${open}">
+    ${who}
+    <span class="ev-main"><b class="ev-what ellipsis">${esc(e.label || e.host)}</b><small class="ellipsis">${esc(e.appName)}${e.purpose ? ` · ${esc(e.purpose)}` : ''}</small></span>
     ${verbChip(e.verb)}
-    <span class="ev-app">${appTile(e.appIcon, e.appName)}<span class="ellipsis">${esc(e.appName)}</span></span>
-    <span class="ev-what ellipsis">${esc(e.label || e.host)}${e.purpose ? `<span class="ev-purpose">${esc(e.purpose)}</span>` : ''}</span>
     <span class="ev-bytes num">${bytesCell(e)}</span>
     <time class="ev-time num" datetime="${esc(e.ts)}">${esc(feedTime(e.ts))}</time></button>`;
 }
@@ -145,17 +147,17 @@ function rowHtml(e, open) {
 function actionsHtml(e) {
   const err = rowError.get(e.id);
   const errHtml = err ? `<span class="notice error" role="alert">${esc(err)}</span>` : '';
-  const btn = (act, label, cls = '') => `<button class="btn sm ${cls}" data-do="${act}" data-key="${act}">${label}</button>`;
+  const btn = (act, label, cls = '') => `<button class="cap sm ${cls}" data-do="${act}" data-key="${act}">${label}</button>`;
   const ask = e.verb === 'asked' ? ctx.status().pending.find((a) => a.appId === e.appId && a.host === e.host) : null;
   if (ask) {
     return `<span class="ev-state">Waiting for your answer</span><span data-ask="${esc(ask.id)}" class="row">`
-      + btn('once', 'Allow once') + btn('always', 'Always allow') + btn('block', 'Block') + '</span>' + errHtml;
+      + btn('block', 'Block') + btn('once', 'Once') + btn('always', 'Always', 'tide') + '</span>' + errHtml;
   }
   if (e.secret) {
     return e.secret.allowed
       ? `<span class="ev-state">You have since let this one through for ${esc(e.appName)}.</span>` + btn('secret-stop', 'Stop it again') + errHtml
       : `<span class="ev-state">Stopped: it held what looks like ${esc(e.secret.kind)}. Nothing of it was sent.</span>`
-        + `<button class="btn sm" data-do="secret-allow" data-key="secret-allow" title="Use this only if you know what it is and mean to send it. Applies to this one secret, for ${esc(e.appName)} only.">Let this one through</button>` + errHtml;
+        + `<button class="cap sm" data-do="secret-allow" data-key="secret-allow" title="Use this only if you know what it is and mean to send it. Applies to this one secret, for ${esc(e.appName)} only.">Let this one through</button>` + errHtml;
   }
   if (e.reason === 'around_gate') {
     return '<span class="ev-state">Refused by the fence. Protected apps can only reach the network through the gate.</span>';
@@ -168,9 +170,9 @@ function actionsHtml(e) {
   }
   const t = trustFor(e), k = trustKey(e.appId, e.host);
   let html = '';
-  if (t && t.enabled) html = `<span class="ev-state on">${icon('check')}Trusted for ${esc(e.appName)}</span>` + btn('trust-off', 'Block');
-  else if (t) html = `<span class="ev-state off">${icon('x')}Blocked for ${esc(e.appName)}</span>` + btn('trust-on', 'Always allow');
-  else html = btn('trust-on', 'Always allow') + btn('trust-off', 'Block');
+  if (t && t.enabled) html = `<span class="ev-state on">${icon('check')}Allowed for ${esc(e.appName)}</span>` + btn('trust-off', 'Block');
+  else if (t) html = `<span class="ev-state off">${icon('x')}Blocked for ${esc(e.appName)}</span>` + btn('trust-on', 'Always allow', 'tide');
+  else html = btn('trust-off', 'Block') + btn('trust-on', 'Always allow', 'tide');
   if (undo.has(k)) html += '<button class="link" data-do="undo" data-key="undo">Undo</button>';
   return html + errHtml;
 }
@@ -184,8 +186,8 @@ function detailHtml(e) {
         <span class="grow ev-inside-what">${r.label ? `<b>${esc(r.label)}</b> ` : ''}<span class="mono sel">${esc(r.what)}</span></span>
         ${r.times > 1 ? `<span class="num">${esc(String(r.times))} times</span>` : ''}
         ${r.path ? (r.allowed === false
-          ? `<span class="ev-inside-state">Switched off</span><button class="btn sm" data-do="inside-on" data-path="${esc(r.path)}" data-key="in-${esc(r.path)}">Allow</button>`
-          : `<button class="btn sm" data-do="inside-off" data-path="${esc(r.path)}" data-key="in-${esc(r.path)}" title="Refuse requests to this address from now on. Everything else at ${esc(e.label || e.host)} keeps working.">Refuse</button>`) : ''}</li>`).join('')}</ul></div>`
+          ? `<span class="ev-inside-state">Switched off</span><button class="cap sm" data-do="inside-on" data-path="${esc(r.path)}" data-key="in-${esc(r.path)}">Allow</button>`
+          : `<button class="cap sm" data-do="inside-off" data-path="${esc(r.path)}" data-key="in-${esc(r.path)}" title="Refuse requests to this address from now on. Everything else at ${esc(e.label || e.host)} keeps working.">Refuse</button>`) : ''}</li>`).join('')}</ul></div>`
     : e.requests ? '<div class="ev-inside"><span class="ev-inside-h">Looked inside: no requests were made in this connection</span></div>' : '';
   return `<div class="ev-detail"><p class="sel">${esc(e.explanation)}</p>${inside}
     <div class="ev-meta">${meta.join('')}</div>
@@ -204,25 +206,38 @@ function renderList() {
     return;
   }
   if (loadError) {
-    list.innerHTML = `<div class="empty"><div class="empty-art">${icon('alert')}</div><h2>The Feed could not be loaded</h2><p>${esc(loadError)}</p><button class="btn" data-do="reload">Try again</button></div>`;
+    list.innerHTML = `<div class="empty"><div class="empty-art">${icon('alert')}</div><h2>Activity could not be loaded</h2><p>${esc(loadError)}</p><button class="cap" data-do="reload">Try again</button></div>`;
     return;
   }
   const rows = order.map((id) => byId.get(id)).filter(matches);
   if (!rows.length) { list.innerHTML = emptyHtml(); return; }
-  list.innerHTML = `<ul>${rows.map((e) => liHtml(e)).join('')}</ul>`
-    + (hasMore ? '<div class="feed-more"><button class="btn" data-do="more">Show earlier</button></div>' : '');
+  // One card per day, newest day first.
+  const days = [];
+  for (const e of rows) {
+    const d = dayLabel(e.ts);
+    if (!days.length || days[days.length - 1].d !== d) days.push({ d, rows: [] });
+    days[days.length - 1].rows.push(e);
+  }
+  list.innerHTML = days.map((g) => `<section class="feed-day"><h2>${esc(g.d)}</h2><ul>${g.rows.map((e) => liHtml(e)).join('')}</ul></section>`).join('')
+    + (hasMore ? '<div class="feed-more"><button class="cap" data-do="more">Show earlier</button></div>' : '');
+}
+
+function dayLabel(ts) {
+  if (isToday(ts)) return 'Today';
+  const d = new Date(ts), y = new Date(); y.setDate(y.getDate() - 1);
+  if (d.toDateString() === y.toDateString()) return 'Yesterday';
+  return d.toLocaleDateString([], { weekday: 'long', day: 'numeric', month: 'short' });
 }
 
 function emptyHtml() {
   if (!order.length) {
-    return `<div class="empty"><div class="empty-art">${icon('feed')}</div><h2>Nothing yet</h2>
-      <p>When a protected app contacts anything, it appears here with what happened and why. Start a protected app to see it.</p>
-      <button class="btn" data-do="apps">Go to Apps</button></div>`;
+    return `<div class="empty">${mark(64, 'private', true)}<h2>Nothing yet</h2>
+      <p>Open one of your AI apps. Everywhere it reaches shows up here.</p></div>`;
   }
   const app = filter.startsWith('app:') ? ctx.status().apps.find((a) => a.id === filter.slice(4)) : null;
   const text = filter === 'blocked' ? 'Nothing has been blocked.' : filter === 'today' ? 'Nothing has happened today.'
     : `${app ? app.name : 'This app'} has not contacted anything.`;
-  return `<div class="empty"><h2>Nothing here</h2><p>${esc(text)}</p><button class="btn" data-do="all">Show everything</button></div>`;
+  return `<div class="empty"><h2>Nothing here</h2><p>${esc(text)}</p><button class="cap" data-do="all">Show everything</button></div>`;
 }
 
 function refreshLi(id) {

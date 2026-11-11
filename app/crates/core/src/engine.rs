@@ -1132,7 +1132,8 @@ impl Engine {
 
     fn to_event(row: &Row, cfg: &Config) -> FeedEvent {
         let app = cfg.app(&row.app);
-        let app_name = app.map(|a| a.name.clone()).unwrap_or_else(|| row.app.clone());
+        // "sandbox-ai" is the app itself (update check, timestamps): an internal id kept in the log.
+        let app_name = app.map(|a| a.name.clone()).unwrap_or_else(|| if row.app == "sandbox-ai" { "Homebody".to_string() } else { row.app.clone() });
         let (label, purpose) = if row.reason == Reason::AroundGate {
             let label = match row.detail.as_str() {
                 "direct" => "Direct connection",
@@ -1891,6 +1892,18 @@ impl Engine {
                 ok(&self.status())
             }
             "get_install" => Ok(self.install_info()),
+            // Each protected app's own icon, from its maker's Mac app when installed: { appId: dataUrl }.
+            "get_app_icons" => {
+                let apps: Vec<_> = self.0.cfg.lock().unwrap().apps.iter().filter(|a| a.protected).cloned().collect();
+                let dir = paths::icons_dir();
+                let mut out = serde_json::Map::new();
+                for a in apps {
+                    if let Some(url) = crate::appicons::icon(&a, &dir).await {
+                        out.insert(a.id.clone(), Value::String(url));
+                    }
+                }
+                Ok(Value::Object(out))
+            }
             // Copies the app into Applications. The shell then restarts from the new copy.
             "install_app" => {
                 let bundle = self.0.opener.lock().unwrap().as_deref().and_then(fence::bundle_of).ok_or("Only the Homebody app can install itself.")?;

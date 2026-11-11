@@ -241,6 +241,7 @@ interface PrivateFolders {
 | `app_launcher` | `{ appId, reveal?: boolean }` | `{ path }` | writes `~/Applications/Homebody/<Name> (protected).app`, a small app that opens this one protected (starting Homebody first if needed), and reveals it in Finder. Created automatically for windowed apps when they are added |
 | `pick_program` | — | `string \| null` | shell only: the system file chooser |
 | `get_install` | — | `{ path: string \| null, installed: boolean, canInstall: boolean }` | where the desktop app is running from, and whether that is `/Applications/Homebody.app` |
+| `get_app_icons` | — | `{ [appId]: string }` | each protected app's own icon as a 128 px PNG `data:` URL, drawn by macOS from the app itself or, for a command-line agent, from its maker's Mac app (Claude for Claude Code, Cursor for the Cursor CLI…); apps without one are left out and shown as letter tiles. Cached in the data folder; nothing leaves the Mac |
 | `install_app` | — | `{ path }` | copies the app into Applications, replacing an older copy |
 | `install_and_restart` | — | `null` | shell only: `install_app`, then stop cleanly and reopen from Applications |
 | `get_login_item` / `set_login_item` | — / `{ on }` | `{ on: boolean }` | shell only: open the app at login (a per-user launch entry) |

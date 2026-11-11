@@ -14,7 +14,9 @@
 //! - [`projects`]: bring a folder in for an agent to work on, review, apply back
 //! - [`fence`]:    OS-level enforcement: private users, seatbelt profile, packet filter, launchers
 //! - [`control`]:  a local socket so the CLI and scripts can drive a running engine
+//! - [`appicons`]: each app's own icon, from its maker's Mac app
 
+pub mod appicons;
 pub mod catalog;
 pub mod config;
 pub mod control;

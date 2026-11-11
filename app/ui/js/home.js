@@ -7,7 +7,7 @@
 
 import { invoke, onEvent } from './api.js';
 import { $, $$, esc, on, patch, initPage, errText, dot, fmtBytes, fmtCount, secondsLeft } from './util.js';
-import { icon, appTile, mark, markMove, markReset, startBlinking, isNew } from './icons.js';
+import { icon, appTile, mark, markMove, markReset, startBlinking, isNew, setAppIcons } from './icons.js';
 import * as proof from './proof.js';
 import * as feed from './feed.js';
 import * as watch from './watch.js';
@@ -29,7 +29,7 @@ export const plural = (n, one, many) => `${fmtCount(n)} ${n === 1 ? one : many}`
 
 const ctx = {
   status: () => status,
-  setStatus(s) { if (s && s.mode) { status = s; render(); } },
+  setStatus(s) { if (s && s.mode) { status = s; render(); loadIcons(); } },
   go(tab, sub) {
     if (tab === 'studio' && sub === 'apps') return go('add');
     if (tab === 'studio') return go('settings');
@@ -42,6 +42,20 @@ const ctx = {
     toastTimer = setTimeout(() => el.toast.classList.remove('show'), 2600);
   },
 };
+
+// Each app's own icon, from its maker's Mac app. Asked for again only when the list of apps changes.
+let iconsFor = '';
+async function loadIcons() {
+  const key = myApps().map((a) => a.id).join();
+  if (key === iconsFor) return;
+  iconsFor = key;
+  try {
+    const byId = await invoke('get_app_icons');
+    const byName = {};
+    status.apps.forEach((a) => { if (byId[a.id]) byName[a.name] = byId[a.id]; });
+    if (Object.keys(byName).length) { setAppIcons(byName); el.nav.__html = ''; el.view.__html = ''; render(); }
+  } catch (e) { /* letter tiles stay */ }
+}
 
 /** Apps the user has: protected, and either installed or added by them. */
 export function myApps(s = status) {

@@ -11,6 +11,10 @@ New
 - The app is called Homebody now, with a new look: a face peeking over the windowsill, in the menu bar and the Dock.
 - A new main window organised around your apps: a sidebar with each app, a big Open button, and one list per app of the places it can reach, each with its own switch.
 - The menu-bar panel shows a tile per app: click it to open that app protected.
+- The question pop-up, Activity and Report have the new look: a countdown ring, a card per day, the cat at the top of Report.
+- Your AI apps show their makers' own icons when those Mac apps are installed (Claude for Claude Code, Cursor for the Cursor CLI).
+- The Homebody lettering (Fredoka) ships with the app; nothing is loaded from the web.
+- The cat moves: it peeks up, ducks when everything is blocked, hops when a question arrives, and blinks.
 - Web socket messages are read while looking inside, and examined for secrets like any other request.
 - A switch inside a trusted place can apply to one kind of request (refuse sending, allow reading).
 - Private folders: a request that repeats lines from a file in a folder you marked is stopped.

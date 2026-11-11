@@ -32,6 +32,7 @@ pub fn control_socket() -> PathBuf { data_dir().join("control.sock") }
 pub fn inspect_key() -> PathBuf { data_dir().join("inspect-ca.key") }
 pub fn inspect_cert() -> PathBuf { data_dir().join("inspect-ca.pem") }
 pub fn logs_dir() -> PathBuf { data_dir().join("logs") }
+pub fn icons_dir() -> PathBuf { data_dir().join("icons") }
 
 pub fn downloads_dir() -> PathBuf {
     dirs::download_dir().or_else(dirs::home_dir).unwrap_or_else(|| PathBuf::from("."))

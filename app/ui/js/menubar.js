@@ -3,7 +3,7 @@
 
 import { invoke, onEvent } from './api.js';
 import { $, esc, on, patch, initPage, errText, fmtCount, secondsLeft } from './util.js';
-import { icon, appTile, mark, markMove, markReset, startBlinking, isNew } from './icons.js';
+import { icon, appTile, mark, markMove, markReset, startBlinking, isNew, setAppIcons } from './icons.js';
 
 initPage();
 
@@ -74,7 +74,21 @@ document.addEventListener('visibilitychange', opened);
 window.addEventListener('focus', opened);
 startBlinking();
 
-async function refresh() { try { status = await invoke('get_status'); render(); } catch (e) { /* keep last */ } }
+async function refresh() { try { status = await invoke('get_status'); render(); loadIcons(); } catch (e) { /* keep last */ } }
+
+// Each app's own icon, asked for again only when the list of apps changes.
+let iconsFor = '';
+async function loadIcons() {
+  const key = status.apps.filter((a) => a.protected).map((a) => a.id).join();
+  if (key === iconsFor) return;
+  iconsFor = key;
+  try {
+    const byId = await invoke('get_app_icons');
+    const byName = {};
+    status.apps.forEach((a) => { if (byId[a.id]) byName[a.name] = byId[a.id]; });
+    if (Object.keys(byName).length) { setAppIcons(byName); root.__html = ''; render(); }
+  } catch (e) { /* letter tiles stay */ }
+}
 
 on(root, 'click', '[data-answer]', async (ev, b) => {
   try { await invoke('decide', { askId: b.closest('[data-ask]').dataset.ask, choice: b.dataset.answer }); } catch (e) { error = errText(e); }
@@ -99,5 +113,5 @@ on(root, 'click', '[data-do]', async (ev, b) => {
 });
 document.addEventListener('keydown', (ev) => { if (ev.key === 'Escape') invoke('hide_window').catch(() => {}); });
 setInterval(() => root.querySelectorAll('[data-left]').forEach((n) => { n.textContent = Math.max(0, Math.ceil((new Date(n.dataset.left) - Date.now()) / 1000)) + ' s'; }), 1000);
-onEvent((evt) => { if (evt.type === 'status') { status = evt.data; render(); } else if (evt.type === 'ask' || evt.type === 'ask_resolved') refresh(); });
+onEvent((evt) => { if (evt.type === 'status') { status = evt.data; render(); loadIcons(); } else if (evt.type === 'ask' || evt.type === 'ask_resolved') refresh(); });
 refresh();

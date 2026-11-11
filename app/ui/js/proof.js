@@ -1,7 +1,7 @@
-// Proof: the hero screen. The streak, the statement, and an honest account of its limits.
+// Report: how long your AI has stayed home, the signed record behind it, and an honest account of its limits.
 import { invoke } from './api.js';
-import { $, esc, on, patch, errText, fmtBytes, fmtCount, feedTime, dot } from './util.js';
-import { icon } from './icons.js';
+import { $, esc, on, patch, errText, fmtBytes, fmtCount, feedTime } from './util.js';
+import { icon, appTile, mark, markMove, markReset } from './icons.js';
 
 let root, ctx, el = null;
 let visible = false, data = null, loadError = '';
@@ -25,6 +25,7 @@ function build() {
 }
 
 export function show() {
+  if (!visible) markReset('report');
   visible = true;
   build();
   render();
@@ -54,7 +55,7 @@ async function load() {
 function render() {
   if (!data) {
     patch(el.hero, loadError
-      ? `<div class="empty"><div class="empty-art">${icon('alert')}</div><h2>Proof could not be loaded</h2><p>${esc(loadError)}</p><button class="btn" data-do="reload">Try again</button></div>`
+      ? `<div class="empty"><div class="empty-art">${icon('alert')}</div><h2>The report could not be loaded</h2><p>${esc(loadError)}</p><button class="cap" data-do="reload">Try again</button></div>`
       : '<div class="proof-skel" aria-busy="true"><span class="skel" style="width:90px"></span><span class="skel" style="width:340px;height:34px;border-radius:10px"></span><span class="skel" style="width:420px"></span><span class="skel" style="width:300px"></span></div>');
     return;
   }
@@ -65,7 +66,7 @@ function render() {
   patch(el.chain, chainHtml());
   patch(el.week, weekHtml());
   patch(el.honest, `<div class="honest">
-    <div><h3>What this proof covers</h3><p class="sel">${esc(data.covers)}</p></div>
+    <div><h3>What this report covers</h3><p class="sel">${esc(data.covers)}</p></div>
     <div><h3>What it cannot see</h3><p class="sel">${esc(data.cannotSee)}</p></div></div>
     <p class="proof-key">Signed by this computer. Key <span class="mono sel">${esc(data.publicKey)}</span></p>`);
 }
@@ -73,7 +74,7 @@ function render() {
 function heroHtml() {
   const fresh = /^just now$/i.test(data.streakText);
   const leaked = data.untrustedBytesSincePrivate;
-  return `<div class="proof-over">${dot('private')}Proof</div>
+  return `${mark(72, 'private', true, markMove('report', 'private'))}
     <h1 class="streak">${fresh ? 'Private since just now' : 'Private for ' + esc(data.streakText)}</h1>
     <p class="statement sel">${esc(data.statement)}</p>
     ${leaked ? `<div class="zero warn">${icon('info')}<span class="num">${esc(fmtBytes(leaked))} went to places you allowed once</span></div>`
@@ -84,16 +85,16 @@ function idleHtml() {
   const why = data.mode === 'watch'
     ? 'Watch is on, so everything is allowed and written down. There is no streak to show until Private is on.'
     : 'Protection is off, so your AI apps can reach anything. There is no streak to show until Private is on.';
-  return `<div class="proof-over">Proof</div>
+  return `${mark(72, 'off', false, markMove('report', 'off'))}
     <h1 class="streak">Not private right now</h1>
     <p class="statement">${why}</p>
-    <div class="proof-cta"><button class="btn primary lg" data-do="private" data-key="private">Turn on Private</button></div>`;
+    <div class="proof-cta"><button class="cap tide lg" data-do="private" data-key="private">Turn on Private</button></div>`;
 }
 
 function statsHtml() {
   const n = data.appsProtected;
   return `<div class="stats">
-    <div class="stat"><b class="num">${esc(fmtBytes(data.bytesOutToday))}</b><span>sent to trusted places today</span></div>
+    <div class="stat"><b class="num">${esc(fmtBytes(data.bytesOutToday))}</b><span>sent today, all to places you allowed</span></div>
     <div class="stat"><b class="num">${fmtCount(data.blockedTotal)}</b><span>${data.blockedTotal === 1 ? 'attempt' : 'attempts'} blocked</span></div>
     <div class="stat" title="${esc(data.appNames.join(', '))}"><b class="num">${fmtCount(n)}</b><span>${n === 1 ? 'app' : 'apps'} protected</span></div></div>`;
 }
@@ -103,7 +104,7 @@ function weekHtml() {
   const plural = (n, one, many) => `${fmtCount(n)} ${n === 1 ? one : many}`;
   return `<div class="week"><h3>The last seven days</h3>${week.apps.map((a) => {
     const stopped = [a.aroundGate ? `${plural(a.aroundGate, 'attempt', 'attempts')} to go around the gate` : '', a.secretsStopped ? `${plural(a.secretsStopped, 'request', 'requests')} carrying a secret` : '', a.addressesRefused ? `${plural(a.addressesRefused, 'request', 'requests')} to an address that is switched off` : ''].filter(Boolean);
-    return `<div class="week-app"><div class="week-h"><b>${esc(a.appName)}</b><span class="num">${plural(a.allowed, 'connection', 'connections')} allowed · ${fmtCount(a.blocked)} blocked · ${esc(fmtBytes(a.bytesOut))} sent</span></div>
+    return `<div class="week-app"><div class="week-h">${appTile('generic', a.appName, 28)}<b>${esc(a.appName)}</b><span class="num">${plural(a.allowed, 'connection', 'connections')} allowed · ${fmtCount(a.blocked)} blocked · ${esc(fmtBytes(a.bytesOut))} sent</span></div>
       ${a.places.length ? `<div class="week-l"><span>Reached</span><span class="sel">${a.places.map((p) => `${esc(p.name)} <i class="num">${esc(fmtBytes(p.bytesOut))}</i>`).join(', ')}</span></div>` : ''}
       ${a.blockedPlaces.length ? `<div class="week-l"><span>Blocked</span><span class="sel">${a.blockedPlaces.map((p) => `${esc(p.name)} <i class="num">${fmtCount(p.times)}×</i>`).join(', ')}</span></div>` : ''}
       ${stopped.length ? `<div class="week-l"><span>Stopped</span><span>${stopped.join(', ')}</span></div>` : ''}</div>`;
@@ -112,11 +113,11 @@ function weekHtml() {
 
 function chainHtml() {
   const c = data.chain;
-  let cls = '', glyph = 'receipt', title = 'The record has not been checked yet', sub = 'Verify confirms nothing in it was changed or removed.';
+  let cls = '', glyph = 'receipt', title = 'The record has not been checked yet', sub = 'Check confirms nothing in it was changed or removed.';
   if (verify.state === 'running') { cls = 'run'; title = 'Checking every receipt…'; sub = 'This can take a moment.'; }
   else if (verify.state === 'failed') { cls = 'bad'; glyph = 'alert'; title = 'The check could not finish'; sub = esc(verify.error) + ' Try again in a moment.'; }
   else if (c && c.ok) { cls = 'ok'; glyph = 'check'; title = `Chain intact · ${fmtCount(c.count)} ${c.count === 1 ? 'receipt' : 'receipts'}`; sub = 'Checked ' + esc(feedTime(c.checkedAt).toLowerCase()); }
-  else if (c) { cls = 'bad'; glyph = 'alert'; title = 'The record does not add up'; sub = esc(c.error || 'Something in it was changed.') + ' Keep a copy from Studio, then check again.'; }
+  else if (c) { cls = 'bad'; glyph = 'alert'; title = 'The record does not add up'; sub = esc(c.error || 'Something in it was changed.') + ' Export it from Settings, then check again.'; }
   const busy = verify.state === 'running', saving = share.state === 'saving';
   let note = '';
   if (share.state === 'saved') note = `<div class="notice good proof-note" role="status">${icon('check')}<span>Saved to Downloads <span class="mono sel">${esc(share.path)}</span></span></div>`;
@@ -124,11 +125,11 @@ function chainHtml() {
   return `<div class="chain">
       <span class="chain-ic ${cls}">${icon(glyph)}</span>
       <div class="grow"><div class="chain-t num" role="status">${title}</div><div class="chain-s">${sub}</div></div>
-      <button class="btn" data-do="verify" data-key="verify"${busy ? ' disabled' : ''}>${busy ? 'Verifying…' : 'Verify'}</button>
-      <button class="btn primary" data-do="share" data-key="share"${saving ? ' disabled' : ''}>${icon('share')}${saving ? 'Saving…' : 'Share proof'}</button>
+      <button class="cap" data-do="verify" data-key="verify"${busy ? ' disabled' : ''}>${busy ? 'Checking…' : 'Check'}</button>
+      <button class="cap tide" data-do="share" data-key="share"${saving ? ' disabled' : ''}>${icon('share')}${saving ? 'Saving…' : 'Share'}</button>
     </div>${note}
-    <div class="stamp"><span class="grow"><b>Independent timestamp.</b> A public time-stamping service can vouch for when this record existed. Only a fingerprint of the record is sent to it, nothing from the record itself.${stamp.state === 'done' ? ` <span class="ok">${esc(stamp.text)}</span>` : ''}${stamp.state === 'failed' ? ` <span class="bad">${esc(stamp.error)}</span>` : ''}</span>
-      <button class="btn" data-do="stamp" data-key="stamp"${stamp.state === 'running' ? ' disabled' : ''}>${stamp.state === 'running' ? 'Asking…' : 'Add a timestamp'}</button></div>`;
+    <div class="stamp"><span class="chain-ic">${icon('receipt')}</span><span class="grow"><b>Independent timestamp</b><small>A public service vouches for when this record existed. Only a fingerprint is sent.${stamp.state === 'done' ? ` <span class="ok">${esc(stamp.text)}</span>` : ''}${stamp.state === 'failed' ? ` <span class="bad">${esc(stamp.error)}</span>` : ''}</small></span>
+      <button class="cap" data-do="stamp" data-key="stamp"${stamp.state === 'running' ? ' disabled' : ''}>${stamp.state === 'running' ? 'Asking…' : 'Add'}</button></div>`;
 }
 
 // ---------- actions ----------

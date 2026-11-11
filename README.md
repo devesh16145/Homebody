@@ -85,3 +85,5 @@ Issues and pull requests are welcome; [CONTRIBUTING.md](CONTRIBUTING.md) explain
 ## License
 
 [Apache-2.0](LICENSE).
+
+The app includes the Fredoka typeface by The Fredoka Project Authors, under the [SIL Open Font License 1.1](app/ui/fonts/OFL.txt). The icons of other makers' apps are read from those apps on your own Mac and are not part of this repository.

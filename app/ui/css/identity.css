@@ -11,6 +11,15 @@
      danger    protection off, a secret caught, something to fix.
    Blocked is not an error, so it is neutral grey, not red. */
 
+/* Fredoka, bundled with the app (SIL Open Font License, see fonts/OFL.txt). Never loaded from the web. */
+@font-face {
+  font-family: "Fredoka";
+  src: url("../fonts/Fredoka.ttf") format("truetype");
+  font-weight: 300 700;
+  font-stretch: 75% 125%;
+  font-display: swap;
+}
+
 :root {
   --font-round: "Fredoka", ui-rounded, "SF Pro Rounded", -apple-system, BlinkMacSystemFont, "Helvetica Neue", sans-serif;
 
