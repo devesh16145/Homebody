@@ -37,10 +37,15 @@ pub async fn contain(args: &[String]) -> i32 {
         }
         i += 1;
     }
-    let run = || -> Result<i32, String> {
+    // Everything the work below needs, owned, because it runs on another thread.
+    let (app, port, home, cwd) = (app.to_string(), port.to_string(), home.to_string(), cwd.to_string());
+    let workspace = value(opts, "--workspace").map(str::to_string);
+    let command: Vec<String> = command.to_vec();
+    let run = move || -> Result<i32, String> {
+        let (app, home, cwd) = (app.as_str(), home.as_str(), cwd.as_str());
         let sid = ContainerSid::for_app(app)?;
         let sid_text = sid.text()?;
-        win::ensure_dirs(home, value(opts, "--workspace"), &sid_text)?;
+        win::ensure_dirs(home, workspace.as_deref(), &sid_text)?;
         // The relay is this same program, started inside the space, so the space has to be
         // allowed to read it.
         let me = std::env::current_exe().map_err(|e| e.to_string())?.to_string_lossy().into_owned();
@@ -48,7 +53,7 @@ pub async fn contain(args: &[String]) -> i32 {
         let relay = Contained::spawn(&sid, &[me, "__relay".into(), port.to_string(), win::gate_pipe(app)], &win::base_env(home), home)?;
         // Give it a moment to start listening; the program's first connection needs it.
         std::thread::sleep(Duration::from_millis(500));
-        let program = Contained::spawn(&sid, command, &env, cwd);
+        let program = Contained::spawn(&sid, &command, &env, cwd);
         let code = match program {
             Ok(p) => p.wait(),
             Err(e) => {
