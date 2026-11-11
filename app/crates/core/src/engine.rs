@@ -1545,8 +1545,8 @@ impl Engine {
     /// Ask where the project is published whether there is a newer version. Only when the user
     /// asks: it is Homebody itself contacting a server, and it is written into the log.
     async fn check_update(&self) -> Result<Value, String> {
-        // Where releases are published. Changes when the repository is re-created under the new name.
-        const HOME: &str = "devesh16145/Sandbox-ai";
+        // Where releases are published.
+        const HOME: &str = "devesh16145/Homebody";
         let out = tokio::time::timeout(
             Duration::from_secs(15),
             tokio::process::Command::new("/usr/bin/curl").args(["-sS", "--max-time", "10", "-H", "Accept: application/vnd.github+json", "-H", "User-Agent: homebody-update-check"]).arg(format!("https://api.github.com/repos/{HOME}/releases/latest")).output(),
