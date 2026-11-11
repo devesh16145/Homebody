@@ -23,7 +23,9 @@
 //! | a place with no rule                       | no policy: refused (Homebody may ask you first)    |
 //!
 //! An exact name beats a wildcard in Homebody. Cedar has no such order, so a wildcard `forbid`
-//! carries an `unless` naming the exact places that are trusted beneath it.
+//! carries an `unless` naming the exact places that are trusted beneath it. An organisation's
+//! rules come before the person's own; so each of the person's own rules carries an `unless`
+//! that steps aside wherever an organisation rule covers the place.
 
 use crate::config::{AppConfig, Config, InsideRule, TrustRule};
 
@@ -89,13 +91,36 @@ fn place_cond(pattern: &str) -> Option<String> {
 }
 
 /// Rules for reaching places, in Homebody's own order of precedence.
+///
+/// There are two tiers. Rules set by an organisation (source "org") are asked first; where one
+/// of them covers a place, the person's own rules are not asked at all. In Cedar that becomes:
+/// the organisation's rules as they are, and every one of the person's own rules with an
+/// `unless` that steps aside wherever an organisation rule covers the place.
 fn connect_policies(app: &AppConfig, out: &mut String) {
-    let exact: Vec<&TrustRule> = app.trust.iter().filter(|r| !r.host.starts_with("*.")).collect();
+    let org: Vec<&TrustRule> = app.trust.iter().filter(|r| r.source == "org").collect();
+    let own: Vec<&TrustRule> = app.trust.iter().filter(|r| r.source != "org").collect();
+    let cover: Vec<String> = org.iter().map(|r| place_cond(&r.host).unwrap_or_else(|| format!("resource.name == {}", lit(&r.host)))).collect();
+    tier(app, &org, "org-", &[], out);
+    tier(app, &own, "", &cover, out);
+}
+
+/// One tier's rules: an exact name beats a wildcard, and a block beats an allow of the same kind.
+/// `aside` lists conditions under which this whole tier does not apply.
+fn tier(app: &AppConfig, rules: &[&TrustRule], prefix: &str, aside: &[String], out: &mut String) {
+    let exact: Vec<&&TrustRule> = rules.iter().filter(|r| !r.host.starts_with("*.")).collect();
     // For one exact name, a block beats an allow.
     let decided = |host: &str| -> Option<bool> {
-        let mut rules = exact.iter().filter(|r| r.host == host).peekable();
-        rules.peek()?;
-        Some(rules.all(|r| r.enabled))
+        let mut same = exact.iter().filter(|r| r.host == host).peekable();
+        same.peek()?;
+        Some(same.all(|r| r.enabled))
+    };
+    let unless = |more: &[String]| -> String {
+        let all: Vec<&String> = more.iter().chain(aside.iter()).collect();
+        if all.is_empty() {
+            String::new()
+        } else {
+            format!("\nunless {{ {} }}", all.iter().map(|c| c.as_str()).collect::<Vec<_>>().join(" || "))
+        }
     };
     let mut seen: Vec<&str> = Vec::new();
     for r in &exact {
@@ -104,33 +129,38 @@ fn connect_policies(app: &AppConfig, out: &mut String) {
         }
         seen.push(&r.host);
         let allowed = decided(&r.host).unwrap_or(false);
-        let limit = app.trust.iter().find(|x| x.host == r.host).and_then(|x| x.limit_mb);
-        out.push_str(&format!("@id({})\n", lit(&policy_id(&[&app.id, "place", &r.host]))));
+        let limit = rules.iter().find(|x| x.host == r.host).and_then(|x| x.limit_mb);
+        out.push_str(&format!("@id({})\n", lit(&policy_id(&[&app.id, &format!("{prefix}place"), &r.host]))));
         if let (true, Some(mb)) = (allowed, limit) {
             out.push_str(&format!("@limit_mb_per_hour({})\n", lit(&mb.to_string())));
         }
-        out.push_str(&format!("{}(\n  principal == {},\n  action == Homebody::Action::\"connect\",\n  resource == Homebody::Place::{}\n);\n\n", if allowed { "permit" } else { "forbid" }, app_ref(app), lit(&r.host)));
+        out.push_str(&format!("{}(\n  principal == {},\n  action == Homebody::Action::\"connect\",\n  resource == Homebody::Place::{}\n){};\n\n", if allowed { "permit" } else { "forbid" }, app_ref(app), lit(&r.host), unless(&[])));
     }
     let mut seen: Vec<(&str, bool)> = Vec::new();
-    for r in app.trust.iter().filter(|r| r.host.starts_with("*.")) {
+    for r in rules.iter().filter(|r| r.host.starts_with("*.")) {
         if seen.contains(&(r.host.as_str(), r.enabled)) {
             continue;
         }
         seen.push((&r.host, r.enabled));
         let Some(cond) = place_cond(&r.host) else { continue };
-        out.push_str(&format!("@id({})\n", lit(&policy_id(&[&app.id, if r.enabled { "places" } else { "places-blocked" }, &r.host]))));
+        out.push_str(&format!("@id({})\n", lit(&policy_id(&[&app.id, &format!("{prefix}{}", if r.enabled { "places" } else { "places-blocked" }), &r.host]))));
         if let (true, Some(mb)) = (r.enabled, r.limit_mb) {
             out.push_str(&format!("@limit_mb_per_hour({})\n", lit(&mb.to_string())));
         }
         out.push_str(&format!("{}(\n  principal == {},\n  action == Homebody::Action::\"connect\",\n  resource\n)\nwhen {{ {cond} }}", if r.enabled { "permit" } else { "forbid" }, app_ref(app)));
+        // An exact name in the same tier is decided by its own rule, not by a wildcard: a
+        // blocked wildcard spares the exact names trusted beneath it, and a trusted wildcard
+        // needs no sparing (a `forbid` for the exact name already wins).
+        let mut spared: Vec<String> = Vec::new();
         if !r.enabled {
-            // An exact name that is trusted is decided by its own rule, not by this wildcard.
-            let mut spared: Vec<&str> = exact.iter().filter(|e| crate::hostname::matches(&r.host, &e.host) && decided(&e.host) == Some(true)).map(|e| e.host.as_str()).collect();
-            spared.dedup();
-            if !spared.is_empty() {
-                out.push_str(&format!("\nunless {{ {} }}", spared.iter().map(|h| format!("resource.name == {}", lit(h))).collect::<Vec<_>>().join(" || ")));
+            for e in exact.iter().filter(|e| crate::hostname::matches(&r.host, &e.host) && decided(&e.host) == Some(true)) {
+                let c = format!("resource.name == {}", lit(&e.host));
+                if !spared.contains(&c) {
+                    spared.push(c);
+                }
             }
         }
+        out.push_str(&unless(&spared));
         out.push_str(";\n\n");
     }
 }
@@ -251,6 +281,18 @@ mod tests {
         // The same exact name both trusted and blocked is blocked, so it is not spared.
         assert!(p.contains("forbid(\n  principal == Homebody::App::\"ollama\",\n  action == Homebody::Action::\"connect\",\n  resource == Homebody::Place::\"x.example.com\"\n);"));
         assert!(!p.contains("resource.name == \"x.example.com\""));
+    }
+
+    #[test]
+    fn a_persons_own_rules_step_aside_where_the_organisation_has_one() {
+        let org = |host: &str, enabled| TrustRule { host: host.into(), enabled, source: "org".into(), recommended: false, limit_mb: None };
+        let cfg = app_with(vec![rule("api.example.com", true), rule("mine.dev", false), org("*.example.com", false), org("mine.dev", true)], vec![]);
+        let p = cedar(&cfg).policies;
+        // The organisation's rules as they are.
+        assert!(p.contains("@id(\"ollama:org-places-blocked:_.example.com\")\nforbid(") && p.contains("@id(\"ollama:org-place:mine.dev\")\npermit("), "{p}");
+        // The person's own allow and block both give way under the organisation's rules.
+        let aside = "unless { resource.name like \"*.example.com\" || resource.name == \"mine.dev\" };";
+        assert_eq!(p.matches(aside).count(), 2, "{p}");
     }
 
     #[test]

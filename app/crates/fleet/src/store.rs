@@ -126,7 +126,12 @@ pub struct Store {
     pub codes: Mutex<Vec<JoinCode>>,
     pub devices: Mutex<HashMap<String, Device>>,
     audit: Mutex<Ledger>,
+    /// The last full check of each computer's stored log, and the record it had reached then.
+    checked: Mutex<HashMap<String, (u64, u64, Result<u64, String>)>>,
 }
+
+/// The most one computer's log may take on this server. A joined computer cannot fill the disk.
+pub const DEVICE_LOG_LIMIT: u64 = 2 * 1024 * 1024 * 1024;
 
 fn read_json<T: serde::de::DeserializeOwned>(path: &Path) -> Option<T> {
     serde_json::from_slice(&std::fs::read(path).ok()?).ok()
@@ -180,7 +185,7 @@ impl Store {
         }
         let (audit, _) = Ledger::open(&dir.join("audit.jsonl"), &dir.join("audit.key"))?;
         private(&dir.join("audit.key"));
-        let store = Store { dir: dir.to_path_buf(), key, settings: Mutex::new(settings), policy: Mutex::new(policy), people: Mutex::new(people), codes: Mutex::new(codes), devices: Mutex::new(devices), audit: Mutex::new(audit) };
+        let store = Store { dir: dir.to_path_buf(), key, settings: Mutex::new(settings), policy: Mutex::new(policy), people: Mutex::new(people), codes: Mutex::new(codes), devices: Mutex::new(devices), audit: Mutex::new(audit), checked: Mutex::new(HashMap::new()) };
         if first {
             store.save_settings()?;
             store.save_policy()?;
@@ -256,6 +261,10 @@ impl Store {
         }
         let (seq, hash) = ledger::verify_continuation(lines, &d.public_key, d.head_seq, &d.head_hash)?;
         let dir = self.device_dir(device_id);
+        let held = std::fs::metadata(dir.join("log.jsonl")).map(|m| m.len()).unwrap_or(0);
+        if held + lines.iter().map(|l| l.len() as u64 + 1).sum::<u64>() > DEVICE_LOG_LIMIT {
+            return Err("This computer's log has reached the most this server keeps for one computer. Ask the administrator to set a shorter keeping period.".into());
+        }
         let mut text = lines.join("\n");
         text.push('\n');
         use std::io::Write;
@@ -284,6 +293,19 @@ impl Store {
             return Err("The stored log does not end where this computer's record says it should.".into());
         }
         Ok(lines.len() as u64)
+    }
+
+    /// The same check, remembered until the log grows or is cut: the console asks often, and
+    /// reading a long log again every time would let one busy computer slow everyone down.
+    pub fn verified(&self, d: &Device) -> Result<u64, String> {
+        if let Some((head, base, result)) = self.checked.lock().unwrap().get(&d.id) {
+            if *head == d.head_seq && *base == d.base_seq {
+                return result.clone();
+            }
+        }
+        let result = self.verify_device(d);
+        self.checked.lock().unwrap().insert(d.id.clone(), (d.head_seq, d.base_seq, result.clone()));
+        result
     }
 
     /// Remove records older than the retention period. The hash of the last record removed is

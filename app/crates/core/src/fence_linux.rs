@@ -29,6 +29,12 @@ pub const WORKSPACE_ROOT: &str = "/var/lib/homebody/work";
 pub const FILTER_STATUS: &str = "/run/homebody.fence";
 pub const RULES_FILE: &str = "/etc/homebody/rules.nft";
 const DROP_TAG: &str = "homebody-drop:";
+/// Where the health check knocks (see `filter_rules`). Homebody listens here; no app may reach it.
+pub const PROBE_PORT: u16 = 47199;
+
+/// When each app's health check last tried a name lookup. The refusal of that lookup is ours,
+/// not the app's, and must not appear in Activity as something the app did.
+static PROBED: std::sync::Mutex<Vec<(String, std::time::Instant)>> = std::sync::Mutex::new(Vec::new());
 
 fn sh_quote(s: &str) -> String {
     format!("'{}'", s.replace('\'', "'\\''"))
@@ -64,6 +70,9 @@ pub fn filter_rules(cfg: &Config) -> String {
         s.push_str(&format!("\n\t# {}\n\tchain {} {{\n", app.name.replace('\n', " "), chain(&app.os_user)));
         // Its own gate, and the local services it is meant to use.
         s.push_str(&format!("\t\toifname \"lo\" tcp dport {{ {list} }} accept\n"));
+        // The health check connects here, where Homebody itself listens, to see that it is
+        // refused. That is our own test, not the app's doing, so it is not written to the log.
+        s.push_str(&format!("\t\toifname \"lo\" tcp dport {PROBE_PORT} reject with tcp reset\n"));
         // Answers to connections somebody on this computer made to a server it runs.
         s.push_str("\t\toifname \"lo\" ct state established,related accept\n");
         if app.loopback_all {
@@ -174,7 +183,9 @@ ensure_workspace() { # dir owner
   # You and the app can both read and change everything in it, including what the other makes.
   setfacl -m "u:$REAL_USER:rwx,u:$u:rwx" "$d"
   setfacl -d -m "u:$REAL_USER:rwx,u:$u:rwx,g::rwx,o::---" "$d"
-  [ -f "$d/README.txt" ] || { printf 'This folder is the only place the protected app can write.\nPut the files you want it to work on here.\n' > "$d/README.txt"; chown "$u:$GROUP" "$d/README.txt"; chmod 660 "$d/README.txt"; }
+  # The note is written AS the protected user, never as root: the folder is that user's, so a
+  # link planted under this name must not be followed with root's rights.
+  setpriv --reuid "$u" --regid "$GROUP" --clear-groups /bin/sh -c 'umask 007; cd "$1" && { [ -e README.txt ] || [ -L README.txt ] || printf "This folder is the only place the protected app can write.\nPut the files you want it to work on here.\n" > README.txt; }' sh "$d" 2>/dev/null || true
 }
 
 "#);
@@ -206,7 +217,9 @@ systemctl restart homebody-fence.service
 
 # 3. Let the app start things as the protected users without asking for a password each time.
 STEP="permission to start protected apps"
-printf '%s ALL=({}) NOPASSWD: ALL\n' "$REAL_USER" > /etc/sudoers.d/homebody.tmp
+# The second line gives anything started as a protected user a terminal of its own, so it
+# cannot type into yours.
+printf '%s ALL=({0}) NOPASSWD: ALL\nDefaults>{0} use_pty\n' "$REAL_USER" > /etc/sudoers.d/homebody.tmp
 chmod 440 /etc/sudoers.d/homebody.tmp
 if visudo -cf /etc/sudoers.d/homebody.tmp >/dev/null; then mv /etc/sudoers.d/homebody.tmp /etc/sudoers.d/homebody; else rm -f /etc/sudoers.d/homebody.tmp; echo "could not write the permission file" >&2; exit 1; fi
 
@@ -274,16 +287,20 @@ fn strs(a: &[&str]) -> Vec<String> {
 /// The rules tested for real, as the protected user: a harmless command runs; a connection to
 /// another app's gate, where something really is listening, is refused (which reads the same
 /// online or offline); and a name lookup through the system fails.
-async fn holds(app: &AppConfig, other_gate: Option<u16>, env: &[(String, String)]) -> bool {
+async fn holds(app: &AppConfig, probe_listening: bool, env: &[(String, String)]) -> bool {
     let t = Duration::from_secs(8);
     let wrap = |script: &str| fenced_argv(app, "/bin/bash", &strs(&["-c", script]), env, Some("/"));
     let Some((true, _)) = run(wrap("true"), t).await else { return false };
-    let target = match other_gate {
-        Some(port) => format!("127.0.0.1/{port}"),
-        None => "1.1.1.1/443".to_string(),
-    };
+    // Something really is listening on the probe port (Homebody itself), so a refusal there
+    // is the rules at work, online or offline. Without that listener, fall back to an address.
+    let target = if probe_listening { format!("127.0.0.1/{PROBE_PORT}") } else { "1.1.1.1/443".to_string() };
     let direct = run(wrap(&format!("exec 3<>/dev/tcp/{target}")), t).await;
     let refused = matches!(direct, Some((false, _)));
+    {
+        let mut probed = PROBED.lock().unwrap();
+        probed.retain(|(id, _)| id != &app.id);
+        probed.push((app.id.clone(), std::time::Instant::now()));
+    }
     let lookup = run(wrap("getent hosts example.com"), t).await;
     let no_lookup = matches!(lookup, Some((false, _)));
     refused && no_lookup
@@ -298,7 +315,7 @@ fn filter_status_ok(os_user: &str) -> bool {
 }
 
 /// Check every layer for one app.
-pub async fn probe(app: &AppConfig, expected_rules: &str, other_gate: Option<u16>, env: &[(String, String)]) -> Health {
+pub async fn probe(app: &AppConfig, expected_rules: &str, probe_listening: bool, env: &[(String, String)]) -> Health {
     let t = Duration::from_secs(6);
     let mut h = Health { checked: true, ..Default::default() };
     h.installed = crate::catalog::find_binary(&app.binary).is_some();
@@ -313,7 +330,7 @@ pub async fn probe(app: &AppConfig, expected_rules: &str, other_gate: Option<u16
     h.can_run = run(strs(&["/usr/bin/sudo", "-n", "-u", &app.os_user, "true"]), t).await.map(|r| r.0).unwrap_or(false);
     h.workspace_ok = app.workspace.as_ref().map(|w| std::path::Path::new(w).is_dir()).unwrap_or(true);
     if h.can_run {
-        h.seatbelt_ok = holds(app, other_gate, env).await;
+        h.seatbelt_ok = holds(app, probe_listening, env).await;
     }
     h.filter_ok = filter_status_ok(&app.os_user);
     h.rules_current = std::fs::read_to_string(RULES_FILE).map(|installed| installed.trim() == expected_rules.trim()).unwrap_or(false);
@@ -350,6 +367,10 @@ pub fn violation_in(line: &str) -> Option<Violation> {
     let port = field("DPT=").and_then(|p| p.parse::<u16>().ok()).unwrap_or(0);
     let local = field("OUT=") == Some("lo");
     let what = if port == 53 || port == 853 || port == 5353 {
+        // The health check's own lookup, refused a moment ago: not the app's doing.
+        if PROBED.lock().unwrap().iter().any(|(id, at)| id == app && at.elapsed() < Duration::from_secs(6)) {
+            return None;
+        }
         "lookup"
     } else if local && crate::catalog::GATE_PORTS.contains(&port) {
         "gate"

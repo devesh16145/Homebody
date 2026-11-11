@@ -33,7 +33,7 @@ use windows_sys::Win32::Security::{FreeSid, SECURITY_ATTRIBUTES, SECURITY_CAPABI
 use windows_sys::Win32::System::Console::{GetStdHandle, STD_ERROR_HANDLE, STD_INPUT_HANDLE, STD_OUTPUT_HANDLE};
 use windows_sys::Win32::System::Threading::{
     CreateProcessW, DeleteProcThreadAttributeList, GetExitCodeProcess, InitializeProcThreadAttributeList, TerminateProcess, UpdateProcThreadAttribute, WaitForSingleObject, CREATE_UNICODE_ENVIRONMENT,
-    EXTENDED_STARTUPINFO_PRESENT, INFINITE, PROCESS_INFORMATION, PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES, STARTF_USESTDHANDLES, STARTUPINFOEXW,
+    EXTENDED_STARTUPINFO_PRESENT, INFINITE, PROCESS_INFORMATION, PROC_THREAD_ATTRIBUTE_HANDLE_LIST, PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES, STARTF_USESTDHANDLES, STARTUPINFOEXW,
 };
 
 pub const DATA_ROOT: &str = "C:/ProgramData/Homebody";
@@ -196,8 +196,10 @@ pub fn holds(app: &AppConfig) -> Result<bool, String> {
     let sys = std::env::var("SystemRoot").unwrap_or_else(|_| "C:\\Windows".into());
     let v = |a: &[&str]| a.iter().map(|s| s.to_string()).collect::<Vec<_>>();
     let control = Contained::spawn(&sid, &v(&["cmd.exe", "/c", "exit", "0"]), &env, &home)?.wait();
-    let direct = Contained::spawn(&sid, &v(&[&format!("{sys}\\System32\\curl.exe"), "-sS", "-m", "5", "-o", "NUL", "https://1.1.1.1/"]), &env, &home)?.wait();
-    Ok(control == 0 && direct != 0)
+    // curl's own words for "could not connect": 7, or 28 when it gave up waiting. Any other
+    // failure would say nothing about the container.
+    let direct = Contained::spawn(&sid, &v(&[&format!("{sys}\\System32\\curl.exe"), "-sS", "-m", "5", "-I", "https://1.1.1.1/"]), &env, &home)?.wait();
+    Ok(control == 0 && (direct == 7 || direct == 28))
 }
 
 /// Serve an app's gate to its container over a named pipe: everything that arrives is passed,
@@ -324,10 +326,10 @@ impl Contained {
         let mut caps = SECURITY_CAPABILITIES { AppContainerSid: sid.0, Capabilities: std::ptr::null_mut(), CapabilityCount: 0, Reserved: 0 };
         let mut size: usize = 0;
         // SAFETY: the documented two-call pattern: first for the size, then to fill our buffer.
-        unsafe { InitializeProcThreadAttributeList(std::ptr::null_mut(), 1, 0, &mut size) };
+        unsafe { InitializeProcThreadAttributeList(std::ptr::null_mut(), 2, 0, &mut size) };
         let mut list = vec![0u8; size];
         let list_ptr = list.as_mut_ptr() as *mut c_void;
-        if unsafe { InitializeProcThreadAttributeList(list_ptr, 1, 0, &mut size) } == 0 {
+        if unsafe { InitializeProcThreadAttributeList(list_ptr, 2, 0, &mut size) } == 0 {
             return Err("The program could not be prepared (attribute list).".into());
         }
         let ok = unsafe { UpdateProcThreadAttribute(list_ptr, 0, PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES as usize, &mut caps as *mut _ as *mut c_void, std::mem::size_of::<SECURITY_CAPABILITIES>(), std::ptr::null_mut(), std::ptr::null_mut()) };
@@ -348,6 +350,20 @@ impl Contained {
                 if !h.is_null() {
                     SetHandleInformation(h, HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT);
                 }
+            }
+        }
+        // Exactly these three are handed over, and nothing else this program happens to have open.
+        let mut handles: Vec<HANDLE> = Vec::new();
+        for h in [si.StartupInfo.hStdInput, si.StartupInfo.hStdOutput, si.StartupInfo.hStdError] {
+            if !h.is_null() && !handles.contains(&h) {
+                handles.push(h);
+            }
+        }
+        if !handles.is_empty() {
+            let ok = unsafe { UpdateProcThreadAttribute(list_ptr, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST as usize, handles.as_mut_ptr() as *mut c_void, handles.len() * std::mem::size_of::<HANDLE>(), std::ptr::null_mut(), std::ptr::null_mut()) };
+            if ok == 0 {
+                unsafe { DeleteProcThreadAttributeList(list_ptr) };
+                return Err("The program's input and output could not be prepared.".into());
             }
         }
         // The environment block: NAME=value, each ended by NUL, the whole ended by another.
@@ -428,8 +444,9 @@ mod tests {
         assert_eq!(run(&["cmd.exe", "/c", "exit", "0"]), Ok(0));
         assert_eq!(run(&["cmd.exe", "/c", "exit", "7"]), Ok(7));
         // Straight to the internet: refused by Windows itself.
-        let direct = run(&["curl.exe", "-sS", "-m", "8", "-o", "NUL", "https://1.1.1.1/"]).unwrap();
-        assert_ne!(direct, 0, "a contained program reached the internet directly");
+        // 7 is curl's "could not connect", 28 its "gave up waiting": nothing else counts.
+        let direct = run(&["curl.exe", "-sS", "-m", "8", "-I", "https://1.1.1.1/"]).unwrap();
+        assert!(direct == 7 || direct == 28, "a contained program was not refused the way expected (curl exit {direct})");
         // Your own folder: closed.
         let home = std::env::var("USERPROFILE").unwrap();
         let secret = format!("{home}\\homebody-unit-test.txt");

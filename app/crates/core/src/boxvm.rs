@@ -92,9 +92,11 @@ pub fn status() -> Value {
 }
 
 fn ssh_base(user: &str) -> Vec<String> {
-    let mut v: Vec<String> = ["/usr/bin/ssh", "-i"].iter().map(|s| s.to_string()).collect();
+    // -F /dev/null: none of your own ssh settings apply (a "forward my agent to every host"
+    // line would otherwise hand the Box your keys).
+    let mut v: Vec<String> = ["/usr/bin/ssh", "-F", "/dev/null", "-o", "ForwardAgent=no", "-o", "ForwardX11=no", "-i"].iter().map(|s| s.to_string()).collect();
     v.push(key().to_string_lossy().into_owned());
-    v.extend(["-p", &COMMAND_PORT.to_string(), "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null", "-o", "LogLevel=ERROR", "-o", "ConnectTimeout=5", "-o", "IdentitiesOnly=yes"].iter().map(|s| s.to_string()));
+    v.extend(["-p", &COMMAND_PORT.to_string(), "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null", "-o", "LogLevel=ERROR", "-o", "ConnectTimeout=5", "-o", "IdentitiesOnly=yes", "-o", "ServerAliveInterval=20", "-o", "ServerAliveCountMax=6"].iter().map(|s| s.to_string()));
     v.push(format!("{user}@127.0.0.1"));
     v
 }
@@ -204,6 +206,59 @@ pub async fn setup(gate_port: u16, existing_image: Option<&str>) -> Result<Strin
     }
 }
 
+/// How an agent gets into the Box's prepared disk: Debian packages, one npm package, the command
+/// that shows it worked, and the places the installation itself has to reach.
+pub struct Recipe {
+    pub apt: &'static [&'static str],
+    pub npm: &'static str,
+    pub check: &'static str,
+    pub hosts: &'static [&'static str],
+}
+
+const NODE: &[&str] = &["nodejs", "npm", "git", "ca-certificates"];
+const PACKAGE_PLACES: &[&str] = &["deb.debian.org", "security.debian.org", "registry.npmjs.org"];
+
+pub fn recipe(app_id: &str) -> Option<Recipe> {
+    let npm = match app_id {
+        "claude-code" => ("@anthropic-ai/claude-code", "claude --version"),
+        "codex" => ("@openai/codex", "codex --version"),
+        "gemini" => ("@google/gemini-cli", "gemini --version"),
+        _ => return None,
+    };
+    Some(Recipe { apt: NODE, npm: npm.0, check: npm.1, hosts: PACKAGE_PLACES })
+}
+
+/// Install an agent into the prepared disk, so every later start of the Box has it. The Box is
+/// started on the prepared disk itself for this (not on a copy), everything is fetched through
+/// the given gate, and it is shut down cleanly afterwards. Minutes.
+pub async fn install(gate_port: u16, r: &Recipe) -> Result<String, String> {
+    if !prepared() {
+        return Err("The Box has not been set up yet. Run:  homebody box setup".into());
+    }
+    if RUNNING.lock().unwrap().is_some() {
+        return Err("Stop the Box first.".into());
+    }
+    let base = dir().join("base.raw").to_string_lossy().into_owned();
+    let child = spawn_helper(&base, None, gate_port, None).await?;
+    if !wait_reachable(60).await {
+        shut_down(child).await;
+        return Err("The Box did not answer after starting.".into());
+    }
+    let script = format!(
+        "set -e; export DEBIAN_FRONTEND=noninteractive; . /etc/profile.d/homebody-proxy.sh; apt-get update -q >/dev/null; apt-get install -y -q --no-install-recommends {} >/dev/null; npm install -g --no-fund --no-audit --loglevel=error {} >/dev/null; apt-get clean; {}",
+        r.apt.join(" "),
+        sh_quote(r.npm),
+        r.check
+    );
+    let out = inside("root", &script, Duration::from_secs(25 * 60)).await;
+    shut_down(child).await;
+    match out {
+        Some((true, text)) => Ok(text.lines().last().unwrap_or("installed").trim().to_string()),
+        Some((false, text)) => Err(format!("The installation did not finish: {}", text.lines().rev().find(|l| !l.trim().is_empty()).unwrap_or("no reason given").trim())),
+        None => Err("The installation took too long.".into()),
+    }
+}
+
 /// Start the Box for one app, with one folder of yours at /work. Starts from a fresh copy of
 /// the prepared disk every time.
 pub async fn start(app: &AppConfig, share: &str) -> Result<(), String> {
@@ -252,6 +307,7 @@ pub fn argv(program: &str, args: &[String], interactive: bool) -> Result<Vec<Str
     let mut v = ssh_base("agent");
     if interactive {
         v.insert(1, "-t".into());
+        // (before the options above; ssh takes flags in any order)
     }
     let command = std::iter::once(program.to_string()).chain(args.iter().cloned()).map(|a| sh_quote(&a)).collect::<Vec<_>>().join(" ");
     v.push(format!("cd /work 2>/dev/null; . /etc/profile.d/homebody-proxy.sh; exec {command}"));

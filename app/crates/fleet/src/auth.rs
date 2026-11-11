@@ -54,10 +54,23 @@ pub struct Sessions {
 
 impl Sessions {
     /// Check a name and password. On success, a new session's secret.
-    pub fn sign_in(&self, store: &Store, name: &str, password: &str) -> Result<String, String> {
-        let key = name.trim().to_lowercase();
+    ///
+    /// Wrong passwords are counted per name *and* per address they came from, so somebody
+    /// guessing from elsewhere cannot keep the real person out; and the count is kept for a
+    /// bounded number of pairs, so guessing with made-up names cannot fill the memory.
+    pub fn sign_in(&self, store: &Store, name: &str, password: &str, from: &str) -> Result<String, String> {
+        if name.len() > 64 || password.len() > 1024 {
+            return Err("That name and password do not match.".into());
+        }
+        let key = format!("{}|{from}", name.trim().to_lowercase());
         {
-            let failed = self.failed.lock().unwrap();
+            let mut failed = self.failed.lock().unwrap();
+            if failed.len() > 20_000 {
+                failed.retain(|_, (_, since)| since.elapsed() < Duration::from_secs(300));
+                if failed.len() > 20_000 {
+                    return Err("Too many sign-in attempts. Try again in a few minutes.".into());
+                }
+            }
             if let Some((n, since)) = failed.get(&key) {
                 if *n >= 8 && since.elapsed() < Duration::from_secs(300) {
                     return Err("Too many wrong passwords. Wait five minutes and try again.".into());
@@ -67,7 +80,8 @@ impl Sessions {
         let person = store.people.lock().unwrap().iter().find(|p| p.name.eq_ignore_ascii_case(name.trim()) && p.active).cloned();
         // The same work whether or not the name exists, so the answer's timing says nothing.
         let (salt, expected) = person.as_ref().map(|p| (p.salt.clone(), p.hash.clone())).unwrap_or_else(|| ("no-such-person".into(), String::new()));
-        let got = hash_password(password, &salt);
+        // The slow part, off the threads that answer other requests.
+        let got = tokio::task::block_in_place(|| hash_password(password, &salt));
         let ok = person.is_some() && crate::store::same(&got, &expected);
         if !ok {
             let mut failed = self.failed.lock().unwrap();
@@ -138,15 +152,15 @@ mod tests {
         assert!(new_person("dana", "admin", "short").is_err());
     }
 
-    #[test]
-    fn signing_in_needs_the_right_password_and_guessing_is_slowed() {
+    #[tokio::test(flavor = "multi_thread")]
+    async fn signing_in_needs_the_right_password_and_guessing_is_slowed() {
         let dir = tempfile::tempdir().unwrap();
         let (store, _) = Store::open(dir.path(), "Org").unwrap();
         store.people.lock().unwrap().push(new_person("dana", "admin", "correct horse battery").unwrap());
         let s = Sessions::default();
-        assert!(s.sign_in(&store, "dana", "wrong password").is_err());
-        assert!(s.sign_in(&store, "nobody", "correct horse battery").is_err());
-        let secret = s.sign_in(&store, "Dana", "correct horse battery").unwrap();
+        assert!(s.sign_in(&store, "dana", "wrong password", "10.0.0.1").is_err());
+        assert!(s.sign_in(&store, "nobody", "correct horse battery", "10.0.0.1").is_err());
+        let secret = s.sign_in(&store, "Dana", "correct horse battery", "10.0.0.1").unwrap();
         assert_eq!(s.person(&store, &secret).unwrap().role, "admin");
         assert!(s.person(&store, "made-up").is_none());
         // Switched off: the open session stops working at once.
@@ -154,8 +168,11 @@ mod tests {
         assert!(s.person(&store, &secret).is_none());
         store.people.lock().unwrap()[0].active = true;
         for _ in 0..8 {
-            let _ = s.sign_in(&store, "dana", "guess");
+            let _ = s.sign_in(&store, "dana", "guess", "10.0.0.9");
         }
-        assert!(s.sign_in(&store, "dana", "correct horse battery").unwrap_err().contains("Too many"));
+        assert!(s.sign_in(&store, "dana", "correct horse battery", "10.0.0.9").unwrap_err().contains("Too many"));
+        // Guessing from one address does not keep the real person out from another.
+        assert!(s.sign_in(&store, "dana", "correct horse battery", "10.0.0.1").is_ok());
+        assert!(s.sign_in(&store, &"x".repeat(65), "whatever-password", "10.0.0.1").is_err());
     }
 }

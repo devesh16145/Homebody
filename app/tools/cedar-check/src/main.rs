@@ -16,6 +16,10 @@ fn rule(host: &str, enabled: bool) -> TrustRule {
     TrustRule { host: host.into(), enabled, source: "you".into(), recommended: false, limit_mb: None }
 }
 
+fn org(host: &str, enabled: bool) -> TrustRule {
+    TrustRule { host: host.into(), enabled, source: "org".into(), recommended: false, limit_mb: None }
+}
+
 fn inside(host: &str, path: &str, enabled: bool, method: Option<&str>) -> InsideRule {
     InsideRule { host: host.into(), path: path.into(), enabled, source: "you".into(), method: method.map(str::to_string) }
 }
@@ -36,7 +40,15 @@ fn stress() -> Config {
         rule("ok.inner.open.org", true),
         rule("plain.net", true),
         rule("*.wild-only.io", true),
+        // An organisation's rules, which come first whatever the person's own say.
+        org("*.open.org", false),
+        org("allowed-by-org.open.org", true),
+        org("plain.net", true),
+        org("api.example.com", false),
+        org("*.org-trusts.dev", true),
     ];
+    app.trust.push(rule("x.org-trusts.dev", false));
+    app.trust.push(rule("allowed-by-org.open.org", false));
     app.inside = vec![
         inside("plain.net", "/api", false, None),
         inside("plain.net", "/api/public", true, None),
@@ -55,6 +67,7 @@ const HOSTS: &[&str] = &[
     "api.example.com", "example.com", "x.example.com", "deep.api.example.com", "a.deep.api.example.com", "both.example.com", "evilexample.com",
     "open.org", "a.open.org", "closed.open.org", "x.closed.open.org", "inner.open.org", "ok.inner.open.org", "no.inner.open.org",
     "plain.net", "a.plain.net", "wild-only.io", "a.wild-only.io", "a.b.wild-only.io", "unknown.dev",
+    "allowed-by-org.open.org", "x.org-trusts.dev", "y.org-trusts.dev", "org-trusts.dev",
     "api.anthropic.com", "statsig.anthropic.com", "claude.ai", "registry.ollama.ai", "a.sentry.io", "sentry.io", "chatgpt.com", "api.openai.com",
 ];
 const PATHS: &[&str] = &[
@@ -119,7 +132,11 @@ fn check(name: &str, cfg: &Config) -> Result<(usize, usize), String> {
 }
 
 fn main() {
-    let mut sets = vec![("built-in rules".to_string(), Config::fresh()), ("stress rules".to_string(), stress())];
+    let mut own_only = stress();
+    for app in &mut own_only.apps {
+        app.trust.retain(|r| r.source != "org");
+    }
+    let mut sets = vec![("built-in rules".to_string(), Config::fresh()), ("stress rules, the person's own only".to_string(), own_only), ("stress rules, with an organisation's on top".to_string(), stress())];
     if let Some(path) = std::env::args().nth(1) {
         sets.push((path.clone(), Config::load(std::path::Path::new(&path))));
     }

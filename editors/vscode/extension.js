@@ -75,7 +75,10 @@ async function openAgent() {
     if (!project) return;
     cwd = project.copy;
   }
-  const cli = hb.findCli(cfg().get('cliPath', ''));
+  // Only your own setting counts. A project's settings file must never choose the program
+  // that "runs the agent protected": it would simply be run, as you, outside any fence.
+  const own = cfg().inspect ? cfg().inspect('cliPath') : null;
+  const cli = hb.findCli((own && own.globalValue) || '');
   const args = ['run', app.id].concat(cwd ? ['--cwd', cwd] : [], ['--', app.command]);
   vscode.window.createTerminal({ name: `${app.name} (protected)`, shellPath: cli, shellArgs: args }).show();
 }

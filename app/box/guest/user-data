@@ -92,6 +92,8 @@ write_files:
       def handle(c):
           try: up = socket.create_connection(("127.0.0.1", 22), timeout=10)
           except OSError: c.close(); return
+          # The ten seconds were for connecting only. A session may be quiet for as long as it likes.
+          up.settimeout(None)
           t = threading.Thread(target=pump, args=(up, c), daemon=True); t.start()
           pump(c, up); t.join(); c.close(); up.close()
       srv = socket.socket(socket.AF_VSOCK, socket.SOCK_STREAM)

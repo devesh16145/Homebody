@@ -106,14 +106,19 @@ impl Sso {
     }
 
     /// Where to send the browser, and what to remember until it comes back.
-    fn begin(&self, redirect: &str) -> String {
+    /// Returns (where to send the browser, the state to remember in that browser).
+    fn begin(&self, redirect: &str) -> (String, String) {
         use sha2::Digest;
         let (state, nonce, verifier) = (random_token(24), random_token(24), random_token(48));
         let challenge = url_b64().encode(sha2::Sha256::digest(verifier.as_bytes()));
         let mut pending = self.pending.lock().unwrap();
         pending.retain(|_, (_, _, at)| at.elapsed() < Duration::from_secs(600));
+        // Anyone can start a sign-in; only so many are remembered at once.
+        if pending.len() >= 2000 {
+            pending.clear();
+        }
         pending.insert(state.clone(), (nonce.clone(), verifier, Instant::now()));
-        format!("{}{}response_type=code&client_id={}&redirect_uri={}&scope={}&state={state}&nonce={nonce}&code_challenge={challenge}&code_challenge_method=S256", self.authorization_endpoint, if self.authorization_endpoint.contains('?') { "&" } else { "?" }, enc(&self.client_id), enc(redirect), enc("openid profile email groups"))
+        (format!("{}{}response_type=code&client_id={}&redirect_uri={}&scope={}&state={state}&nonce={nonce}&code_challenge={challenge}&code_challenge_method=S256", self.authorization_endpoint, if self.authorization_endpoint.contains('?') { "&" } else { "?" }, enc(&self.client_id), enc(redirect), enc("openid profile email groups")), state)
     }
 
     /// Check a signed statement from the provider. Returns its claims.
@@ -189,12 +194,22 @@ pub async fn handle(fleet: &Fleet, req: &Request, parts: &[&str]) -> Response {
     let Some(sso) = &fleet.sso else { return Response::error(404, "Sign-in through an identity provider is not set up on this server.") };
     let redirect = format!("{}/auth/callback", fleet.public_url);
     match (req.method.as_str(), parts) {
-        ("GET", ["login"]) => Response { status: 302, content_type: "text/plain", body: vec![], headers: vec![("Location".into(), sso.begin(&redirect))] },
+        ("GET", ["login"]) => {
+            // The sign-in is tied to the browser that started it: the answer is only taken
+            // from a browser that carries this cookie, so a link cannot sign someone in as
+            // somebody else.
+            let (to, state) = sso.begin(&redirect);
+            let cookie = format!("hb_sso={state}; Path=/auth; HttpOnly; SameSite=Lax; Max-Age=600{}", if fleet.secure { "; Secure" } else { "" });
+            Response { status: 302, content_type: "text/plain", body: vec![], headers: vec![("Location".into(), to), ("Set-Cookie".into(), cookie)] }
+        }
         ("GET", ["callback"]) => {
             if let Some(e) = req.query.get("error") {
                 return page(&format!("The identity provider said: {}", e.chars().filter(|c| c.is_ascii_alphanumeric() || " _-".contains(*c)).take(80).collect::<String>()));
             }
             let (Some(code), Some(state)) = (req.query.get("code"), req.query.get("state")) else { return page("The identity provider's answer was incomplete.") };
+            if req.cookie("hb_sso").as_deref() != Some(state.as_str()) {
+                return page("This sign-in was not started in this browser. Start again from the console.");
+            }
             let Some((nonce, verifier, at)) = sso.pending.lock().unwrap().remove(state) else { return page("This sign-in was not started here, or was already used. Start again.") };
             if at.elapsed() > Duration::from_secs(600) {
                 return page("This sign-in took too long. Start again.");
@@ -209,16 +224,23 @@ pub async fn handle(fleet: &Fleet, req: &Request, parts: &[&str]) -> Response {
                 Ok(c) => c,
                 Err(e) => return page(&e),
             };
-            let name: String = ["email", "preferred_username", "sub"].iter().find_map(|k| claims.get(*k).and_then(Value::as_str)).unwrap_or("").chars().filter(|c| c.is_ascii_alphanumeric() || "._-@".contains(*c)).take(64).collect();
+            // An address the provider says is not verified is not a name to trust.
+            let email = claims.get("email").and_then(Value::as_str).filter(|_| claims.get("email_verified").and_then(Value::as_bool) != Some(false));
+            let name = email.or_else(|| claims.get("preferred_username").and_then(Value::as_str)).or_else(|| claims.get("sub").and_then(Value::as_str)).unwrap_or("").to_string();
             let Some(role) = sso.role_for(&claims) else { return page("You are signed in at the identity provider, but you are not in a group that may use this console.") };
-            if name.is_empty() {
-                return page("The identity provider did not give a name for you.");
+            // The name is used exactly as given or not at all: dropping characters could turn
+            // one person's name into another's.
+            if name.is_empty() || name.len() > 64 || !name.chars().all(|c| c.is_ascii_alphanumeric() || "._-@".contains(c)) {
+                return page("The identity provider gave a name for you that this console cannot use (letters, digits and . _ - @ only).");
             }
             let store = &fleet.store;
             {
                 let mut people = store.people.lock().unwrap();
                 match people.iter_mut().find(|p| p.name.eq_ignore_ascii_case(&name)) {
                     Some(p) if !p.active => return page("Your access to this console has been switched off."),
+                    // Somebody who signs in here with a password is a different kind of account;
+                    // the identity provider does not get to take it over or change its role.
+                    Some(p) if !p.hash.is_empty() => return page("There is already an account with this name that signs in with a password. Ask an administrator to remove it first."),
                     Some(p) => p.role = role.to_string(),
                     // No password: this person can only come in through the identity provider.
                     None => people.push(Person { name: name.clone(), role: role.to_string(), salt: String::new(), hash: String::new(), active: true }),

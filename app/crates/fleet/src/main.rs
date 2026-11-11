@@ -135,21 +135,24 @@ pub async fn build(args: Args) -> Result<(Arc<Fleet>, Option<String>), String> {
 
 pub async fn serve(fleet: Arc<Fleet>, listener: tokio::net::TcpListener, tls: Option<tokio_rustls::TlsAcceptor>) {
     loop {
-        let Ok((stream, _)) = listener.accept().await else { continue };
+        let Ok((stream, peer)) = listener.accept().await else { continue };
+        let peer = peer.ip().to_string();
         let (fleet, tls) = (fleet.clone(), tls.clone());
         tokio::spawn(async move {
             let work = async {
                 match tls {
                     Some(acceptor) => {
                         if let Ok(mut s) = acceptor.accept(stream).await {
-                            if let Some(req) = http::read_request(&mut s).await {
+                            if let Some(mut req) = http::read_request(&mut s).await {
+                                req.peer = peer;
                                 let _ = http::write_response(&mut s, api::handle(fleet, req).await).await;
                             }
                         }
                     }
                     None => {
                         let mut s = stream;
-                        if let Some(req) = http::read_request(&mut s).await {
+                        if let Some(mut req) = http::read_request(&mut s).await {
+                            req.peer = peer;
                             let _ = http::write_response(&mut s, api::handle(fleet, req).await).await;
                         }
                     }

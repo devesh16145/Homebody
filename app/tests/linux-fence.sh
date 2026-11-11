@@ -104,6 +104,14 @@ check "you can read what it wrote"                       "x"             "$(cat 
 check "you can change and remove what it wrote"          "gone"          "$(echo y >> "$WS/d/f.txt" && rm -r "$WS/d" && echo gone 2>&1)"
 refused "cannot write outside its workspace and home"    "$HB" run "$APP" --cwd / -- /usr/bin/touch /var/lib/homebody/work/hb-test
 
+echo "Setup run again, with a trap laid in the workspace"
+# SAI-2026-004: the app replaces the note in its workspace with a link to somewhere only root
+# can write. Setup, run again, must not follow it.
+"$HB" run "$APP" -- /bin/sh -c 'rm -f README.txt; ln -s /etc/homebody-planted README.txt'
+sudo bash /tmp/homebody-setup.sh >/dev/null 2>&1
+check "setup does not write through a link the app planted" "absent" "$([ -e /etc/homebody-planted ] && echo present || echo absent)"
+"$HB" run "$APP" -- /bin/rm -f README.txt
+
 echo "Headless run"
 out="$("$HB" ci --trust example.com --fail-on-blocked "$APP" -- /usr/bin/curl -sS -m 15 -o /dev/null https://example.com/ 2>&1)"; rc=$?
 check "a clean run exits 0 and says nothing was refused" "Nothing was refused. rc=0" "$(echo "$out" | grep -o 'Nothing was refused.') rc=$rc"

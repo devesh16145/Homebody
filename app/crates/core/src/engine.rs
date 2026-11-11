@@ -254,6 +254,19 @@ impl Engine {
             }
         });
 
+        // Linux: something for the health check to knock on (see `fence_linux::PROBE_PORT`).
+        // Connections are accepted and closed; nothing is ever read from them.
+        if cfg!(target_os = "linux") {
+            #[cfg(unix)]
+            if let Ok(listener) = tokio::net::TcpListener::bind(("127.0.0.1", crate::fence_linux::PROBE_PORT)).await {
+                tokio::spawn(async move {
+                    loop {
+                        let _ = listener.accept().await;
+                    }
+                });
+            }
+        }
+
         // Fence health: now, then every half minute.
         let e = engine.clone();
         tokio::spawn(async move {
@@ -1774,10 +1787,15 @@ impl Engine {
                 Some(c) if *c == policy => {}
                 _ => {
                     let (version, rules) = (policy.version, policy.rules.len());
+                    // What the organisation trusts and blocks goes into this computer's own log
+                    // in full, so a rule that opens a place is on record here and not only on
+                    // the server that sent it.
+                    let listed: Vec<Value> = policy.rules.iter().take(400).map(|r| json!({ "app": r.app, "host": r.host, "enabled": r.enabled })).collect();
+                    let (ask, lock) = (policy.ask, policy.lock_mode);
                     self.0.cfg.lock().unwrap().apply_org(Some(policy));
                     self.save_cfg();
                     self.cancel_asks();
-                    self.append("fleet", fields! { "event" => "rules", "org" => m.org.as_str(), "version" => version, "rules" => rules });
+                    self.append("fleet", fields! { "event" => "rules", "org" => m.org.as_str(), "version" => version, "rules" => rules, "list" => Value::Array(listed), "ask" => ask, "lockMode" => lock });
                 }
             }
             // 2. The log, from where the server says it stands, exactly as written.
@@ -2140,15 +2158,14 @@ impl Engine {
                 if crate::fleet::Membership::load().is_none() {
                     return Err("This computer is not in a fleet.".into());
                 }
-                crate::fleet::Membership::forget();
-                let org = {
-                    let mut cfg = self.0.cfg.lock().unwrap();
-                    let org = cfg.org.as_ref().map(|p| p.name.clone());
-                    cfg.apply_org(None);
-                    org
-                };
-                self.save_cfg();
+                // Leaving is written down first and sent, so the organisation's copy of the log
+                // ends with it rather than just going quiet. Then the membership is forgotten.
+                let org = self.0.cfg.lock().unwrap().org.as_ref().map(|p| p.name.clone());
                 self.append("fleet", fields! { "event" => "left", "org" => org });
+                let _ = self.fleet_sync().await;
+                crate::fleet::Membership::forget();
+                self.0.cfg.lock().unwrap().apply_org(None);
+                self.save_cfg();
                 self.touch();
                 Ok(self.fleet_status())
             }
@@ -2163,6 +2180,26 @@ impl Engine {
                 let message = crate::boxvm::setup(app.proxy_port, s("image").as_deref()).await?;
                 self.append("box", fields! { "event" => "set up" });
                 Ok(json!({ "message": message, "status": crate::boxvm::status() }))
+            }
+            // Put an agent into the Box's prepared disk. The packages come through the agent's own
+            // gate; the places they come from are trusted for the length of the installation only.
+            #[cfg(unix)]
+            "box_install" => {
+                let app = self.0.cfg.lock().unwrap().app(&req("appId")?).cloned().ok_or("Unknown app.")?;
+                let recipe = crate::boxvm::recipe(&app.id).ok_or_else(|| format!("Homebody does not know how to install {} in the Box yet. Claude Code, Codex CLI and Gemini CLI can be.", app.name))?;
+                let mut added = Vec::new();
+                for host in recipe.hosts {
+                    if app.rule_for(host).is_none() && self.set_trust_inner(&app.id, host, true, "box install").is_ok() {
+                        added.push(*host);
+                    }
+                }
+                let result = crate::boxvm::install(app.proxy_port, &recipe).await;
+                for host in added {
+                    let _ = self.remove_trust(&app.id, host);
+                }
+                let version = result?;
+                self.append("box", fields! { "event" => "installed", "app" => app.id.as_str(), "version" => version.as_str() });
+                Ok(json!({ "message": format!("{} is in the Box: {version}", app.name) }))
             }
             #[cfg(unix)]
             "box_start" => {
@@ -2448,7 +2485,7 @@ impl Engine {
                 // caller's environment reaches a protected program, and the ones that point it at
                 // its gate cannot be replaced.
                 let mut extra: Vec<(String, String)> = Vec::new();
-                if let Some(env) = args.get("env").and_then(Value::as_object) {
+                if let Some(env) = args.get("env").and_then(Value::as_object).filter(|e| !e.is_empty()) {
                     let reserved: Vec<String> = fence::fenced_env(&app).into_iter().map(|(k, _)| k.to_ascii_uppercase()).collect();
                     for (k, v) in env {
                         let valid = !k.is_empty() && k.len() <= 80 && k.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') && !k.starts_with(|c: char| c.is_ascii_digit());
@@ -2457,6 +2494,24 @@ impl Engine {
                         }
                         extra.push((k.clone(), v.as_str().unwrap_or_default().to_string()));
                     }
+                }
+                // Handed-over variables may be secrets, and a command line can be read by every
+                // user of the computer and is written down by sudo. They go into a file only you
+                // and this app can read, in its workspace; the program reads it and deletes it.
+                #[cfg(unix)]
+                if !extra.is_empty() && !app.windowed {
+                    let ws = app.workspace.clone().filter(|w| std::path::Path::new(w).is_dir()).ok_or_else(|| format!("{} has no folder of its own to hand variables over in.", app.name))?;
+                    let file = std::path::Path::new(&ws).join(format!(".homebody-env-{:016x}", rand::random::<u64>()));
+                    let body: String = extra.iter().map(|(k, v)| format!("export {k}='{}'\n", v.replace('\'', "'\\''"))).collect();
+                    {
+                        use std::io::Write;
+                        use std::os::unix::fs::OpenOptionsExt;
+                        let mut f = std::fs::OpenOptions::new().write(true).create_new(true).mode(0o660).open(&file).map_err(|e| format!("The variables could not be handed over: {e}"))?;
+                        f.write_all(body.as_bytes()).map_err(|e| e.to_string())?;
+                    }
+                    let mut wrapped = vec!["-c".to_string(), ". \"$1\"; rm -f \"$1\"; shift; exec \"$@\"".to_string(), "sh".to_string(), file.to_string_lossy().into_owned(), program];
+                    wrapped.extend(rest);
+                    return ok(&fence::fenced_argv(&app, "/bin/sh", &wrapped, &[], s("cwd").as_deref()));
                 }
                 ok(&fence::fenced_argv(&app, &program, &rest, &extra, s("cwd").as_deref()))
             }

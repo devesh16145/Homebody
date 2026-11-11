@@ -7,6 +7,8 @@ const HEAD_LIMIT: usize = 16 * 1024;
 pub const BODY_LIMIT: usize = 24 * 1024 * 1024;
 
 pub struct Request {
+    /// The address the connection came from (the web server in front, if there is one).
+    pub peer: String,
     pub method: String,
     pub path: String,
     pub query: HashMap<String, String>,
@@ -122,7 +124,9 @@ pub async fn read_request<S: AsyncRead + Unpin>(stream: &mut S) -> Option<Reques
         body.extend_from_slice(&chunk[..n]);
     }
     body.truncate(len);
-    Some(Request { method, path, query, headers, body })
+    // Each part of the path is decoded here, once, so "a%40b" names the person "a@b".
+    let path = path.split('/').map(percent_decode).collect::<Vec<_>>().join("/");
+    Some(Request { peer: String::new(), method, path, query, headers, body })
 }
 
 pub async fn write_response<S: AsyncWrite + Unpin>(stream: &mut S, r: Response) -> std::io::Result<()> {

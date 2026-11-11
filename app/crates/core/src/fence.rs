@@ -157,7 +157,7 @@ fn window_profile(app: &AppConfig) -> String {
             // The browser keeps the key that encrypts this profile's cookies in your keychain,
             // as it does for your everyday profile. Without it the cookies would be readable
             // by anything that can read the folder.
-            p.push_str(&format!("(allow file-read* file-write* (subpath \"{home}/Library/Keychains\"))\n"));
+            p.push_str(&format!("(allow file-read* (subpath \"{home}/Library/Keychains\"))\n"));
             // Finding its own folder means looking at (not into) the folders on the way there.
             let mut at = std::path::PathBuf::from(&dir);
             while at.pop() && at.starts_with(&home) {
@@ -241,6 +241,13 @@ pub fn window_argv(app: &AppConfig) -> Result<Vec<String>, String> {
     v.extend(["NO_PROXY=localhost,127.0.0.1".to_string(), "no_proxy=localhost,127.0.0.1".to_string(), "NODE_USE_ENV_PROXY=1".to_string(), "HOMEBODY=1".to_string(), bundle.exe]);
     if app.kind == "browser" {
         let dir = browser_profile_dir(app);
+        // The profile's file rules are written from these two paths. If either cannot be put
+        // into a rule safely, the browser is not started: it must never run with its own inner
+        // sandbox off and nothing in its place.
+        let plain = |p: &str| !p.is_empty() && !p.contains('"') && !p.contains('\\');
+        if !real_home().starts_with("/Users/") || !plain(&real_home()) || !plain(&dir.to_string_lossy()) {
+            return Err("This browser profile cannot be fenced here: your home folder is in an unusual place.".into());
+        }
         std::fs::create_dir_all(&dir).map_err(|e| format!("The profile folder could not be made: {e}"))?;
         v.extend([
             format!("--user-data-dir={}", dir.to_string_lossy()),
@@ -791,15 +798,9 @@ pub async fn probe(app: &AppConfig, expected_rules: &str) -> Health {
     #[cfg(unix)]
     if LINUX {
         // Somewhere it must not be able to reach although something is listening there: the
-        // gate of another app.
-        let mut other = None;
-        for port in crate::catalog::GATE_PORTS.filter(|p| *p != app.proxy_port) {
-            if is_port_open(port).await {
-                other = Some(port);
-                break;
-            }
-        }
-        return crate::fence_linux::probe(app, expected_rules, other, &fenced_env(app)).await;
+        // port Homebody keeps open for exactly this check.
+        let listening = is_port_open(crate::fence_linux::PROBE_PORT).await;
+        return crate::fence_linux::probe(app, expected_rules, listening, &fenced_env(app)).await;
     }
     let t = Duration::from_secs(6);
     let mut h = Health { checked: true, ..Default::default() };
@@ -1184,7 +1185,9 @@ ensure_workspace() { # dir owner
   chmod -N "$d" 2>/dev/null || true
   chmod +a "user:$REAL_USER allow $rights" "$d"
   chmod +a "user:$u allow $rights" "$d"
-  [ -f "$d/README.txt" ] || { printf 'This folder is the only place the protected app can write.\nPut the files you want it to work on here.\n' > "$d/README.txt"; chown "$u:$GROUP" "$d/README.txt"; chmod 660 "$d/README.txt"; }
+  # The note is written AS the protected user, never as administrator: the folder is that
+  # user's, so a link planted under this name must not be followed with administrator rights.
+  sudo -n -u "$u" /bin/sh -c 'umask 007; cd "$1" && { [ -e README.txt ] || [ -L README.txt ] || printf "This folder is the only place the protected app can write.\nPut the files you want it to work on here.\n" > README.txt; }' sh "$d" 2>/dev/null || true
 }
 
 "#.replace("@RENAMES@", &renames));
@@ -1257,7 +1260,9 @@ fi
 # 3. Let the app start things as the protected users without asking for a password each time.
 STEP="permission to start protected apps"
 "#);
-    s.push_str(&format!("printf '%s ALL=({}) NOPASSWD: ALL\\n' \"$REAL_USER\" > /etc/sudoers.d/homebody.tmp\n", users.join(",")));
+    // The second line gives anything started as a protected user a terminal of its own, so it
+    // cannot type into yours (a program sharing your terminal can push keystrokes into it).
+    s.push_str(&format!("printf '%s ALL=({0}) NOPASSWD: ALL\\nDefaults>{0} use_pty\\n' \"$REAL_USER\" > /etc/sudoers.d/homebody.tmp\n", users.join(",")));
     s.push_str(r#"chmod 440 /etc/sudoers.d/homebody.tmp
 if visudo -cf /etc/sudoers.d/homebody.tmp >/dev/null; then mv /etc/sudoers.d/homebody.tmp /etc/sudoers.d/homebody; else rm -f /etc/sudoers.d/homebody.tmp; echo "could not write the permission file" >&2; exit 1; fi
 

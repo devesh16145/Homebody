@@ -76,7 +76,7 @@ fn device_log(dir: &std::path::Path, records: usize) -> (Ledger, Vec<String>) {
     (ledger, lines)
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn a_computer_joins_takes_signed_rules_and_its_log_is_only_accepted_whole() {
     let dir = tempfile::tempdir().unwrap();
     let (addr, fleet, password) = start(dir.path(), |_| {}).await;
@@ -138,6 +138,9 @@ async fn a_computer_joins_takes_signed_rules_and_its_log_is_only_accepted_whole(
 
     // What people see.
     let devices = call(&addr, "GET", "/api/devices", &[("Cookie", &admin)], None).await.json();
+    // People with "@" in their name can be changed from the console (the path is decoded).
+    assert_eq!(call(&addr, "POST", "/api/people", console, Some(&json!({ "name": "sam@example.org", "role": "viewer", "password": "a long password" }))).await.status, 200);
+    assert_eq!(call(&addr, "PUT", "/api/people/sam%40example.org", console, Some(&json!({ "active": false }))).await.status, 200);
     assert!(devices[0]["name"] == "dana-mac" && devices[0]["team"] == "Research" && devices[0]["intact"] == true && devices[0]["records"] == 7 && devices[0]["rulesCurrent"] == true);
     let blocked = call(&addr, "GET", "/api/activity?show=blocked&q=evil", &[("Cookie", &admin)], None).await.json();
     assert_eq!(blocked.as_array().unwrap().len(), 3);
@@ -191,7 +194,7 @@ async fn a_computer_joins_takes_signed_rules_and_its_log_is_only_accepted_whole(
     assert!(!fleet.store.device_dir(id).exists());
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn old_records_are_removed_and_what_is_left_still_checks() {
     let dir = tempfile::tempdir().unwrap();
     let (store, _) = crate::store::Store::open(dir.path(), "Org").unwrap();
@@ -227,7 +230,7 @@ async fn old_records_are_removed_and_what_is_left_still_checks() {
     assert!(store.verify_device(&d).is_err());
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn an_identity_provider_can_add_change_and_switch_off_people() {
     let dir = tempfile::tempdir().unwrap();
     let (addr, _fleet, password) = start(dir.path(), |a| a.scim_token = Some("a-provisioning-secret-of-some-length".into())).await;
@@ -328,7 +331,7 @@ mod provider {
     }
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn people_sign_in_through_the_identity_provider_and_get_their_role_from_its_groups() {
     let Some(idp) = provider::start().await else {
         eprintln!("skipped: no openssl to make a test key with");
@@ -355,7 +358,12 @@ async fn people_sign_in_through_the_identity_provider_and_get_their_role_from_it
             let mut claims = json!({ "iss": idp.issuer, "aud": "homebody-fleet", "exp": chrono::Utc::now().timestamp() + 300, "nonce": q["nonce"], "email": "dana@example.org", "groups": groups });
             tweak(&mut claims);
             *idp.claims.lock().unwrap() = claims;
-            call(&addr, "GET", &format!("/auth/callback?code=the-code&state={}", q["state"]), &[], None).await
+            let started = format!("hb_sso={}", q["state"]);
+            assert!(to.head.contains(&format!("Set-Cookie: {started};")), "the sign-in is tied to this browser");
+            // Without the cookie of the browser that started it, the answer is not taken.
+            let elsewhere = call(&addr, "GET", &format!("/auth/callback?code=the-code&state={}", q["state"]), &[], None).await;
+            assert!(elsewhere.cookie().is_empty() && String::from_utf8_lossy(&elsewhere.body).contains("not started in this browser"));
+            call(&addr, "GET", &format!("/auth/callback?code=the-code&state={}", q["state"]), &[("Cookie", &started)], None).await
         }
     };
     let back = go(json!(["staff", "fleet-auditors"]), |_| {}).await;
@@ -373,8 +381,16 @@ async fn people_sign_in_through_the_identity_provider_and_get_their_role_from_it
         let r = go(json!(["fleet-admins"]), tweak).await;
         assert!(r.status == 200 && r.cookie().is_empty(), "{}", String::from_utf8_lossy(&r.body));
     }
-    // A code presented with a state this server never issued, or one already used.
-    assert!(call(&addr, "GET", "/auth/callback?code=the-code&state=made-up", &[], None).await.cookie().is_empty());
+    // A code presented with a state this server never issued.
+    assert!(call(&addr, "GET", "/auth/callback?code=the-code&state=made-up", &[("Cookie", "hb_sso=made-up")], None).await.cookie().is_empty());
+    // A name that would only fit after dropping characters is refused, not "cleaned" into someone else's.
+    let odd = go(json!(["fleet-admins"]), |c| c["email"] = json!("da!na@example.org")).await;
+    assert!(odd.cookie().is_empty() && String::from_utf8_lossy(&odd.body).contains("cannot use"));
+    let unverified = go(json!(["fleet-admins"]), |c| { c["email_verified"] = json!(false); c["sub"] = json!("user-123"); }).await;
+    assert_eq!(call(&addr, "GET", "/api/me", &[("Cookie", &unverified.cookie())], None).await.json()["name"], "user-123", "an unverified address is not used as the name");
+    // The local administrator's account cannot be taken over by a provider account of the same name.
+    let takeover = go(json!(["fleet-auditors"]), |c| c["email"] = json!("admin")).await;
+    assert!(takeover.cookie().is_empty() && String::from_utf8_lossy(&takeover.body).contains("signs in with a password"));
     // Signed, but with "none": refused before any key is consulted.
     let sso = fleet.sso.as_ref().unwrap();
     assert!(sso.role_for(&json!({ "groups": ["fleet-auditors"] })) == Some("auditor") && sso.role_for(&json!({})).is_none());

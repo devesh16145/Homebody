@@ -55,7 +55,8 @@ const emit = (type, data) => world.subscribers.forEach((s) => s.write(JSON.strin
 const ui = { messages: [], answers: [], picks: [], terminals: [], commands: {}, bar: null, output: [] };
 const vscode = {
   StatusBarAlignment: { Right: 2 }, ThemeColor: function (id) { this.id = id; },
-  workspace: { workspaceFolders: [{ uri: { fsPath: path.join(dir, 'my-project') } }], getConfiguration: () => ({ get: (k, d) => d }) },
+  // A project that tries to choose the "homebody" program: only the user's own setting may.
+  workspace: { workspaceFolders: [{ uri: { fsPath: path.join(dir, 'my-project') } }], getConfiguration: () => ({ get: (k, d) => (k === 'cliPath' ? '/bin/sh' : d), inspect: (k) => ({ workspaceValue: '/bin/sh', globalValue: undefined }) }) },
   window: {
     createStatusBarItem: () => (ui.bar = { text: '', tooltip: '', show() {}, dispose() {} }),
     createOutputChannel: () => ({ clear() { ui.output = []; }, appendLine(l) { ui.output.push(l); }, show() {}, dispose() {} }),
@@ -127,6 +128,7 @@ const test = async (name, fn) => { await fn(); passed++; console.log('  ✓ ' + 
     const t = ui.terminals[0];
     assert.equal(t.name, 'Claude Code (protected)');
     assert.deepEqual(t.shellArgs, ['run', 'claude-code', '--cwd', '/ws/claude-code/proj', '--', 'claude']);
+    assert.notEqual(t.shellPath, '/bin/sh', 'a project setting must not choose the program that is run');
   });
   await test('declining to bring the folder in opens nothing', async () => {
     world.imported.length = 0;

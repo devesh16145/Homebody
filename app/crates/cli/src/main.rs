@@ -82,6 +82,7 @@ const HELP: &str = "homebody: the Homebody command line
   homebody policy [folder]             save the rules as Cedar policies, for formal review
   homebody box                         the Box: a Linux machine with no network interface (Apple silicon)
   homebody box setup [--image <disk>]  make its disk (first time: downloads Debian, a few minutes)
+  homebody box install <app>           put an agent into its disk (Claude Code, Codex CLI, Gemini CLI)
   homebody box start <app> [project]   start it for an agent; it sees only that agent's folder or project
   homebody box run -- <command...>     run a command inside it
   homebody box stop                    stop it and throw its disk away
@@ -308,6 +309,11 @@ async fn main() {
                 let image = args.iter().position(|x| x == "--image").and_then(|i| args.get(i + 1)).and_then(|p| std::path::absolute(p).ok()).map(|p| p.to_string_lossy().into_owned());
                 eprintln!("Setting the Box up. The first time this downloads about 350 MB from Debian and takes a few minutes.");
                 let r = call("box_setup", json!({ "image": image })).await;
+                println!("{}", s(&r, "message"));
+            }
+            "install" => {
+                eprintln!("Installing into the Box. Everything is fetched through the agent's gate; this takes a few minutes.");
+                let r = call("box_install", json!({ "appId": a(2) })).await;
                 println!("{}", s(&r, "message"));
             }
             "start" => {

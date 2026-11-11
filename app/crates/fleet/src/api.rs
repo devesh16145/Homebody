@@ -81,11 +81,10 @@ fn device_api(fleet: &Fleet, req: &Request, parts: &[&str]) -> Response {
             }
             Response::json(&signed)
         }
-        ("GET", ["head"]) => {
-            let devices = store.devices.lock().unwrap();
-            let d = &devices[&id];
-            Response::json(&json!({ "seq": d.head_seq, "hash": d.head_hash }))
-        }
+        ("GET", ["head"]) => match store.devices.lock().unwrap().get(&id) {
+            Some(d) => Response::json(&json!({ "seq": d.head_seq, "hash": d.head_hash })),
+            None => Response::error(401, "This computer is no longer in this fleet."),
+        },
         ("POST", ["records"]) => {
             let body = match req.json() {
                 Ok(b) => b,
@@ -174,7 +173,7 @@ fn console_api(fleet: &Fleet, req: &Request, parts: &[&str]) -> Response {
             Ok(b) => b,
             Err(r) => return r,
         };
-        return match fleet.sessions.sign_in(store, s(&body, "name"), s(&body, "password")) {
+        return match fleet.sessions.sign_in(store, s(&body, "name"), s(&body, "password"), &req.peer) {
             Ok(secret) => {
                 store.audit(s(&body, "name"), "signed in", json!({}));
                 signed_in(fleet, &secret)
@@ -226,7 +225,7 @@ fn console_api(fleet: &Fleet, req: &Request, parts: &[&str]) -> Response {
             let mut out: Vec<Value> = devices
                 .iter()
                 .map(|d| {
-                    let check = store.verify_device(d);
+                    let check = store.verified(d);
                     json!({ "id": d.id, "name": d.name, "user": d.user, "os": d.os, "version": d.version, "team": d.team, "joinedAt": d.joined_at, "lastSeen": d.last_seen,
                         "records": d.head_seq, "kept": check.as_ref().ok(), "intact": check.is_ok(), "problem": check.err(), "rulesCurrent": d.policy_version == version, "key": d.public_key })
                 })
@@ -502,7 +501,8 @@ fn export(store: &Store, from: &str, to: &str, team: &str) -> Result<Vec<u8>, St
     let mut summary = Vec::new();
     for d in &devices {
         let check = store.verify_device(d);
-        let folder: String = format!("{}-{}", d.name, d.id).chars().map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.' { c } else { '_' }).take(60).collect();
+        // A computer chooses its own name; nothing of it may steer where files go in the bundle.
+        let folder: String = format!("{}-{}", d.name, d.id).chars().map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' }).take(60).collect();
         let lines = store.log_lines(&d.id);
         let mut log = lines.join("\n");
         log.push('\n');

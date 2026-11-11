@@ -14,6 +14,12 @@ check() { # name, expected substring, actual
   if [[ "$3" == *"$2"* ]]; then pass=$((pass+1)); printf '  \033[32m✓\033[0m %s\n' "$1"
   else fail=$((fail+1)); printf '  \033[31m✗ %s\033[0m\n      expected to contain: %s\n      got: %s\n' "$1" "$2" "$(echo "$3" | tail -3 | tr '\n' ' ')"; fi
 }
+unreachable() { # name, command... : passes when curl could not connect (exit 6, 7 or 28), and only then
+  local name="$1"; shift
+  local out; out="$("$@" 2>&1)"; local rc=$?
+  if [ $rc -eq 6 ] || [ $rc -eq 7 ] || [ $rc -eq 28 ] || [ $rc -eq 56 ]; then pass=$((pass+1)); printf '  \033[32m✓\033[0m %s\n' "$name"
+  else fail=$((fail+1)); printf '  \033[31m✗ %s\033[0m\n      expected curl to fail to connect, got exit %s: %s\n' "$name" "$rc" "$(echo "$out" | tail -2 | tr '\n' ' ')"; fi
+}
 refused() { # name, command... : passes when the command fails
   local name="$1"; shift
   local out; out="$("$@" 2>&1)"; local rc=$?
@@ -35,8 +41,8 @@ check "the probe's protection is up, with no setup step" "up" "$fence"
 R() { "$HB" run "$APP" -- "$@" 2>&1; }
 
 echo "Controls: the same things work for you"
-check "a direct connection works for you"                "ok"     "$("$SYS\\curl.exe" -sS --noproxy '*' -m 10 -o NUL https://1.1.1.1/ && echo ok)"
-check "a name is found for you"                          "ok"     "$("$SYS\\curl.exe" -sS --noproxy '*' -m 10 -o NUL https://example.com/ && echo ok)"
+check "a direct connection works for you"                "ok"     "$("$SYS\\curl.exe" -sS --noproxy '*' -m 10 https://1.1.1.1/ >/dev/null && echo ok)"
+check "a name is found for you"                          "ok"     "$("$SYS\\curl.exe" -sS --noproxy '*' -m 10 https://example.com/ >/dev/null && echo ok)"
 
 echo "Inside the private space"
 check "a program runs there and its output comes back"   "hello"  "$(R "$SYS\\cmd.exe" /c echo hello)"
@@ -45,22 +51,22 @@ check "your environment does not come along"             "none"   "$(HB_SECRET=l
 check "it is told where its gate is"                     "127.0.0.1:" "$(R "$SYS\\cmd.exe" /c echo %HTTPS_PROXY%)"
 
 echo "Straight to the internet"
-refused "direct connection to an address"                "$HB" run "$APP" -- "$SYS\\curl.exe" -sS --noproxy '*' -m 6 -o NUL https://1.1.1.1/
-refused "direct connection on port 80"                   "$HB" run "$APP" -- "$SYS\\curl.exe" -sS --noproxy '*' -m 6 -o NUL http://1.1.1.1/
-refused "a name looked up without the gate"              "$HB" run "$APP" -- "$SYS\\curl.exe" -sS --noproxy '*' -m 6 -o NUL https://example.com/
+unreachable "direct connection to an address"                "$HB" run "$APP" -- "$SYS\\curl.exe" -sS --noproxy '*' -m 6 https://1.1.1.1/
+unreachable "direct connection on port 80"                   "$HB" run "$APP" -- "$SYS\\curl.exe" -sS --noproxy '*' -m 6 http://1.1.1.1/
+unreachable "a name looked up without the gate"              "$HB" run "$APP" -- "$SYS\\curl.exe" -sS --noproxy '*' -m 6 https://example.com/
 
 echo "Through the gate"
 "$HB" ask off >/dev/null 2>&1
 "$HB" trust "$APP" example.com >/dev/null 2>&1
-check "a trusted place is reached (control)"             "200"    "$(R "$SYS\\curl.exe" -sS -m 25 -o NUL -w '%{http_code}' https://example.com/)"
-check "a place that is not trusted is refused"           "403"    "$(R "$SYS\\curl.exe" -sS -m 25 -o NUL https://example.org/)"
+check "a trusted place is reached (control)"             "Example Domain" "$(R "$SYS\\curl.exe" -sS -m 25 https://example.com/ | grep -o 'Example Domain' | head -1)"
+check "a place that is not trusted is refused"           "403"    "$(R "$SYS\\curl.exe" -sS -m 25 https://example.org/)"
 
 echo "Other programs on this computer"
 (python -m http.server 8765 --bind 127.0.0.1 >/dev/null 2>&1 &)
 sleep 2
-check "a local server answers you (control)"             "200"    "$("$SYS\\curl.exe" -s --noproxy '*' -m 5 -o NUL -w '%{http_code}' http://127.0.0.1:8765/)"
-refused "cannot reach a local server of yours"           "$HB" run "$APP" -- "$SYS\\curl.exe" -sS --noproxy '*' -m 5 -o NUL http://127.0.0.1:8765/
-refused "cannot use another app's gate"                  "$HB" run "$APP" -- "$SYS\\curl.exe" -sS -m 6 -o NUL -x http://127.0.0.1:47110 https://api.anthropic.com/
+check "a local server answers you (control)"             "200"    "$("$SYS\\curl.exe" -s --noproxy '*' -m 5 -o /dev/null -w '%{http_code}' http://127.0.0.1:8765/)"
+unreachable "cannot reach a local server of yours"           "$HB" run "$APP" -- "$SYS\\curl.exe" -sS --noproxy '*' -m 5 http://127.0.0.1:8765/
+unreachable "cannot use another app's gate"                  "$HB" run "$APP" -- "$SYS\\curl.exe" -sS -m 6 -x http://127.0.0.1:47110 https://api.anthropic.com/
 
 echo "Files"
 echo secret > "$USERPROFILE/hb-private.txt"
@@ -73,7 +79,7 @@ check "you can read what it wrote"                       "x"      "$(cat "/c/Pro
 refused "cannot write in the Windows folder"             "$HB" run "$APP" -- "$SYS\\cmd.exe" /c "echo x> C:\\Windows\\hb-test.txt"
 
 echo "Headless run"
-out="$("$HB" ci --trust example.com --fail-on-blocked "$APP" -- "$SYS\\curl.exe" -sS -m 25 -o NUL https://example.com/ 2>&1)"; rc=$?
+out="$("$HB" ci --trust example.com --fail-on-blocked "$APP" -- "$SYS\\curl.exe" -sS -m 25 https://example.com/ 2>&1)"; rc=$?
 check "a clean run exits 0 and says nothing was refused" "Nothing was refused. rc=0" "$(echo "$out" | grep -o 'Nothing was refused.') rc=$rc"
 [ "$rc" = 0 ] || echo "$out" | tail -6
 

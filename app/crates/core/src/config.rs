@@ -435,7 +435,15 @@ impl Config {
             trust: vec![],
             inside: vec![],
         });
+        self.reapply_org();
         Ok(id)
+    }
+
+    /// An app added after the organisation's rules arrived gets them too, at once.
+    fn reapply_org(&mut self) {
+        if let Some(p) = self.org.clone() {
+            self.apply_org(Some(p));
+        }
     }
 
     /// A browser profile kept only for AI sites. It runs like any windowed app (as you, under the
@@ -486,6 +494,7 @@ impl Config {
         for s in sites {
             self.set_site(&id, s, true)?;
         }
+        self.reapply_org();
         Ok(id)
     }
 
@@ -518,7 +527,9 @@ impl Config {
             app.trust.retain(|r| r.source != "org");
             if let Some(p) = &policy {
                 for (host, enabled) in p.rules_for(&app.id) {
-                    app.trust.push(TrustRule { host, enabled, source: "org".into(), recommended: false, limit_mb: None });
+                    // A limit you set on a place stays in force when the organisation trusts it too.
+                    let limit_mb = app.trust.iter().find(|r| r.host == host).and_then(|r| r.limit_mb);
+                    app.trust.push(TrustRule { host, enabled, source: "org".into(), recommended: false, limit_mb });
                 }
                 if p.lock_mode {
                     app.protected = true;
@@ -644,6 +655,13 @@ mod tests {
         assert_eq!(allowed("only-ollama.net"), None, "a rule for another app does not apply here");
         assert!(app.org_rule_for("api.example.com").is_some() && app.org_rule_for("mine.dev").is_none());
         assert!(cfg.mode == Mode::Private && !cfg.ask && cfg.mode_locked());
+        // An app added afterwards is covered at once, not at the next change of the rules.
+        #[cfg(unix)]
+        {
+            let added = cfg.add_custom("Later", "/bin/sh").unwrap();
+            assert_eq!(cfg.app(&added).unwrap().rule_for("api.example.com").map(|r| (r.enabled, r.source.as_str())), Some((false, "org")));
+            cfg.remove_custom(&added).unwrap();
+        }
         // Applying it again does not pile rules up; a new version replaces the old one's rules.
         cfg.apply_org(Some(policy));
         assert_eq!(cfg.app(id).unwrap().trust.iter().filter(|r| r.source == "org").count(), 2);

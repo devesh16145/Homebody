@@ -46,6 +46,9 @@ R sh -c 'echo from-the-box > /work/box-test.txt; touch /home/agent/stays-in-the-
 check "one shared folder, and what it writes arrives"   "from-the-box" "$(cat "$WS/box-test.txt" 2>&1)"
 check "as your own file"                                "$(id -un)" "$(stat -f %Su "$WS/box-test.txt" 2>&1)"
 
+echo "Staying connected"
+check "a command that is quiet for a while is not cut off" "still here" "$(R sh -c 'sleep 14; echo still here')"
+
 echo "Starting over"
 "$HB" box stop >/dev/null
 check "a new start does not have the last run's files"  "No such file" "$("$HB" box start "$APP" >/dev/null 2>&1; R ls /home/agent/stays-in-the-box)"

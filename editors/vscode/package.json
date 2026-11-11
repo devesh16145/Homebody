@@ -26,6 +26,7 @@
         "homebody.cliPath": {
           "type": "string",
           "default": "",
+          "scope": "machine",
           "description": "Where the homebody command is. Leave empty to find it by itself (inside the Homebody app, or on your PATH)."
         },
         "homebody.askInEditor": {
