@@ -4,7 +4,7 @@ Keep your AI on your computer, and prove it.
 
 A menu-bar app for macOS (Windows and Linux to follow) that runs local AI apps and agents so they can reach only the places you trust, asks you in plain words about anything else, and keeps a signed record of every decision. No virtual machine. Apache-2.0, no accounts, no telemetry, nothing hosted.
 
-Status: 11 Nov 2026. Everything in the table runs end to end on this Mac in the release app, installed in `/Applications`. Verified live: all three fence layers, Ollama protected with GPU access, model download and inference under the fence, projects, go-arounds in the Feed, Watch, log export, clean stop, windowed apps, launchers, installing into Applications, recovery after the app is force-killed. Not yet verified: that protection is restored by the watchdog after a restart; the open-at-login switch across a real login; the release workflow (never run); signing and notarization (no Apple Developer identity yet).
+Status: 11 Nov 2026. Everything in the table runs end to end on this Mac in the release app, installed in `/Applications`. Verified live: all three fence layers, Ollama protected with GPU access, model download and inference under the fence, projects, go-arounds in the Feed, Watch, log export, clean stop, windowed apps, launchers, installing into Applications, recovery after the app is force-killed. Verified across a real restart (11 Nov 2026): the watchdog restored the packet filter rules at boot and all 81 bypass cases passed straight afterwards. Not yet verified: the open-at-login switch across a real login; the release workflow (never run); signing and notarization (no Apple Developer identity yet).
 
 ## What works today
 
@@ -20,7 +20,7 @@ Status: 11 Nov 2026. Everything in the table runs end to end on this Mac in the 
 | Ledger: append-only, hash-chained, Ed25519-signed; verify; signed proof export; export of the whole log as one file that `sai verify <file>` checks on any computer | Working, tamper and cut-file cases tested |
 | Fence, layer 1: each protected app runs as its own macOS user, in a group of its own | Working: your home folder is closed to them by file permissions alone |
 | Fence, layer 2: seatbelt profile at launch (no network except the app's gate, no name lookups, nothing readable under your home) | Working, 17 bypass cases pass as the protected user |
-| Fence, layer 3: packet filter rules per user, restored at boot by a root watchdog | Working, verified with the seatbelt layer removed: internet blocked, only the app's own gate reachable. Not yet verified across a restart |
+| Fence, layer 3: packet filter rules per user, restored at boot by a root watchdog | Working, verified with the seatbelt layer removed: internet blocked, only the app's own gate reachable. Verified across a real restart on macOS 26.5: the watchdog was running three minutes after boot with the rules loaded for all six protected users, and every bypass case passed. A model server that was running before the restart is not started again by itself |
 | Health probes every 30 s; nothing protected starts unless every layer checks out | Working |
 | App: menu-bar icon with six states, Glance popover, prompt banner, main window (Feed, Proof, Studio), first-run setup screen | Working |
 | CLI `sai`: status, feed, watch, mode, watched, asks, allow/block, trust, limit, ask, inspect, secrets, inside, private, proof, summary, timestamp, verify, export-log, project, found, update, run, terminal, open, daemon | Working |
@@ -189,6 +189,8 @@ Two things only a real administrator run revealed, both now handled in `fence.rs
 - Folders inside any user's home (Mail, app containers) are protected even from root. Setup changes only the top of each private home folder.
 
 - On loopback the packet filter judges a connection twice, leaving and arriving. A model server reaches its own helper process over a random local port, so arrivals at a protected user's own sockets must be allowed or inference hangs.
+
+- Seconds after a restart a Mac can be too busy to finish a health check in its six seconds. The first check after boot said Ollama's launch-time protection "could not be confirmed" and asked for setup again, then corrected itself half a minute later. A check that only ran out of time is now tried once more, with longer to answer, before anything is said; one that ran and showed the profile not holding is reported at once, as before.
 
 Setup failures now name the step and command that stopped. The app also compares the installed rules with the ones the running version generates and asks for a quick update when they differ.
 

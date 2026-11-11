@@ -615,6 +615,34 @@ fn untagged(mut argv: Vec<String>) -> Vec<String> {
     argv
 }
 
+/// The launch-time profile, tested for real: a harmless command runs under it (so the profile
+/// compiles), a direct connection to the internet is refused by the profile itself (which reads
+/// the same online or offline), and a name lookup fails.
+///
+/// `Some(false)` means a command ran and showed the profile is not holding. `None` means a
+/// command did not finish in time, which says nothing about the profile: a Mac that has just
+/// started can be that busy.
+async fn profile_holds_once(wrap: &impl Fn(&str, &[&str]) -> Vec<String>, t: Duration) -> Option<bool> {
+    let control = run_owned(wrap("/usr/bin/true", &[]), t).await?.0;
+    let direct = run_owned(untagged(wrap("/usr/bin/nc", &["-v", "-z", "-G", "2", "1.1.1.1", "443"])), t).await?;
+    let refused = !direct.0 && direct.1.contains("not permitted");
+    let lookup = run_owned(untagged(wrap("/usr/bin/dscacheutil", &["-q", "host", "-a", "name", "example.com"])), t).await?;
+    let no_lookup = !lookup.1.contains("ip_address") && !lookup.1.contains("ipv6_address");
+    Some(control && refused && no_lookup)
+}
+
+/// As above, trying once more when a command ran out of time. Still not confirmed after that
+/// counts as not holding: protection is only ever reported up when it was seen to be.
+async fn profile_holds(wrap: impl Fn(&str, &[&str]) -> Vec<String>) -> bool {
+    match profile_holds_once(&wrap, Duration::from_secs(6)).await {
+        Some(held) => held,
+        None => {
+            tokio::time::sleep(Duration::from_secs(2)).await;
+            profile_holds_once(&wrap, Duration::from_secs(15)).await.unwrap_or(false)
+        }
+    }
+}
+
 pub async fn probe(app: &AppConfig, expected_rules: &str) -> Health {
     let t = Duration::from_secs(6);
     let mut h = Health { checked: true, ..Default::default() };
@@ -627,12 +655,7 @@ pub async fn probe(app: &AppConfig, expected_rules: &str) -> Health {
             v.extend(args.iter().map(|a| a.to_string()));
             v
         };
-        let control = run_owned(wrap("/usr/bin/true", &[]), t).await.map(|r| r.0).unwrap_or(false);
-        let direct = run_owned(untagged(wrap("/usr/bin/nc", &["-v", "-z", "-G", "2", "1.1.1.1", "443"])), t).await;
-        let refused = matches!(&direct, Some((false, out)) if out.contains("not permitted"));
-        let lookup = run_owned(untagged(wrap("/usr/bin/dscacheutil", &["-q", "host", "-a", "name", "example.com"])), t).await;
-        let no_lookup = matches!(&lookup, Some((_, out)) if !out.contains("ip_address") && !out.contains("ipv6_address"));
-        h.seatbelt_ok = control && refused && no_lookup;
+        h.seatbelt_ok = profile_holds(wrap).await;
         (h.user_exists, h.group_ok, h.can_run, h.filter_ok, h.rules_current, h.workspace_ok) = (true, true, true, true, true, true);
         return h;
     }
@@ -647,16 +670,11 @@ pub async fn probe(app: &AppConfig, expected_rules: &str) -> Health {
         None => true,
     };
     if h.can_run {
-        // Positive control: the profile compiles and a harmless command runs under it.
-        let control = run_owned(fenced_argv(app, "/usr/bin/true", &[], &[], Some("/")), t).await.map(|r| r.0).unwrap_or(false);
-        // The real test: a direct connection to the internet must be refused by the profile itself,
-        // which reads the same online or offline.
-        let direct = run_owned(untagged(fenced_argv(app, "/usr/bin/nc", &["-v".into(), "-z".into(), "-G".into(), "2".into(), "1.1.1.1".into(), "443".into()], &[], Some("/"))), t).await;
-        let refused = matches!(&direct, Some((false, out)) if out.contains("not permitted"));
-        // And a name lookup must fail.
-        let lookup = run_owned(untagged(fenced_argv(app, "/usr/bin/dscacheutil", &["-q".into(), "host".into(), "-a".into(), "name".into(), "example.com".into()], &[], Some("/"))), t).await;
-        let no_lookup = matches!(&lookup, Some((_, out)) if !out.contains("ip_address") && !out.contains("ipv6_address"));
-        h.seatbelt_ok = control && refused && no_lookup;
+        h.seatbelt_ok = profile_holds(|program, args| {
+            let args: Vec<String> = args.iter().map(|a| a.to_string()).collect();
+            fenced_argv(app, program, &args, &[], Some("/"))
+        })
+        .await;
     }
     h.filter_ok = filter_status_ok(&app.os_user);
     h.rules_current = std::fs::read_to_string(format!("/etc/pf.anchors/{FILTER_ANCHOR}")).map(|installed| installed.trim() == expected_rules.trim()).unwrap_or(false);

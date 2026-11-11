@@ -36,7 +36,7 @@ These are limits of the current design, listed in the README, not new findings:
 - An hourly limit on a trusted place bounds what is sent there; it does not stop sending below the limit, and it does not count what is received.
 - What a server sends back over a web socket is not read.
 - The build is not signed or notarized yet.
-- Whether the packet filter rules come back after a restart has not been verified on a real restart. The app refuses to start protected apps when they are missing.
+- Protected apps are not started again by themselves after a restart. The packet filter rules are restored at boot (verified on one real restart, macOS 26.5); the app refuses to start protected apps whenever they are missing.
 
 ## When something is fixed
 
