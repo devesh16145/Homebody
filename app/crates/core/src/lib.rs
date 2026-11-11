@@ -29,6 +29,8 @@ pub mod feed;
 pub mod fence;
 #[cfg(unix)]
 pub mod fence_linux;
+#[cfg(windows)]
+pub mod fence_windows;
 pub mod hostname;
 pub mod inspect;
 pub mod ledger;

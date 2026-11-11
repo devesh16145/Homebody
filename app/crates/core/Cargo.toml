@@ -24,5 +24,9 @@ webpki-roots = "1"
 httparse = "1"
 time = "0.3"
 
+[target.'cfg(windows)'.dependencies]
+# The Windows fence (app containers) is a handful of system calls; these are only their declarations.
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_Security_Authorization", "Win32_Security_Isolation", "Win32_System_Console", "Win32_System_Threading"] }
+
 [dev-dependencies]
 tempfile = "3"
