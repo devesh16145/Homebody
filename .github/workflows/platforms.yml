@@ -1,0 +1,43 @@
+# Builds and tests the core and the command line tool on Linux and Windows.
+#
+# This Mac cannot run either system, so GitHub's machines are the test bed for them. Runs only on
+# the `platforms` work branch and by hand; the macOS tests live in test.yml.
+
+name: Linux and Windows
+
+on:
+  push:
+    branches: [platforms]
+    paths: ["app/**", ".github/workflows/platforms.yml"]
+  workflow_dispatch:
+
+concurrency:
+  group: platforms-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    defaults:
+      run:
+        working-directory: app
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: app
+      - name: Core compiles
+        run: cargo build -p homebody-core --tests 2>&1 | tail -150
+      - name: Command line tool compiles
+        if: always()
+        run: cargo build -p homebody-cli 2>&1 | tail -80
+      - name: Core unit tests
+        if: always()
+        run: cargo test -p homebody-core 2>&1 | tail -120
