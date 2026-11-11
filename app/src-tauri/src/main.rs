@@ -179,7 +179,9 @@ fn show_prompt(app: &AppHandle) {
 fn build_windows(app: &AppHandle) -> tauri::Result<()> {
     let main = WebviewWindowBuilder::new(app, "main", WebviewUrl::App("home.html".into())).title("Homebody").inner_size(980.0, 680.0).min_inner_size(760.0, 520.0).visible(false);
     #[cfg(target_os = "macos")]
-    let main = main.title_bar_style(tauri::TitleBarStyle::Overlay).hidden_title(true);
+    // The window buttons sit inside the floating sidebar (8 pt from the window edge, rounded 18):
+    // 14 pt in from its left and 16 pt down from its top, clear of its rounded corner.
+    let main = main.title_bar_style(tauri::TitleBarStyle::Overlay).hidden_title(true).traffic_light_position(tauri::LogicalPosition::new(22.0, 24.0));
     let main = main.build()?;
     // Closing the main window hides it: the app lives in the menu bar.
     let handle = app.clone();

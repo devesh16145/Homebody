@@ -68,28 +68,29 @@ export function appTile(key, name = '', size = 20) {
   return `<span class="tile${real ? ' real' : ''}${t[3] ? ' ink-dark' : ''}${letters.length > 1 ? ' two' : ''}${size !== 20 ? ' s' + size : ''}" style="--t1:${t[0]};--t2:${t[1]}" aria-hidden="true"><span class="tile-g">${glyph}</span>${img}</span>`;
 }
 
-/* ---------- The Homebody mark: a small round face peeking over the windowsill. ---------- */
+/* ---------- The Homebody mark: a cat peeking over the windowsill. ---------- */
+// Geometry is shared with src-tauri/icons/make-icons.swift (64 box, y down, sill at y 40).
 
+const CAT_HEAD = '<path d="M13 42A19 19 0 0 1 51 42Z"/><path d="M15.5 33.5L17.5 13.5Q18 11 20 12.5L31 23.5Z"/><path d="M48.5 33.5L46.5 13.5Q46 11 44 12.5L33 23.5Z"/>';
+const catEyes = (dx = 0, dy = 0) => `<ellipse cx="${25 + dx}" cy="${32 + dy}" rx="2.6" ry="3.7"/><ellipse cx="${39 + dx}" cy="${32 + dy}" rx="2.6" ry="3.7"/>`;
 let seq = 0;
 
 /**
- * state: 'private' (peeking), 'ask' (looks up at you, amber), 'shut' (ducked down: everything blocked),
- * 'off' (outline only: not protected). live: blinks now and then.
+ * state: 'private' (peeking), 'ask' (amber, looks up at you), 'shut' (ducked down: only the ear
+ * tips show, everything is blocked), 'off' (faded: not protected). live: blinks now and then.
  */
 export function mark(size = 44, state = 'private', live = false) {
   const k = 'hb' + (++seq);
-  const headY = state === 'shut' ? 50 : 40;
-  const [dx, dy] = state === 'ask' ? [2.2, -2.2] : [0, 0];
-  const eyes = state === 'shut' ? '' : `<g class="hb-eyes"><ellipse cx="${25 + dx}" cy="${31 + dy}" rx="2.7" ry="3.8"/><ellipse cx="${39 + dx}" cy="${31 + dy}" rx="2.7" ry="3.8"/></g>`;
+  const [dx, dy] = state === 'ask' ? [1.8, -1.8] : [0, 0];
   const tone = state === 'off' ? 'var(--ink-3)' : 'var(--tide)';
   const head = state === 'ask' ? 'var(--ask)' : 'currentColor';
-  return `<svg class="mark${live ? ' mark-live' : ''}" width="${size}" height="${size}" viewBox="0 0 64 64" aria-hidden="true" style="color:${tone}">
-    <defs><mask id="${k}m"><rect width="64" height="64" fill="#fff"/><g fill="#000">${eyes}</g></mask><clipPath id="${k}c"><rect width="64" height="40"/></clipPath></defs>
-    <g clip-path="url(#${k}c)">${state === 'off'
-      ? `<path d="M13.75 40A18.25 18.25 0 0 1 50.25 40" fill="none" stroke="currentColor" stroke-width="3.5"/><g fill="currentColor">${eyes}</g>`
-      : `<path d="M12 ${headY}A20 20 0 0 1 52 ${headY}Z" style="fill:${head}" mask="url(#${k}m)"/>`}</g>
+  const cat = `<g mask="url(#${k}m)" style="fill:${head}">${CAT_HEAD}</g>`;
+  return `<svg class="mark${live ? ' mark-live' : ''}" width="${size}" height="${size}" viewBox="0 0 64 64" aria-hidden="true" style="color:${tone}${state === 'off' ? ';opacity:.55' : ''}">
+    <defs><mask id="${k}m"><rect x="-10" y="-10" width="90" height="90" fill="#fff"/><g class="hb-eyes" fill="#000">${state === 'shut' ? '' : catEyes(dx, dy)}</g></mask>
+      <clipPath id="${k}c"><rect width="64" height="40.5"/></clipPath></defs>
+    <g clip-path="url(#${k}c)">${state === 'shut' ? `<g transform="translate(0 15)">${cat}</g>` : cat}</g>
     <rect x="6" y="40" width="52" height="6" rx="3" fill="currentColor"/>
-    ${state === 'shut' ? '' : '<circle cx="17.5" cy="40.5" r="3.6" fill="currentColor"/><circle cx="46.5" cy="40.5" r="3.6" fill="currentColor"/>'}
+    ${state === 'shut' ? '' : '<circle cx="18" cy="41" r="3.8" fill="currentColor"/><circle cx="46" cy="41" r="3.8" fill="currentColor"/>'}
   </svg>`;
 }
 
@@ -102,14 +103,14 @@ export function appIcon(size = 128) {
       <linearGradient id="${k}f" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#ffffff"/><stop offset="1" stop-color="#d9f3f5"/></linearGradient>
       <linearGradient id="${k}s" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#fff" stop-opacity=".28"/><stop offset=".5" stop-color="#fff" stop-opacity="0"/></linearGradient>
       <clipPath id="${k}t"><rect x="4" y="4" width="92" height="92" rx="22"/></clipPath>
+      <clipPath id="${k}c"><rect width="64" height="40.5"/></clipPath>
     </defs>
     <g clip-path="url(#${k}t)">
       <rect x="4" y="4" width="92" height="96" fill="url(#${k}g)"/>
-      <path d="M22 66A28 28 0 0 1 78 66Z" fill="url(#${k}f)"/>
-      <ellipse cx="40" cy="52" rx="3.8" ry="5.3" fill="#0b1620"/><ellipse cx="60" cy="52" rx="3.8" ry="5.3" fill="#0b1620"/>
-      <rect x="4" y="66" width="92" height="34" fill="#0b1620" fill-opacity=".86"/>
-      <rect x="4" y="66" width="92" height="2" fill="#fff" fill-opacity=".25"/>
-      <circle cx="29" cy="66.5" r="5.2" fill="url(#${k}f)"/><circle cx="71" cy="66.5" r="5.2" fill="url(#${k}f)"/>
+      <g transform="translate(9.6 6.4) scale(1.3)"><g clip-path="url(#${k}c)"><g fill="url(#${k}f)">${CAT_HEAD}</g><g fill="#0b1620">${catEyes()}</g></g></g>
+      <rect x="4" y="58.4" width="92" height="42" fill="#0b1620" fill-opacity=".86"/>
+      <rect x="4" y="58.4" width="92" height="2" fill="#fff" fill-opacity=".25"/>
+      <circle cx="33" cy="59.7" r="5" fill="url(#${k}f)"/><circle cx="69.4" cy="59.7" r="5" fill="url(#${k}f)"/>
       <rect x="4" y="4" width="92" height="92" fill="url(#${k}s)"/>
     </g>
     <rect x="4.5" y="4.5" width="91" height="91" rx="21.5" fill="none" stroke="#fff" stroke-opacity=".22"/>

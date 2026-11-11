@@ -9,7 +9,7 @@ body.hm { display: block; background: var(--ground); background-image: var(--gro
   display: flex; flex-direction: column; min-height: 0; margin: 8px 0 8px 8px;
   border-radius: var(--r-panel);
 }
-.hm-lights { flex: none; height: 38px; }
+.hm-lights { flex: none; height: 46px; }   /* room for the window buttons, placed by the app at 22,24 */
 .hm-state {
   flex: none; display: flex; align-items: center; gap: 10px; margin: 0 8px 6px; padding: 8px 10px;
   border: 0; border-radius: 13px; background: transparent; text-align: left; color: var(--ink);

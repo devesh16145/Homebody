@@ -1,11 +1,11 @@
 /* Identity: Homebody. "Your AI stays home."
-   A small round face peeking over the windowsill: it sees the world but stays in.
+   A cat peeking over the windowsill: it sees the world but stays in.
    Loaded after tokens.css by the redesigned pages. It defines the brand palette and the
    Liquid Glass material, and points the older tokens at it so shared components follow.
 
    Colour roles
      tide      the brand. Private, allowed, the main button.
-     glow      light on the face. Highlights only, never text.
+     glow      highlights only, never text.
      midnight  the windowsill. App icon, dark surfaces.
      ask       a question is waiting.
      danger    protection off, a secret caught, something to fix.
@@ -148,7 +148,7 @@
 /* the switch takes the brand colour */
 .switch input:checked + i { background: var(--tide); }
 
-/* ---------- the mark: Homebody peeking over the sill ---------- */
+/* ---------- the mark: the Homebody cat peeking over the sill ---------- */
 .mark { display: block; flex: none; overflow: visible; }
 .mark-live .hb-eyes { animation: blink 6.5s infinite; transform-origin: center; transform-box: fill-box; }
 @keyframes blink { 0%, 93%, 100% { transform: scaleY(1); } 95.5% { transform: scaleY(.1); } }
