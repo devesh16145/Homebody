@@ -28,6 +28,8 @@ pub async fn bind(port: u16) -> std::io::Result<TcpListener> {
     TcpListener::bind(("127.0.0.1", port)).await
 }
 
+const REFUSAL_PAUSE: Duration = Duration::from_millis(250);
+
 /// Serve one gate. Which app the gate belongs to is looked up for every connection, so a gate
 /// keeps working (or goes quiet) as apps are added and removed while the engine runs.
 pub async fn serve(engine: Engine, port: u16, listener: TcpListener) {
@@ -237,6 +239,9 @@ async fn handle(engine: Engine, app_id: String, mut client: TcpStream) -> std::i
 
     let decision: Decision = engine.decide_conn(&app_id, &req.host, req.port).await;
     if !decision.allow {
+        // Some apps retry a refused request in a tight loop (thousands of times a minute).
+        // A short pause before saying no costs a real user nothing and takes the heat out of it.
+        tokio::time::sleep(REFUSAL_PAUSE).await;
         respond(&mut client, 403, &decision.message).await;
         return Ok(());
     }

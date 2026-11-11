@@ -87,7 +87,24 @@ fence() {
   check "name lookup from a program (getaddrinfo)"      "gaierror" "$(R /usr/bin/python3 -c "import socket; print(socket.getaddrinfo('example.com',443))")"
   check "direct DNS query over UDP"                     "NONE"   "$(R /usr/bin/dig +time=2 +tries=1 +short example.com @1.1.1.1 | grep -qE '^[0-9]+\.' && echo ANSWERED || echo NONE)"
   check "another app's gate"                            "000"    "$(R /usr/bin/curl -sS -m 6 -x http://127.0.0.1:47111 -o /dev/null -w '%{http_code}' https://ollama.com/ | tail -1)"
-  check "another service on this computer (port 22)"    "not permitted" "$(R /usr/bin/nc -v -z -G 3 127.0.0.1 22)"
+  check "another service on this computer (port 22)"    "refused" "$(R /usr/bin/nc -v -z -G 3 127.0.0.1 22 2>&1 | grep -q succeeded && echo REACHED || echo refused)"
+
+  echo "Fence: servers on this computer"
+  # A listener of yours, one of the agent's own, and a port that changes hands between the two.
+  /usr/bin/nc -l 127.0.0.1 47981 >/dev/null 2>&1 & mine=$!
+  sleep 0.5
+  check "a server of yours"                             "refused" "$(R /usr/bin/nc -v -z -G 2 127.0.0.1 47981 2>&1 | grep -q succeeded && echo REACHED || echo refused)"
+  kill -9 "$mine" 2>/dev/null; wait "$mine" 2>/dev/null
+  if "$SAI" call get_status 2>/dev/null | grep -q '"localServers": true'; then
+    check "a server it started itself"                  "reached" "$(R /bin/sh -c '/usr/bin/nc -l 127.0.0.1 47982 >/dev/null 2>&1 & for i in 1 2 3 4 5 6; do /usr/bin/nc -z -G 1 127.0.0.1 47982 2>/dev/null && { echo reached; exit 0; }; sleep 0.3; done; echo never' | tail -1)"
+    R /bin/sh -c '/usr/bin/nc -l 127.0.0.1 47983 >/dev/null 2>&1 & sleep 1.5; /usr/bin/nc -z -G 1 127.0.0.1 47983 >/dev/null 2>&1; sleep 1' >/dev/null 2>&1
+    /usr/bin/nc -l 127.0.0.1 47983 >/dev/null 2>&1 & mine=$!
+    sleep 1
+    check "a port that was its own and is now yours"    "refused" "$(R /usr/bin/nc -v -z -G 2 127.0.0.1 47983 2>&1 | grep -q succeeded && echo REACHED || echo refused)"
+    kill -9 "$mine" 2>/dev/null; wait "$mine" 2>/dev/null
+  else
+    check "a server it started itself (local servers off)" "refused" "$(R /bin/sh -c '/usr/bin/nc -l 127.0.0.1 47982 >/dev/null 2>&1 & sleep 1; /usr/bin/nc -z -G 1 127.0.0.1 47982 2>/dev/null && echo REACHED || echo refused' | tail -1)"
+  fi
 
   echo "Fence: your files"
   refused() { "$@" 2>&1 | grep -qiE 'not permitted|permission denied' && echo denied || echo ALLOWED; }

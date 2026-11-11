@@ -195,7 +195,9 @@ pub fn window_argv(app: &AppConfig) -> Result<Vec<String>, String> {
     for k in ["HTTPS_PROXY", "HTTP_PROXY", "https_proxy", "http_proxy", "ALL_PROXY"] {
         v.push(format!("{k}={gate}"));
     }
-    v.extend(["NO_PROXY=localhost,127.0.0.1".to_string(), "no_proxy=localhost,127.0.0.1".to_string(), "SANDBOX_AI=1".to_string(), bundle.exe]);
+    // Parts of these apps are plain Node programs, which ignore the app's own gate setting
+    // unless told to read it from the environment.
+    v.extend(["NO_PROXY=localhost,127.0.0.1".to_string(), "no_proxy=localhost,127.0.0.1".to_string(), "NODE_USE_ENV_PROXY=1".to_string(), "SANDBOX_AI=1".to_string(), bundle.exe]);
     if bundle.electron {
         v.extend(["--no-sandbox".to_string(), format!("--proxy-server={gate}"), "--proxy-bypass-list=<-loopback>;127.0.0.1;localhost".to_string()]);
     }
@@ -211,6 +213,68 @@ pub async fn window_running(app: &AppConfig) -> bool {
 
 fn regex_escape(s: &str) -> String {
     s.chars().flat_map(|c| if c.is_ascii_alphanumeric() || c == '/' || c == ' ' || c == '-' || c == '_' { vec![c] } else { vec!['\\', c] }).collect()
+}
+
+/// Written by setup after it has tested, on this computer, that an agent can reach a server it
+/// started itself and is refused at anyone else's. "own" when that held.
+pub const LOCAL_SERVERS_FILE: &str = "/Library/Application Support/SandboxAI/local-servers";
+
+/// Whether agents are allowed to reach servers they started themselves on this computer.
+pub fn own_servers() -> bool {
+    std::fs::read_to_string(LOCAL_SERVERS_FILE).map(|t| t.trim() == "own").unwrap_or(false)
+}
+
+/// The packet filter anchor holding the ports this agent is serving on right now. The watchdog
+/// keeps it current (see `WATCHDOG`).
+fn own_anchor(os_user: &str) -> String {
+    format!("own_{}", os_user.trim_start_matches("_sai"))
+}
+
+/// An app that should reach its own local servers and nobody else's: every command-line agent.
+fn wants_own_servers(app: &AppConfig) -> bool {
+    !app.windowed && !app.loopback_all
+}
+
+/// Where the desktop app would live once installed.
+pub const INSTALL_PATH: &str = "/Applications/Sandbox-ai.app";
+
+/// The .app this executable is part of, if it is part of one.
+pub fn bundle_of(exe: &str) -> Option<String> {
+    std::path::Path::new(exe).ancestors().find(|a| a.extension().map(|e| e == "app").unwrap_or(false)).map(|a| a.to_string_lossy().into_owned())
+}
+
+/// Copy the app into the Applications folder, replacing an older copy. The copy we are running
+/// from is left where it is. Returns the new location.
+pub async fn install_to_applications(bundle: &str) -> Result<String, String> {
+    if bundle == INSTALL_PATH {
+        return Ok(INSTALL_PATH.to_string());
+    }
+    if !std::path::Path::new(bundle).join("Contents/MacOS").is_dir() {
+        return Err("Sandbox-ai could not find its own app to copy.".into());
+    }
+    // Copy next to the destination first, then swap, so a failed copy never leaves half an app.
+    let staging = format!("{INSTALL_PATH}.installing");
+    let _ = tokio::fs::remove_dir_all(&staging).await;
+    match run(&["/usr/bin/ditto", bundle, &staging], Duration::from_secs(120)).await {
+        Some((true, _)) => {}
+        Some((false, out)) => {
+            let _ = tokio::fs::remove_dir_all(&staging).await;
+            return Err(format!("Sandbox-ai could not be copied into Applications: {}", out.trim()));
+        }
+        None => return Err("Copying Sandbox-ai into Applications took too long.".into()),
+    }
+    let old = format!("{INSTALL_PATH}.old");
+    let _ = tokio::fs::remove_dir_all(&old).await;
+    let had = tokio::fs::rename(INSTALL_PATH, &old).await.is_ok();
+    if let Err(e) = tokio::fs::rename(&staging, INSTALL_PATH).await {
+        if had {
+            let _ = tokio::fs::rename(&old, INSTALL_PATH).await;
+        }
+        let _ = tokio::fs::remove_dir_all(&staging).await;
+        return Err(format!("Sandbox-ai could not be put into Applications: {e}"));
+    }
+    let _ = tokio::fs::remove_dir_all(&old).await;
+    Ok(INSTALL_PATH.to_string())
 }
 
 /// Known windowed AI apps installed in the usual places and not on the list yet.
@@ -402,6 +466,14 @@ pub fn home_for(os_user: &str) -> String {
 /// to the system log with that tag, which is how attempts to go around the gate reach the Feed
 /// (see [`parse_violation`]).
 pub fn seatbelt_profile(app: &AppConfig) -> String {
+    seatbelt_profile_for(app, own_servers())
+}
+
+/// `own_servers`: agents may connect to any port on this computer except other apps' gates.
+/// The profile cannot tell whose server a port belongs to; the packet filter does that part
+/// (see [`filter_rules`] and the watchdog), which is why this is only switched on after setup
+/// has tested it.
+pub fn seatbelt_profile_for(app: &AppConfig, own_servers: bool) -> String {
     if app.windowed {
         return window_profile(app);
     }
@@ -413,9 +485,9 @@ pub fn seatbelt_profile(app: &AppConfig) -> String {
     for port in &app.local_ports {
         p.push_str(&format!("(allow network-outbound (remote ip \"localhost:{port}\"))\n"));
     }
-    if app.loopback_all {
-        // Model servers talk to their own helper processes over arbitrary local ports.
-        // Any local port, then, except another app's gate.
+    if app.loopback_all || (own_servers && wants_own_servers(app)) {
+        // Model servers talk to their own helper processes over arbitrary local ports, and an
+        // agent to the servers it starts. Any local port, then, except another app's gate.
         p.push_str("(allow network-outbound (remote ip \"localhost:*\"))\n");
         for port in crate::catalog::GATE_PORTS.filter(|g| *g != app.proxy_port) {
             p.push_str(&format!("(deny network-outbound (remote ip \"localhost:{port}\") {})\n", tag("gate")));
@@ -456,6 +528,8 @@ pub fn fenced_env(app: &AppConfig) -> Vec<(String, String)> {
         ("ALL_PROXY".into(), gate),
         ("NO_PROXY".into(), "localhost,127.0.0.1".into()),
         ("no_proxy".into(), "localhost,127.0.0.1".into()),
+        // Node programs read the gate from the environment only when asked to.
+        ("NODE_USE_ENV_PROXY".into(), "1".into()),
         ("SANDBOX_AI".into(), "1".into()),
     ];
     match app.id.as_str() {
@@ -670,8 +744,16 @@ pub async fn reveal(path: &str, select: bool) {
 // ---------------------------------------------------------------------------------------------
 
 /// Packet filter rules for every protected app. Loopback is limited to the ports each app needs.
-pub fn filter_rules(cfg: &Config) -> String {
+pub fn filter_rules(cfg: &Config, own_servers: bool) -> String {
     let mut s = String::from("# Sandbox-ai packet filter rules. Generated by the app; changes are overwritten.\n");
+    let (lo, hi) = (crate::catalog::GATE_PORTS.start(), crate::catalog::GATE_PORTS.end());
+    if own_servers && cfg.apps.iter().any(wants_own_servers) {
+        // One small rule set per agent, kept current by the watchdog: the ports that agent is
+        // serving on right now are opened to it, and for exactly those ports arrivals at anyone
+        // else's socket are refused, so a port that changes hands cannot be reached in between.
+        // Looked at first, so no later rule can decide these packets differently.
+        s.push_str("\n# Agents reach the servers they started themselves, and nobody else's\nanchor \"*\"\n");
+    }
     for app in cfg.apps.iter().filter(|a| !a.windowed) {
         let u = &app.os_user;
         let mut out_ports: Vec<u16> = vec![app.proxy_port];
@@ -680,7 +762,6 @@ pub fn filter_rules(cfg: &Config) -> String {
         s.push_str(&format!("\n# {}\n", app.name));
         s.push_str(&format!("pass out quick on lo0 proto tcp from any to any port {{ {ports} }} user {u}\n"));
         if app.loopback_all {
-            let (lo, hi) = (crate::catalog::GATE_PORTS.start(), crate::catalog::GATE_PORTS.end());
             s.push_str(&format!("block return out quick on lo0 proto tcp from any to any port {lo}:{hi} user {u}\n"));
             s.push_str(&format!("pass out quick on lo0 proto tcp from any to any user {u}\n"));
         }
@@ -693,6 +774,14 @@ pub fn filter_rules(cfg: &Config) -> String {
     s
 }
 
+/// The rules the watchdog loads for one agent while it is serving on `ports`. Kept here, next to
+/// the rest, so the tests can check them; the watchdog writes the same two lines.
+#[cfg(test)]
+fn own_rules(os_user: &str, ports: &[u16]) -> String {
+    let list = ports.iter().map(u16::to_string).collect::<Vec<_>>().join(", ");
+    format!("pass out quick on lo0 proto tcp from any to any port {{ {list} }} user {os_user}\nblock return in quick on lo0 proto tcp from any to any port {{ {list} }} user != {os_user}\n")
+}
+
 const WATCHDOG: &str = r#"#!/bin/bash
 # Sandbox-ai fence watchdog. Runs as root from launchd and keeps the packet filter rules loaded,
 # including after restarts and after anything else reloads the system rules.
@@ -701,6 +790,33 @@ RULES=/etc/pf.anchors/sandboxai
 CONF="/Library/Application Support/SandboxAI/pf.conf"
 STATUS=/var/run/sandboxai.fence
 USERS="@USERS@"
+OWN_USERS="@OWN@"
+MODE="/Library/Application Support/SandboxAI/local-servers"
+
+# Agents and the servers they start themselves. Twice a second, while any agent is running: list
+# the ports each agent is listening on and load exactly those into that agent's own small anchor.
+# Until a new server is listed (half a second or so) the agent is told "connection refused", which
+# is what it would see from a server that is still starting.
+own_tick() {
+  [ -n "$OWN_USERS" ] || return 0
+  [ "$(cat "$MODE" 2>/dev/null)" = own ] || return 0
+  local csv listing="" u ports list
+  csv="$(echo "$OWN_USERS" | tr ' ' ',')"
+  if pgrep -u "$csv" >/dev/null 2>&1; then
+    listing="$(lsof -a -nP -iTCP -sTCP:LISTEN -u "$csv" -F Ln 2>/dev/null)"
+  fi
+  for u in $OWN_USERS; do
+    ports="$(printf '%s\n' "$listing" | awk -v u="$u" '/^L/ { cur = substr($0, 2) } /^n/ { if (cur == u) { n = $0; sub(/.*:/, "", n); if (n ~ /^[0-9]+$/) print n } }' | sort -un | tr '\n' ' ')"
+    [ "$ports" = "$(cat "/var/run/sandboxai.own.$u" 2>/dev/null)" ] && continue
+    if [ -z "$ports" ]; then
+      pfctl -q -a "$ANCHOR/own_${u#_sai}" -F rules 2>/dev/null
+    else
+      list="$(printf '%s' "$ports" | sed 's/ *$//' | tr ' ' ',')"
+      printf 'pass out quick on lo0 proto tcp from any to any port { %s } user %s\nblock return in quick on lo0 proto tcp from any to any port { %s } user != %s\n' "$list" "$u" "$list" "$u" | pfctl -q -a "$ANCHOR/own_${u#_sai}" -f - 2>>"$STATUS.err"
+    fi
+    printf '%s' "$ports" > "/var/run/sandboxai.own.$u"
+  done
+}
 
 ensure() {
   pfctl -s info 2>/dev/null | grep -q '^Status: Enabled' || pfctl -E >/dev/null 2>&1
@@ -724,7 +840,15 @@ ensure() {
 }
 
 if [ "${1:-}" = "--once" ]; then ensure; cat "$STATUS"; exit 0; fi
-while true; do ensure; sleep 20; done
+# Nothing from before this start can be trusted to be loaded still.
+rm -f /var/run/sandboxai.own.* 2>/dev/null
+n=0
+while true; do
+  if [ "$n" -eq 0 ]; then ensure; fi
+  own_tick
+  n=$(( (n + 1) % 40 ))
+  sleep 0.5
+done
 "#;
 
 const DAEMON_PLIST: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
@@ -820,18 +944,64 @@ ensure_workspace() { # dir owner
         }
     }
     s.push_str("\n# 2. Packet filter rules, and a watchdog that keeps them loaded across restarts.\nSTEP=\"packet filter rules\"\nmkdir -p /etc/pf.anchors\n");
-    s.push_str(&format!("cat > /etc/pf.anchors/{FILTER_ANCHOR} <<'SAI_EOF'\n{}SAI_EOF\n", filter_rules(cfg)));
-    s.push_str(&format!("cat > \"$SUPPORT/fence-watchdog.sh\" <<'SAI_EOF'\n{}SAI_EOF\n", WATCHDOG.replace("@USERS@", &users.join(","))));
-    s.push_str("chown root:wheel \"$SUPPORT/fence-watchdog.sh\" /etc/pf.anchors/sandboxai; chmod 755 \"$SUPPORT/fence-watchdog.sh\"; chmod 644 /etc/pf.anchors/sandboxai\n");
+    s.push_str(&format!(
+        "write_rules() {{ # none | own\n  if [ \"$1\" = own ]; then\ncat > /etc/pf.anchors/{FILTER_ANCHOR} <<'SAI_EOF'\n{}SAI_EOF\n  else\ncat > /etc/pf.anchors/{FILTER_ANCHOR} <<'SAI_EOF'\n{}SAI_EOF\n  fi\n  chown root:wheel /etc/pf.anchors/{FILTER_ANCHOR}; chmod 644 /etc/pf.anchors/{FILTER_ANCHOR}\n}}\nwrite_rules none\n",
+        filter_rules(cfg, true),
+        filter_rules(cfg, false),
+    ));
+    let own_users: Vec<&str> = cfg.apps.iter().filter(|a| wants_own_servers(a)).map(|a| a.os_user.as_str()).collect();
+    s.push_str(&format!("TEST_USER={}\nOWN_USERS={}\n", sh_quote(own_users.first().copied().unwrap_or("")), sh_quote(&own_users.join(" "))));
+    s.push_str(&format!("cat > \"$SUPPORT/fence-watchdog.sh\" <<'SAI_EOF'\n{}SAI_EOF\n", WATCHDOG.replace("@USERS@", &users.join(",")).replace("@OWN@", &own_users.join(" "))));
+    s.push_str("chown root:wheel \"$SUPPORT/fence-watchdog.sh\"; chmod 755 \"$SUPPORT/fence-watchdog.sh\"\n");
     s.push_str(&format!("cat > /Library/LaunchDaemons/com.sandboxai.fence.plist <<'SAI_EOF'\n{DAEMON_PLIST}SAI_EOF\n"));
     s.push_str(r#"chown root:wheel /Library/LaunchDaemons/com.sandboxai.fence.plist; chmod 644 /Library/LaunchDaemons/com.sandboxai.fence.plist
+launchctl bootout system/com.sandboxai.fence 2>/dev/null || true
+sleep 1
+
+# Start from the rules that allow agents their own local servers when there are agents; whether
+# they stay is decided by the test below. Anything left from an earlier run goes first.
+forget_own() { for u in $OWN_USERS; do pfctl -q -a "sandboxai/own_${u#_sai}" -F rules 2>/dev/null || true; rm -f "/var/run/sandboxai.own.$u"; done; }
+set_local() { # none | own
+  write_rules "$1"
+  printf '%s\n' "$1" > "$SUPPORT/local-servers"; chown root:wheel "$SUPPORT/local-servers"; chmod 644 "$SUPPORT/local-servers"
+}
+forget_own
+if [ -n "$TEST_USER" ]; then set_local own; else set_local none; fi
+
 # Reload the rules now (the anchor may already hold an older set).
 STEP="starting the watchdog"
 pfctl -q -a sandboxai -F rules 2>/dev/null || true
-launchctl bootout system/com.sandboxai.fence 2>/dev/null || true
-sleep 1
 launchctl enable system/com.sandboxai.fence 2>/dev/null || true
 launchctl bootstrap system /Library/LaunchDaemons/com.sandboxai.fence.plist 2>/dev/null || launchctl kickstart -k system/com.sandboxai.fence
+
+# 2b. Can agents be allowed the servers they start themselves, and only those? Tested here, on
+# this computer, with the real rules and the real watchdog, before it is relied on: an agent's
+# own test server must become reachable to it, and somebody else's must stay refused.
+if [ -n "$TEST_USER" ]; then
+  STEP="checking whether agents can be allowed their own local servers"
+  sleep 2
+  own=no; other=no
+  sudo -n -u "$TEST_USER" /usr/bin/nc -l 127.0.0.1 47991 >/dev/null 2>&1 & p1=$!
+  /usr/bin/nc -l 127.0.0.1 47993 >/dev/null 2>&1 & p2=$!
+  for i in 1 2 3 4 5 6 7 8; do
+    sleep 0.5
+    if sudo -n -u "$TEST_USER" /usr/bin/nc -z -G 2 127.0.0.1 47991 >/dev/null 2>&1; then own="yes after $i tries"; break; fi
+  done
+  if sudo -n -u "$TEST_USER" /usr/bin/nc -z -G 2 127.0.0.1 47993 >/dev/null 2>&1; then other=yes; fi
+  echo "local servers: its own reachable: $own; somebody else's reachable: $other"
+  { pfctl -a sandboxai -sr | head -3; pfctl -a "sandboxai/own_${TEST_USER#_sai}" -sr; } 2>/dev/null | sed 's/^/    /' || true
+  # The ordinary "please stop" signal is ignored in this context (seen on a real run: setup
+  # waited forever on a test server nobody had connected to), so the test servers are stopped
+  # the way that cannot be ignored, and nothing waits on them.
+  kill -KILL "$p1" "$p2" 2>/dev/null || true
+  /usr/bin/pkill -KILL -u "$TEST_USER" -f "nc -l 127.0.0.1 47991" 2>/dev/null || true
+  case "$own/$other" in
+    yes*/no) echo "local servers: on" ;;
+    *) echo "local servers: the test did not pass, staying with the stricter rules"
+       set_local none; forget_own
+       pfctl -q -a sandboxai -f /etc/pf.anchors/sandboxai 2>/dev/null || true ;;
+  esac
+fi
 
 # 3. Let the app start things as the protected users without asking for a password each time.
 STEP="permission to start protected apps"
@@ -893,6 +1063,13 @@ async fn run_as_admin(script: &str, name: &str, prompt: &str) -> SetupResult {
     let apple = format!("do shell script \"/bin/bash \" & quoted form of \"{}\" & \" 2>&1\" with prompt \"{}\" with administrator privileges", esc(&path.to_string_lossy()), esc(prompt));
     let out = run(&["/usr/bin/osascript", "-e", &apple], Duration::from_secs(300)).await;
     let _ = std::fs::remove_file(&path);
+    // Keep what the last run said, success or not: it is the only record of what was done as
+    // administrator, and the only way to see why a self-test went the way it did.
+    if let Some((ok, text)) = &out {
+        let logs = crate::paths::logs_dir();
+        let _ = std::fs::create_dir_all(&logs);
+        let _ = std::fs::write(logs.join(format!("{name}.last.log")), format!("{} {}\n{}\n", crate::now_iso(), if *ok { "finished" } else { "failed" }, text.replace('\r', "\n")));
+    }
     match out {
         Some((true, _)) => SetupResult { ok: true, message: "Done.".into() },
         Some((false, text)) if text.contains("-128") || text.to_lowercase().contains("cancel") => SetupResult { ok: false, message: "You cancelled the approval, so nothing was changed.".into() },
@@ -924,7 +1101,7 @@ mod tests {
     #[test]
     fn filter_rules_block_every_protected_user_and_limit_loopback() {
         let cfg = Config::fresh();
-        let rules = filter_rules(&cfg);
+        let rules = filter_rules(&cfg, false);
         for app in &cfg.apps {
             assert!(rules.contains(&format!("block return out quick user {}", app.os_user)));
             assert!(rules.contains(&format!("block return in quick user {}", app.os_user)));
@@ -974,7 +1151,7 @@ mod tests {
         // It never appears in anything an administrator approves or the packet filter loads.
         let mut cfg = Config::fresh();
         cfg.apps.push(a);
-        assert!(!filter_rules(&cfg).contains("_saiwin1"));
+        assert!(!filter_rules(&cfg, false).contains("_saiwin1") && !filter_rules(&cfg, true).contains("_saiwin1"));
         assert!(!setup_script(&cfg, "tester").contains("_saiwin1"));
         assert!(!remove_script(&cfg).contains("_saiwin1 "));
         assert!(cfg.provisioned().app("my-window").is_none());
@@ -996,6 +1173,69 @@ mod tests {
         // A path with a quote and a space cannot break out of the script.
         let s = script_for("/Apps/It's here/Sandbox-ai.app/Contents/MacOS/sandbox-ai");
         assert!(s.contains("'/Apps/It'\\''s here/Sandbox-ai.app/Contents/MacOS/sandbox-ai'"));
+    }
+
+    #[test]
+    fn agents_reach_their_own_local_servers_and_nobody_elses() {
+        let cfg = Config::fresh();
+        let (claude, ollama) = (cfg.app("claude-code").unwrap(), cfg.app("ollama").unwrap());
+        let rules = filter_rules(&cfg, true);
+        // The per-agent rule sets are looked at before anything else.
+        let children = rules.find("anchor \"*\"").expect("child anchors");
+        assert!(children < rules.find("\n# Claude Code").unwrap());
+        // The static part for an agent is unchanged: its gate, the local model, nothing else.
+        let strict = filter_rules(&cfg, false);
+        assert_eq!(rules.replace("\n# Agents reach the servers they started themselves, and nobody else's\nanchor \"*\"\n", ""), strict);
+        assert!(!strict.contains("anchor"));
+        assert!(!strict.contains("pass out quick on lo0 proto tcp from any to any user _saiagent\n"));
+        // What the watchdog loads for an agent serving on two ports: those ports, for that agent,
+        // and for those ports nobody else's socket.
+        let own = own_rules("_saiagent", &[3000, 5173]);
+        assert!(own.contains("port { 3000, 5173 } user _saiagent\n") && own.contains("port { 3000, 5173 } user != _saiagent\n"));
+        assert_eq!(own_anchor("_saiagent"), "own_agent");
+        // The watchdog script writes the same two rules, and is told which users to do it for.
+        assert!(WATCHDOG.contains("pass out quick on lo0 proto tcp from any to any port { %s } user %s") && WATCHDOG.contains("user != %s"));
+        let script = setup_script(&cfg, "tester");
+        assert!(script.contains("OWN_USERS=\"_saiagent _saicodex _saigemini _saiaider _saiopencode\"") && !script.contains("@OWN@"));
+        // The launch-time profile follows the same switch, and never opens another app's gate.
+        let p = seatbelt_profile_for(claude, true);
+        let all = p.find("(allow network-outbound (remote ip \"localhost:*\"))").unwrap();
+        assert!(p.find(&format!("(deny network-outbound (remote ip \"localhost:{}\")", ollama.proxy_port)).unwrap() > all);
+        assert!(!p.contains(&format!("(deny network-outbound (remote ip \"localhost:{}\")", claude.proxy_port)));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn the_packet_filter_accepts_both_rule_sets() {
+        // pfctl -n only reads the rules; it loads nothing and needs no special rights.
+        let mut cfg = Config::fresh();
+        cfg.add_custom("Mine", "/bin/sh").unwrap();
+        for own in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            let p = dir.path().join("rules");
+            // The private users need not exist on the computer running the tests: the grammar
+            // is what is being checked, so every one of them is replaced by a user that does.
+            let mut rules = filter_rules(&cfg, own);
+            for a in &cfg.apps {
+                rules = rules.replace(&format!("user {}\n", a.os_user), "user root\n").replace(&format!("user {} ", a.os_user), "user root ");
+            }
+            if own {
+                // Checked as one file: the child rules use the same grammar as the main ones.
+                rules.push_str(&own_rules("root", &[3000, 5173]));
+            }
+            assert!(!rules.contains("user _sai"));
+            std::fs::write(&p, rules).unwrap();
+            let out = std::process::Command::new("/sbin/pfctl").arg("-n").arg("-f").arg(&p).output().unwrap();
+            let err = String::from_utf8_lossy(&out.stderr);
+            assert!(out.status.success() && !err.contains("syntax error"), "own={own}: {err}");
+        }
+    }
+
+    #[test]
+    fn the_app_bundle_is_found_from_its_executable() {
+        assert_eq!(bundle_of("/Applications/Sandbox-ai.app/Contents/MacOS/sandbox-ai").as_deref(), Some("/Applications/Sandbox-ai.app"));
+        assert_eq!(bundle_of("/Volumes/Sandbox-ai/Sandbox-ai.app/Contents/MacOS/sandbox-ai").as_deref(), Some("/Volumes/Sandbox-ai/Sandbox-ai.app"));
+        assert_eq!(bundle_of("/usr/local/bin/sai"), None);
     }
 
     #[test]
@@ -1076,7 +1316,7 @@ mod tests {
     fn seatbelt_profile_denies_network_then_allows_only_the_gate() {
         let cfg = Config::fresh();
         let app = cfg.app("claude-code").unwrap();
-        let p = seatbelt_profile(app);
+        let p = seatbelt_profile_for(app, false);
         let deny = p.find("(deny network* ").unwrap();
         let allow = p.find(&format!("localhost:{}", app.proxy_port)).unwrap();
         assert!(deny < allow, "the allow must come after the deny so it wins");
@@ -1088,15 +1328,15 @@ mod tests {
     fn a_model_server_may_use_loopback_but_never_another_gate() {
         let cfg = Config::fresh();
         let (ollama, claude) = (cfg.app("ollama").unwrap(), cfg.app("claude-code").unwrap());
-        let p = seatbelt_profile(ollama);
+        let p = seatbelt_profile_for(ollama, false);
         let allow_all = p.find("(allow network-outbound (remote ip \"localhost:*\"))").expect("loopback allowance");
         let deny_other = p.find(&format!("(deny network-outbound (remote ip \"localhost:{}\") ", claude.proxy_port)).expect("other gate denied");
         assert!(allow_all < deny_other, "the deny must come after the allow so it wins");
         assert!(!p.contains(&format!("(deny network-outbound (remote ip \"localhost:{}\")", ollama.proxy_port)), "its own gate stays reachable");
         // An agent gets no such allowance.
-        assert!(!seatbelt_profile(claude).contains("localhost:*\"))\n(deny network-outbound (remote ip"));
-        assert!(!seatbelt_profile(claude).contains("(allow network-outbound (remote ip \"localhost:*\"))"));
-        let rules = filter_rules(&cfg);
+        assert!(!seatbelt_profile_for(claude, false).contains("localhost:*\"))\n(deny network-outbound (remote ip"));
+        assert!(!seatbelt_profile_for(claude, false).contains("(allow network-outbound (remote ip \"localhost:*\"))"));
+        let rules = filter_rules(&cfg, false);
         let block = rules.find(&format!("port {}:{} user {}", crate::catalog::GATE_PORTS.start(), crate::catalog::GATE_PORTS.end(), ollama.os_user)).expect("gate range blocked for the model server");
         let pass_all = rules.find(&format!("pass out quick on lo0 proto tcp from any to any user {}", ollama.os_user)).expect("loopback pass");
         assert!(block < pass_all, "the gate-range block must be evaluated first");

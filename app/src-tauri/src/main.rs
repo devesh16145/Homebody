@@ -49,6 +49,15 @@ async fn sai(app: AppHandle, window: WebviewWindow, shell: tauri::State<'_, Shel
         }
         "pick_folder" => tokio::task::spawn_blocking(|| pick("choose folder with prompt \"Choose a project folder to bring in\"")).await.map_err(|e| e.to_string())?,
         "pick_program" => tokio::task::spawn_blocking(|| pick("choose file with prompt \"Choose the program to protect\" default location (POSIX file \"/Applications\")")).await.map_err(|e| e.to_string())?,
+        "install_and_restart" => {
+            let res = shell.engine.dispatch("install_app", Value::Null).await?;
+            let path = res.get("path").and_then(Value::as_str).unwrap_or("").to_string();
+            // Start the installed copy once this one has gone, then stop cleanly.
+            let _ = std::process::Command::new("/bin/sh").args(["-c", "sleep 2; exec /usr/bin/open -n \"$0\"", &path]).stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).spawn();
+            shell.engine.shutdown().await;
+            app.exit(0);
+            Ok(Value::Null)
+        }
         "get_login_item" => Ok(serde_json::json!({ "on": login_item_path().map(|p| p.exists()).unwrap_or(false) })),
         "set_login_item" => {
             set_login_item(args.get("on").and_then(Value::as_bool).unwrap_or(false))?;
@@ -98,7 +107,7 @@ fn set_login_item(on: bool) -> Result<(), String> {
         return Err("Move the app to a folder with a simpler name first.".into());
     }
     let plist = format!(
-        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n<plist version=\"1.0\"><dict>\n  <key>Label</key><string>{LOGIN_ITEM}</string>\n  <key>ProgramArguments</key><array><string>{exe}</string></array>\n  <key>RunAtLoad</key><true/>\n  <key>LimitLoadToSessionType</key><string>Aqua</string>\n  <key>ProcessType</key><string>Interactive</string>\n</dict></plist>\n"
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n<plist version=\"1.0\"><dict>\n  <key>Label</key><string>{LOGIN_ITEM}</string>\n  <key>ProgramArguments</key><array><string>{exe}</string><string>--hidden</string></array>\n  <key>RunAtLoad</key><true/>\n  <key>LimitLoadToSessionType</key><string>Aqua</string>\n  <key>ProcessType</key><string>Interactive</string>\n</dict></plist>\n"
     );
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir).map_err(|e| format!("The login entry could not be saved: {e}"))?;
@@ -340,6 +349,10 @@ fn main() {
             app.manage(Shell { engine: engine.clone(), glance_hidden_at: Mutex::new(None), indicator: Mutex::new(None) });
             if let Ok(exe) = std::env::current_exe() {
                 engine.set_opener(&exe.to_string_lossy());
+                // "Open at login" follows the app when it has moved.
+                if login_item_path().map(|p| p.exists()).unwrap_or(false) {
+                    let _ = set_login_item(true);
+                }
             }
             // Started by a launcher while not running yet: start up as usual, then open the app.
             if let Some(id) = wanted.clone() {
@@ -387,12 +400,15 @@ fn main() {
                 stopping.exit(0);
             });
 
-            // First run, or protection needs attention: open the main window so it is not missed.
+            // Opening the app shows its window: someone who opens it wants to see it. The quiet
+            // starts are the ones nobody asked for by hand: at login, or through a launcher.
+            // Either way the window opens when protection needs attention, so that is not missed.
+            let quiet = std::env::args().any(|a| a == "--hidden") || wanted.is_some();
             let first = handle.clone();
             tauri::async_runtime::spawn(async move {
-                tokio::time::sleep(Duration::from_millis(2500)).await;
+                tokio::time::sleep(Duration::from_millis(if quiet { 2500 } else { 600 })).await;
                 let status = first.state::<Shell>().engine.status();
-                if status.setup_needed || std::env::var("SAI_SHOW_MAIN").is_ok() {
+                if !quiet || status.setup_needed || std::env::var("SAI_SHOW_MAIN").is_ok() {
                     show_main(&first, None);
                 }
             });
@@ -406,6 +422,12 @@ fn main() {
                 if code.is_none() {
                     api.prevent_exit();
                 }
+            }
+            // Opened again while already running (from Applications, Spotlight or the Dock):
+            // there is nothing to start, so show the window instead of doing nothing visible.
+            #[cfg(target_os = "macos")]
+            if let tauri::RunEvent::Reopen { .. } = &event {
+                show_main(app, None);
             }
             if let tauri::RunEvent::Exit = event {
                 let _ = std::fs::remove_file(sai_core::paths::control_socket());

@@ -103,6 +103,7 @@ export function createMock(scenarioName) {
         today: counters(todays.filter((e) => e.appId === a.id)),
       })),
       pending,
+      localServers: !!s.localServers,
       watch: s.mode === 'watch' ? { since: s.modeSince, until: s.watchUntil || null, places: watchItems(s.modeSince).length } : null,
       watchReview: s.mode !== 'watch' && s.watchReview && watchItems(s.watchReview.since, s.watchReview.until).length
         ? { since: s.watchReview.since, until: s.watchReview.until, places: watchItems(s.watchReview.since, s.watchReview.until).length } : null,
@@ -361,8 +362,11 @@ export function createMock(scenarioName) {
     async run_setup() {
       await wait(1600);
       if (flags.failSetup) return { ok: false, message: 'Setup was cancelled before it finished. Nothing was changed.' };
-      Object.assign(s, { setupDone: true, fenceDown: false, setupReasons: [], mode: 'private', modeSince: iso() });
-      s.privateSince = s.modeSince;
+      s.localServers = true;
+      if (!s.setupDone || s.fenceDown) {
+        Object.assign(s, { setupDone: true, fenceDown: false, setupReasons: [], mode: 'private', modeSince: iso() });
+        s.privateSince = s.modeSince;
+      }
       queueStatus();
       return { ok: true, message: 'Protection is on.' };
     },
@@ -393,6 +397,8 @@ export function createMock(scenarioName) {
     },
     async app_launcher({ appId } = {}) { const a = needApp(appId); return { path: `~/Applications/Sandbox-ai/${a.name} (protected).app` }; },
     async app_open({ appId } = {}) { needApp(appId).running = true; queueStatus(); return null; },
+    async get_install() { return s.installed ? { path: '/Applications/Sandbox-ai.app', installed: true, canInstall: false } : { path: '/Volumes/Sandbox-ai/Sandbox-ai.app', installed: false, canInstall: true }; },
+    async install_and_restart() { await wait(900); s.installed = true; host('note', { text: 'Copied to /Applications and restarted' }); return null; },
     async get_login_item() { return { on: !!s.loginItem }; },
     async set_login_item({ on } = {}) { s.loginItem = !!on; return { on: s.loginItem }; },
     async app_add({ name, program } = {}) {

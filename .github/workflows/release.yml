@@ -1,0 +1,86 @@
+# Builds the downloadable disk image for macOS.
+#
+# Runs only when started by hand (Actions tab → Release → Run workflow) or when a version tag
+# such as v0.1.0 is pushed. It never runs on ordinary commits, so it costs nothing day to day.
+#
+# Signing: when the five Apple secrets below exist in the repository settings, the app is signed
+# and notarized and opens without a warning. Without them the build still succeeds, unsigned.
+#   APPLE_CERTIFICATE            the Developer ID Application certificate, exported as .p12, base64
+#   APPLE_CERTIFICATE_PASSWORD   the password chosen when exporting it
+#   APPLE_SIGNING_IDENTITY       for example: Developer ID Application: Your Name (TEAMID)
+#   APPLE_ID, APPLE_PASSWORD     the Apple account and an app-specific password, for notarization
+#   APPLE_TEAM_ID                the ten-character team id
+#
+# Not yet run: this file was written before the project had an Apple Developer identity.
+
+name: Release
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  macos:
+    runs-on: macos-latest
+    timeout-minutes: 45
+    defaults:
+      run:
+        working-directory: app
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: app
+
+      - name: Install build tools
+        run: npm ci
+
+      - name: Unit tests
+        run: cargo test -p sai-core
+
+      - name: Build and pack
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          # Empty secrets must be absent, not empty, or the build tries to sign with nothing.
+          for v in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID; do
+            if [ -z "${!v}" ]; then unset "$v"; fi
+          done
+          scripts/make-dmg.sh
+
+      - name: Say whether it is signed
+        run: |
+          if codesign --verify --deep --strict target/release/bundle/macos/Sandbox-ai.app 2>/dev/null && \
+             codesign -dv target/release/bundle/macos/Sandbox-ai.app 2>&1 | grep -q "Developer ID"; then
+            echo "Signed with a Developer ID." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "NOT signed with a Developer ID. macOS will warn people who download this build." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Sandbox-ai-macos
+          path: app/target/release/bundle/dmg/*.dmg
+          if-no-files-found: error
+
+      - name: Draft a release for the tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" target/release/bundle/dmg/*.dmg --draft --generate-notes --title "Sandbox-ai $GITHUB_REF_NAME"

@@ -88,6 +88,7 @@ export const advanced = {
     catch (e) { this.error = errText(e); }
     try { this.setupText = await invoke('get_setup_script'); } catch (e) { this.setupText = null; }
     try { this.login = (await invoke('get_login_item')).on; } catch (e) { this.login = null; }
+    try { this.install = await invoke('get_install'); } catch (e) { this.install = null; }
     if (this.env.isShown('advanced')) this.render();
   },
 
@@ -112,6 +113,18 @@ export const advanced = {
       : '<button class="btn danger" data-do="ad-ask" data-key="ad-ask">Remove protection from this computer</button>';
     patch(this.env.body(), `<div class="ad"><h2>Advanced</h2>
       <p class="lead">The technical details behind the switches. You never need to change anything here.</p>
+      ${this.install && this.install.path ? `<section><h3>Where Sandbox-ai lives</h3>
+        <div class="ad-switch"><span class="grow"><b>${this.install.installed ? 'In your Applications folder' : 'Not in your Applications folder yet'}</b><br><span class="muted mono sel">${esc(this.install.path)}</span></span>
+          ${this.install.canInstall ? `<button class="btn" data-do="ad-install" data-key="ad-install"${this.installing ? ' disabled' : ''}>${this.installing ? 'Moving…' : 'Move to Applications'}</button>` : ''}</div>
+        ${this.install.canInstall ? '<p class="muted ad-note">Copies the app into Applications and reopens it from there. Protected apps that are running are stopped first, and your launchers keep working.</p>' : ''}
+        ${this.installError ? `<div class="notice error" role="alert">${icon('alert')}<span>${esc(this.installError)}</span></div>` : ''}</section>` : ''}
+      <section><h3>Servers an agent starts itself</h3>
+        <div class="ad-switch"><span class="grow"><b>${s.localServers ? 'Agents can reach their own local servers' : 'Agents cannot reach local servers yet'}</b><br>
+          <span class="muted">${s.localServers
+            ? 'A protected agent can start a server on this computer, such as a preview of the site it is building, and connect to it. It still cannot reach anyone else’s.'
+            : 'An agent that starts a server on this computer, such as a preview of the site it is building, cannot connect to it. Some agents need this to run at all. Turning it on tests, on this Mac, that an agent can reach only its own servers before allowing it.'}</span></span>
+          ${s.localServers ? '' : `<button class="btn" data-do="ad-local" data-key="ad-local"${this.localBusy ? ' disabled' : ''}>${this.localBusy ? 'Waiting for your approval…' : 'Test and turn on'}</button>`}</div>
+        ${this.localNote ? `<div class="notice ${this.localNote.ok ? 'ok' : 'warn'}" role="status">${icon(this.localNote.ok ? 'check' : 'alert')}<span>${esc(this.localNote.text)}</span></div>` : ''}</section>
       ${this.login == null ? '' : `<section><h3>Start-up</h3>
         <label class="ad-switch"><span class="grow"><b>Open Sandbox-ai when I log in</b><br><span class="muted">So protected apps are ready, and the menu-bar icon is there, without you starting anything.</span></span>
           <span class="switch green"><input type="checkbox" role="switch" data-login data-key="ad-login" aria-label="Open Sandbox-ai when I log in"${this.login ? ' checked' : ''}><i></i></span></label></section>`}
@@ -133,6 +146,27 @@ export const advanced = {
   },
 
   async act(what) {
+    if (what === 'ad-local') {
+      this.localBusy = true; this.localNote = null; this.render();
+      try {
+        const res = await invoke('run_setup');
+        if (!res || !res.ok) throw (res && res.message) || 'Setup did not finish.';
+        const st = await invoke('get_status');
+        this.env.ctx.setStatus(st);
+        this.localNote = st.localServers
+          ? { ok: true, text: 'Tested on this Mac and turned on: an agent reached its own server and was refused at someone else’s.' }
+          : { ok: false, text: 'The test did not pass on this Mac, so it stays off. Agents keep working as before, without their own local servers.' };
+      } catch (e) { this.localNote = { ok: false, text: errText(e) }; }
+      this.localBusy = false;
+      if (this.env.isShown('advanced')) this.render();
+      return;
+    }
+    if (what === 'ad-install') {
+      this.installing = true; this.installError = ''; this.render();
+      try { await invoke('install_and_restart'); }
+      catch (e) { this.installing = false; this.installError = errText(e); if (this.env.isShown('advanced')) this.render(); }
+      return;
+    }
     if (what === 'ad-ask') { this.confirm = true; this.removeError = ''; this.render(); const c = $('[data-do="ad-cancel"]', this.env.body()); if (c) c.focus(); return; }
     if (what === 'ad-cancel') { this.confirm = false; return this.render(); }
     if (what === 'ad-check') {

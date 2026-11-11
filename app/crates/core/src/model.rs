@@ -74,6 +74,9 @@ pub struct Status {
     pub today: Counters,
     pub apps: Vec<AppStatus>,
     pub pending: Vec<Ask>,
+    /// Agents may reach servers they started themselves on this computer (and only those).
+    /// Switched on by setup once it has tested that the packet filter can enforce it here.
+    pub local_servers: bool,
     /// Present while Watch is on.
     pub watch: Option<WatchStatus>,
     /// Present when a finished Watch has results waiting to be reviewed.

@@ -37,6 +37,7 @@ interface Status {
   today: Counters;
   apps: AppStatus[];
   pending: Ask[];               // unanswered prompts, oldest first
+  localServers: boolean;            // agents may reach servers they started themselves (setup tested it here)
   watch: WatchStatus | null;        // present while Watch is on
   watchReview: WatchStatus | null;  // a finished Watch has places waiting to be reviewed
 }
@@ -197,6 +198,9 @@ interface SetupResult { ok: boolean; message: string; }
 | `app_open` | `{ appId }` | `null` | open an app the way its kind is opened: a window or service is started, an agent gets a protected terminal. What a launcher calls |
 | `app_launcher` | `{ appId, reveal?: boolean }` | `{ path }` | writes `~/Applications/Sandbox-ai/<Name> (protected).app`, a small app that opens this one protected (starting Sandbox-ai first if needed), and reveals it in Finder. Created automatically for windowed apps when they are added |
 | `pick_program` | — | `string \| null` | shell only: the system file chooser |
+| `get_install` | — | `{ path: string \| null, installed: boolean, canInstall: boolean }` | where the desktop app is running from, and whether that is `/Applications/Sandbox-ai.app` |
+| `install_app` | — | `{ path }` | copies the app into Applications, replacing an older copy |
+| `install_and_restart` | — | `null` | shell only: `install_app`, then stop cleanly and reopen from Applications |
 | `get_login_item` / `set_login_item` | — / `{ on }` | `{ on: boolean }` | shell only: open the app at login (a per-user launch entry) |
 | `app_set_protected` | `{ appId, protected }` | `Status` | |
 | `app_start` | `{ appId }` | `Status` | model apps: start the protected instance |

@@ -38,6 +38,7 @@ pub const DESTINATIONS: &[Destination] = &[
     // Other AI providers
     Destination { pattern: "api.openai.com", label: "OpenAI API", purpose: "Your AI provider", companions: &[] },
     Destination { pattern: "generativelanguage.googleapis.com", label: "Google Gemini API", purpose: "Your AI provider", companions: &[] },
+    Destination { pattern: "files.openai.com", label: "OpenAI files", purpose: "Files from your AI provider", companions: &[] },
     Destination { pattern: "auth.openai.com", label: "OpenAI sign-in", purpose: "Signing in to your OpenAI account", companions: &[] },
     Destination { pattern: "chatgpt.com", label: "ChatGPT", purpose: "Your AI provider (ChatGPT plan)", companions: &[] },
     Destination { pattern: "cloudcode-pa.googleapis.com", label: "Google Gemini (Google account)", purpose: "Your AI provider", companions: &[] },
@@ -48,8 +49,20 @@ pub const DESTINATIONS: &[Destination] = &[
     Destination { pattern: "api.mistral.ai", label: "Mistral API", purpose: "Your AI provider", companions: &[] },
     Destination { pattern: "api.groq.com", label: "Groq API", purpose: "Your AI provider", companions: &[] },
     Destination { pattern: "api.deepseek.com", label: "DeepSeek API", purpose: "Your AI provider", companions: &[] },
+    Destination { pattern: "opencode.ai", label: "opencode", purpose: "Account and hosted models", companions: &[] },
+    Destination { pattern: "*.opencode.ai", label: "opencode hosted models", purpose: "An AI provider run by opencode", companions: &[] },
     Destination { pattern: "models.dev", label: "models.dev", purpose: "List of available models", companions: &[] },
-    Destination { pattern: "*.posthog.com", label: "PostHog", purpose: "Usage statistics", companions: &[] },
+    Destination { pattern: "*.i.posthog.com", label: "PostHog", purpose: "Usage statistics", companions: &[] },
+    // Seen on real runs of windowed apps (Cursor, Antigravity, Comfy Desktop), November 2026.
+    Destination { pattern: "metrics.cursor.sh", label: "Cursor usage statistics", purpose: "Usage statistics", companions: &[] },
+    Destination { pattern: "*.cursor.sh", label: "Cursor", purpose: "Your AI provider", companions: &[] },
+    Destination { pattern: "*.cursor.com", label: "Cursor", purpose: "Updates and account", companions: &[] },
+    Destination { pattern: "marketplace.cursorapi.com", label: "Cursor extensions", purpose: "Extension downloads", companions: &[] },
+    Destination { pattern: "*.comfy.org", label: "Comfy", purpose: "App files and updates", companions: &[] },
+    Destination { pattern: "*.todesktop.com", label: "ToDesktop", purpose: "App updates", companions: &[] },
+    Destination { pattern: "browser-intake-us5-datadoghq.com", label: "Datadog", purpose: "Usage statistics", companions: &[] },
+    Destination { pattern: "*.datadoghq.com", label: "Datadog", purpose: "Usage statistics", companions: &[] },
+    Destination { pattern: "storage.googleapis.com", label: "Google Cloud Storage", purpose: "File downloads", companions: &[] },
     // Developer ecosystems
     Destination { pattern: "registry.npmjs.org", label: "npm registry", purpose: "Package downloads", companions: &[] },
     Destination { pattern: "pypi.org", label: "Python Package Index", purpose: "Package downloads", companions: &["files.pythonhosted.org"] },
@@ -174,9 +187,14 @@ pub const APPS: &[AppPreset] = &[
             PresetTrust { host: "ollama.com", enabled: false, recommended: false },
         ],
     },
-    // The four below follow each tool's documentation. They have not been run on the computer
-    // this was written on, so their lists are deliberately short: the provider and its sign-in.
-    // Anything else the tool contacts asks first.
+    // The four below started from each tool's documentation and were then run protected, not
+    // signed in, on 11 Nov 2026. Seen: Codex reached api.openai.com and chatgpt.com and asked for
+    // files.openai.com and GitHub (update check); Gemini reached its API and tried
+    // play.googleapis.com (usage statistics, blocked here); Aider asked for its provider, for
+    // raw.githubusercontent.com (model list) and pypi.org (update check). All of it went through
+    // the gate. opencode talks to a local server of its own, so it needs "own local servers";
+    // with that on it ran, and asked for opencode.ai and models.opencode.ai (its hosted models).
+    // The lists stay short on purpose: the provider and its sign-in. Anything else asks first.
     AppPreset {
         id: "codex",
         name: "Codex CLI",
@@ -225,7 +243,7 @@ pub const APPS: &[AppPreset] = &[
         serves_port: None,
         loopback_all: false,
         // Aider works with whichever provider you give it a key for, so none is assumed.
-        trust: &[PresetTrust { host: "*.posthog.com", enabled: false, recommended: false }],
+        trust: &[PresetTrust { host: "*.i.posthog.com", enabled: false, recommended: false }],
     },
     AppPreset {
         id: "opencode",

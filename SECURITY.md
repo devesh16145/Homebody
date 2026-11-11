@@ -27,6 +27,7 @@ These are limits of the current design, listed in the README, not new findings:
 - A kernel exploit from inside a protected app is not contained (no virtual machine yet).
 - Local programs running as you, outside the fence, are trusted. They can change settings or talk to a gate.
 - Windowed apps run as you behind one layer (the launch-time profile). They can read your files, and a windowed app that deliberately tries to break out has routes a separate user would close, such as writing into a folder another program syncs or runs. A way for a windowed app to reach the **network** directly, or to answer its own prompt, is still a finding.
+- An agent's access to its own local servers rests on the packet filter alone, with a list refreshed twice a second. A way for an agent to reach a local server that is not its own is a finding.
 - The build is not signed or notarized yet.
 - Whether the packet filter rules come back after a restart has not been verified on a real restart. The app refuses to start protected apps when they are missing.
 

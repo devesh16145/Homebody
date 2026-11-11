@@ -80,12 +80,29 @@ function applyStatus() {
   el.pill.title = status.sentence;
   patch(el.banner, status.lockdown && !status.setupNeeded
     ? `<div class="lockbar" role="alert">${icon('lock')}<span><b>Everything is blocked.</b> Nothing can leave until you release it.</span>
-       <button class="btn sm" data-act="release">Release</button></div>` : status.setupNeeded ? '' : watch.barHtml(status));
+       <button class="btn sm" data-act="release">Release</button></div>` : status.setupNeeded ? '' : (watch.barHtml(status) || installBar()));
   watch.onStatus(status);
   if (status.setupNeeded) renderSetup();
   syncTabs();
   Object.values(TABS).forEach((m) => m.onStatus(status));
 }
+
+// ---------- "not in Applications yet" ----------
+
+let install = null, installBusy = false;
+const installDismissed = () => { try { return localStorage.getItem('sai.install.later') === '1'; } catch (e) { return false; } };
+function installBar() {
+  if (!install || !install.canInstall || installDismissed()) return '';
+  return `<div class="watchbar done" role="status">${icon('info')}<span><b>Sandbox-ai is not in your Applications folder yet.</b> Moving it there keeps it in one place and easy to find.</span>
+    <button class="btn sm primary" data-act="install-go"${installBusy ? ' disabled' : ''}>${installBusy ? 'Moving…' : 'Move to Applications'}</button>
+    <button class="btn sm" data-act="install-later">Not now</button></div>`;
+}
+on(document, 'click', '[data-act="install-later"]', () => { try { localStorage.setItem('sai.install.later', '1'); } catch (e) { /* private mode */ } if (status) applyStatus(); });
+on(document, 'click', '[data-act="install-go"]', async () => {
+  installBusy = true; applyStatus();
+  try { await invoke('install_and_restart'); } catch (e) { installBusy = false; ctx.toast(errText(e)); applyStatus(); }
+});
+invoke('get_install').then((i) => { install = i; if (status) applyStatus(); }).catch(() => {});
 
 on(document, 'click', '[data-act="release"]', async () => {
   try { ctx.setStatus(await invoke('set_lockdown', { on: false })); } catch (e) { ctx.toast(errText(e)); }

@@ -4,7 +4,7 @@ Keep your AI on your computer, and prove it.
 
 A menu-bar app for macOS (Windows and Linux to follow) that runs local AI apps and agents so they can reach only the places you trust, asks you in plain words about anything else, and keeps a signed record of every decision. No virtual machine. Apache-2.0, no accounts, no telemetry, nothing hosted.
 
-Status: second build, 10 Nov 2026 ("usable every day"). Everything below runs end to end on this Mac in the release app: all three fence layers installed and verified live, Ollama protected with GPU access, a model download and inference under the fence. New in this build and tested live: bringing a project folder in for an agent and applying its changes back, attempts that go around the gate shown in the Feed, Watch with a timer and a review of what was contacted, export of the whole signed log, and a clean stop when the app is killed. Not yet verified: that protection is restored by the watchdog after a restart, and the folder chooser button in the real app window (the command behind it is tested; the button was only exercised in the browser preview).
+Status: 11 Nov 2026. Everything in the table runs end to end on this Mac in the release app, installed in `/Applications`. Verified live: all three fence layers, Ollama protected with GPU access, model download and inference under the fence, projects, go-arounds in the Feed, Watch, log export, clean stop, windowed apps, launchers, installing into Applications, recovery after the app is force-killed. Not yet verified: that protection is restored by the watchdog after a restart; the open-at-login switch across a real login; the release workflow (never run); signing and notarization (no Apple Developer identity yet).
 
 ## What works today
 
@@ -29,6 +29,11 @@ Status: second build, 10 Nov 2026 ("usable every day"). Everything below runs en
 | Windowed apps (lighter protection): added from Studio → Apps, opened protected as you under the launch-time profile, web traffic pointed at the app's own gate; handing things to other apps, driving other apps, login items and Sandbox-ai's own files are closed to it | Working for Electron apps, tested live with Obsidian: start-up contacts arrived at the gate as questions, direct connections and lookups were refused and shown. Not tried with LM Studio, Jan or Comfy, or with a non-Electron app (those would be offline rather than asked) |
 | Found on this Mac: known windowed AI apps in the Applications folders are listed in Studio → Apps with one-click Protect, or with the reason they cannot be protected | Working; on this Mac it found Antigravity, Bionic, Claude, Comfy Desktop, Cursor (can be asked), ChatGPT and Hermes (offline only) |
 | Launchers: every protected app can have "<Name> (protected)" in `~/Applications/Sandbox-ai`, for the Dock or Spotlight. Clicking it opens the app protected, starting Sandbox-ai first if it is not running | Working, both cases tested live. The launcher points at where Sandbox-ai is now; if the app is moved, use Show launcher again |
+| Installing: a disk image (`scripts/make-dmg.sh`, 3 MB) with the app and the `sai` command-line tool inside it; the app offers to move itself into Applications and reopens from there; launchers and the login entry follow the move | Working, tested live on this Mac. The image is unsigned, so macOS warns on other Macs |
+| Recovery: a protected app left running by a run that ended abruptly is stopped at the next start, instead of blocking it | Working, tested by force-killing the app with Ollama running |
+| Own local servers: an agent may connect to servers it started itself on this computer and to nobody else's. The watchdog lists, twice a second while an agent runs, the ports that agent is listening on and opens exactly those to it; for those ports, arrivals at anyone else's socket are refused, so a port that changes hands is not reachable in between. Setup tests this on the computer (own server reachable, someone else's refused) and falls back to the stricter rules if it does not hold | Working, tested live: own server reached on the first try; your server, another agent's server and a port that changed hands all refused. Two things to know. With it on, the launch-time profile allows any local port except other gates, so this one property rests on the packet filter alone. And a refused local connection now times out instead of failing at once |
+| Opening the app shows its window (also when it is already running in the menu bar); a start at login or through a launcher stays quiet | Built, not yet seen by a person |
+| Every run of setup keeps a record of what it did as administrator (`logs/setup.sh.last.log`) | Working; it is what explained the failed first design |
 | A program installed inside your home folder is detected and explained instead of failing silently | Working |
 | Open at login (Studio → Advanced) | Built; not yet tried across a real login |
 
@@ -85,7 +90,7 @@ app/
 
 The UI calls one command, `sai`, with `{cmd, args}`; the core's `dispatch` serves the app, the CLI and scripts alike. Opened in a plain browser, the UI runs against an in-page mock of the same contract (`ui/dev.html` is a review harness with scenarios).
 
-Sizes in this build: 66 unit tests, 46 bypass cases, a 4.2 MB app.
+Sizes in this build: 69 unit tests, 49 bypass cases, a 5.4 MB app including the command-line tool, a 3 MB disk image.
 
 ## Verify it yourself
 
@@ -99,6 +104,30 @@ tests/bypass-corpus.sh
 
 The corpus needs the app (or `sai daemon`) running. The gate half runs anywhere; the fence half runs commands as the protected user and needs setup done.
 
+## Real apps, run protected (11 Nov 2026)
+
+Each was opened protected for about 20 seconds with every prompt answered "block". All four started, stayed up, and quit cleanly.
+
+| App | What it asked for on start-up | Notes |
+|---|---|---|
+| Cursor | Its API servers (`api2`–`api5.cursor.sh`, `api.origin.cursor.com`), `metrics.cursor.sh`, `downloads.cursor.com`, `marketplace.cursorapi.com`, and a tool server configured by the user | Five direct connections on port 443 by a helper process were refused |
+| Antigravity | `oauth2.googleapis.com`, `play.googleapis.com` (usage statistics), its auto-updater | Its language server tried a direct connection and a name lookup; refused |
+| Comfy Desktop | `desktop-assets.comfy.org`, `media.comfy.org`, `storage.googleapis.com`, `github.com`, Datadog, the ToDesktop updater | Retried blocked downloads more than 8,000 times a minute, which is why refusals now pause for a quarter of a second. Its Python side tried name lookups; refused |
+| Bionic | Nothing through the gate | One name lookup, refused |
+
+The four command-line agents were installed and run the same way, not signed in (a fake key where one was needed to get as far as the network):
+
+| Agent | Result | What was seen |
+|---|---|---|
+| Codex CLI 0.167.1 | Works through the gate | Reached `api.openai.com` and `chatgpt.com` (trusted; OpenAI answered "not signed in"); asked for `files.openai.com` and GitHub. Nothing went around |
+| Gemini CLI 0.68.0 | Works through the gate | Reached its API (trusted; Google answered "bad key"); `play.googleapis.com` (usage statistics) was blocked by the preset |
+| Aider 0.86.2 | Works through the gate | Asked for its provider, `raw.githubusercontent.com` (model list) and `pypi.org` (update check) |
+| opencode 2.2.7 | Works through the gate, once own local servers are on | It talks to a local server of its own. Asked for `opencode.ai` and `models.opencode.ai`: by default it sends prompts to a model hosted by opencode |
+
+opencode exposed a gap that affected every agent: one that starts a preview server could not open it. That is what "own local servers" in the table above fixes. The first design for it (marking an agent's local traffic as it leaves and recognising the mark where it arrives) failed its own test here: macOS drops the mark in between. The watchdog's port list replaced it.
+
+What this shows and does not show: the apps run, their start-up traffic is visible and under your control, and what goes around the gate is refused. It does not show that each app is fully usable once you trust its places: in every Electron app one helper still tries to connect directly, so some feature of each is cut off, and we have not found which.
+
 ## What it does not do yet, stated plainly
 
 - **Agents work on a copy of your project, not on the folder itself.** This is deliberate: nothing an agent does can damage your work until you apply it. The costs: changes are not live in your editor until applied, the agent's own commits stay in the copy (its changes arrive in your folder as ordinary edits), and files you edit after bringing a project in do not reach the copy. Sharing a folder in place is possible but was left out for now, because granting an agent a path into your home also exposes neighbouring files to it by file permissions alone.
@@ -110,7 +139,7 @@ The corpus needs the app (or `sai daemon`) running. The gate half runs anywhere;
 - **The setup script runs from a file in your account** for the moments between writing it and approving it. A signed privileged helper replaces this once the project has an Apple Developer identity.
 - **Windowed apps get one layer.** They run as you under the launch-time profile, with no private user and no packet filter behind it. They can read your files; only the copy opened from Sandbox-ai is protected; their inner sandbox is switched off (macOS refuses a sandbox inside a sandbox); links they try to open in your browser are refused and shown. Apps in Apple's App Sandbox cannot be wrapped. An app deliberately trying to break out has routes left. The Network Extension is the full answer.
 - **macOS only.** The core is portable Rust; `fence.rs` and the control socket are the platform-specific parts.
-- **Unsigned.** Gatekeeper will warn when the app is opened on another Mac until it is signed and notarized.
+- **Unsigned, and no automatic updates.** Gatekeeper will warn when the app is opened on another Mac until it is signed and notarized; `.github/workflows/release.yml` is ready to do both once the Apple secrets exist. Updating means downloading a newer image. An update check is deliberately not built yet: it would be the app itself contacting a server, and it needs a public release to check against.
 
 ## Lessons from the first real setup run
 

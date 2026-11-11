@@ -214,17 +214,39 @@ impl Engine {
         // Fence health: now, then every half minute.
         let e = engine.clone();
         tokio::spawn(async move {
+            e.check_fence().await;
+            // We have just started, so nothing in a private space was started by this run. Anything
+            // still there was left by a run that ended abruptly; its gate went with that run.
+            let apps = e.0.cfg.lock().unwrap().provisioned().apps;
+            for app in apps {
+                if e.0.health.lock().unwrap().get(&app.id).map(|h| h.can_run).unwrap_or(false) && !e.0.running.lock().unwrap().contains(&app.id) {
+                    fence::stop_all(&app).await;
+                }
+            }
             loop {
-                e.check_fence().await;
                 tokio::time::sleep(Duration::from_secs(30)).await;
+                e.check_fence().await;
             }
         });
         Ok(engine)
     }
 
     /// Tell the engine which program launchers should call (see `fence::write_launcher`).
+    /// Launchers that already exist are rewritten, so they keep working after the app has moved.
     pub fn set_opener(&self, exe: &str) {
         *self.0.opener.lock().unwrap() = Some(exe.to_string());
+        let apps = self.0.cfg.lock().unwrap().apps.clone();
+        for app in apps {
+            if fence::launcher_path(&app).map(|p| p.is_dir()).unwrap_or(false) {
+                let _ = fence::write_launcher(&app, exe);
+            }
+        }
+    }
+
+    /// Where the desktop app is running from, and whether that is the Applications folder.
+    fn install_info(&self) -> Value {
+        let bundle = self.0.opener.lock().unwrap().as_deref().and_then(fence::bundle_of);
+        json!({ "path": bundle, "installed": bundle.as_deref() == Some(fence::INSTALL_PATH), "canInstall": bundle.is_some() && bundle.as_deref() != Some(fence::INSTALL_PATH) })
     }
 
     /// Start the gate on this port unless it is already running.
@@ -886,7 +908,8 @@ impl Engine {
     fn count(row: &Row, c: &mut Counters) {
         match row.verb {
             Verb::Allowed | Verb::Seen => c.allowed += 1,
-            Verb::Blocked => c.blocked += 1 + row.repeats,
+            // One blocked thing is one, however often the app retried it; the row says how often.
+            Verb::Blocked => c.blocked += 1,
             Verb::Asked => {}
         }
         if row.asked {
@@ -1023,6 +1046,7 @@ impl Engine {
             today,
             apps,
             pending,
+            local_servers: fence::own_servers(),
             watch,
             watch_review,
         }
@@ -1037,7 +1061,7 @@ impl Engine {
             let feed = self.0.feed.lock().unwrap();
             for row in feed.rows().iter().rev().take_while(|r| r.ts >= *s) {
                 match row.verb {
-                    Verb::Blocked => blocked += 1 + row.repeats,
+                    Verb::Blocked => blocked += 1,
                     Verb::Allowed => allowed += 1,
                     Verb::Seen => {
                         allowed += 1;
@@ -1146,7 +1170,7 @@ impl Engine {
     pub async fn check_fence(&self) {
         let (apps, expected_rules) = {
             let cfg = self.0.cfg.lock().unwrap();
-            (cfg.apps.clone(), fence::filter_rules(&cfg.provisioned()))
+            (cfg.apps.clone(), fence::filter_rules(&cfg.provisioned(), fence::own_servers()))
         };
         for a in &apps {
             let h = fence::probe(a, &expected_rules).await;
@@ -1181,6 +1205,12 @@ impl Engine {
             return Ok(());
         }
         if let Some(p) = app.serves_port {
+            // A copy left behind by an earlier run of ours that ended abruptly is ours to stop.
+            // Nothing else runs as this app's private user.
+            if fence::is_port_open(p).await {
+                fence::stop_all(&app).await;
+                tokio::time::sleep(Duration::from_millis(1200)).await;
+            }
             if fence::is_port_open(p).await {
                 return Err(format!("Something is already running on this computer where {} would be. Quit the other {} first, so only the protected one runs.", app.name, app.name));
             }
@@ -1380,6 +1410,13 @@ impl Engine {
                 }
                 self.check_fence().await;
                 ok(&self.status())
+            }
+            "get_install" => Ok(self.install_info()),
+            // Copies the app into Applications. The shell then restarts from the new copy.
+            "install_app" => {
+                let bundle = self.0.opener.lock().unwrap().as_deref().and_then(fence::bundle_of).ok_or("Only the Sandbox-ai app can install itself.")?;
+                let path = fence::install_to_applications(&bundle).await?;
+                Ok(json!({ "path": path }))
             }
             "discover_apps" => {
                 let cfg = self.0.cfg.lock().unwrap().clone();

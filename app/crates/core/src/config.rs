@@ -446,8 +446,8 @@ mod tests {
         let named = loaded.app("named").unwrap();
         assert_eq!(named.name, "Nicepass out quick all");
         assert!(!named.loopback_all && named.local_ports == catalog::LOCAL_MODEL_PORTS);
-        let rules = crate::fence::filter_rules(&loaded);
-        assert!(rules.lines().all(|l| l.is_empty() || l.starts_with('#') || l.starts_with("pass ") || l.starts_with("block ")));
+        let rules = crate::fence::filter_rules(&loaded, true) + &crate::fence::filter_rules(&loaded, false);
+        assert!(rules.lines().all(|l| l.is_empty() || l.starts_with('#') || l.starts_with("pass ") || l.starts_with("block ") || l == "anchor \"*\""));
         assert!(!rules.lines().any(|l| l.trim() == "pass out quick all"), "the name stays inside one comment line");
     }
 

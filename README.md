@@ -10,6 +10,7 @@ No virtual machine, no account, no telemetry, nothing hosted. Apache-2.0. Window
 
 ## What it does
 
+- **Lets an agent use what it starts.** An agent can open a preview server it started on your computer, and nobody else's.
 - **Fences each AI app.** A protected app runs as its own macOS user, under a launch-time sandbox profile, behind per-user packet filter rules. Three layers, each checked every 30 seconds; nothing protected starts unless all three hold.
 - **One gate out.** Each protected app can reach the network only through its own local gate. The gate allows names you trust, refuses the rest, resolves names itself, refuses names that point back at your computer or home network, and checks that the name an app greets a server with is the name that was approved.
 - **Asks in plain words.** "Ollama wants to download a model. Allow once, always allow, or block?" Thirty seconds without an answer means no.
@@ -19,26 +20,24 @@ No virtual machine, no account, no telemetry, nothing hosted. Apache-2.0. Window
 - **Watch mode.** Allow everything for an hour, then see exactly what your AI contacted and choose what to trust.
 - **Proof.** An append-only, hash-chained, Ed25519-signed log. Export it and anyone can check it with `sai verify <file>`.
 
-Protected today: **Claude Code** and **Ollama** (both tested live, including a model download and GPU inference under the fence). Recognised when installed, following each tool's documentation but not yet run by us: **Codex CLI, Gemini CLI, Aider, opencode**. Any other command-line program can be added in Studio → Apps → *Protect another app*. So can a windowed app, with [lighter protection](#what-it-does-not-do-yet): tested live with one Electron app (Obsidian), whose three start-up contacts came up as questions instead of going out.
+Protected today: **Claude Code** and **Ollama** (both tested live, including a model download and GPU inference under the fence). Also recognised and run protected (not signed in), each seen to send everything through the gate: **Codex CLI, Gemini CLI, Aider and opencode**. Any other command-line program can be added in Studio → Apps → *Protect another app*. So can a windowed app, with [lighter protection](#what-it-does-not-do-yet): tested live with one Electron app (Obsidian), whose three start-up contacts came up as questions instead of going out.
 
 ## Try it
 
 You need a Mac (built and tested on Apple silicon), Rust, Node and the Xcode Command Line Tools. Full Xcode is not needed.
 
 ```bash
-cd app && npm install && npx tauri build
+cd app && npm install && scripts/make-dmg.sh
 ```
 
-```bash
-open app/target/release/bundle/macos/Sandbox-ai.app
-```
+That builds the app and packs `app/target/release/bundle/dmg/Sandbox-ai-<version>-<arch>.dmg`. Open it and drag Sandbox-ai to Applications, or just open the app: it offers to move itself there.
 
 A shield appears in the menu bar and the window opens on a setup screen. **Turn on protection** asks for your Mac password once: it creates the private users, loads the packet filter rules and installs a small watchdog that restores them after a restart. Studio → Advanced shows the exact script before you approve it, and can remove all of it again.
 
 There is also a command line, `sai`, that drives the same core:
 
 ```bash
-cd app && cargo build --release -p sai && ./target/release/sai status
+/Applications/Sandbox-ai.app/Contents/MacOS/sai status
 ```
 
 ## Check it yourself
@@ -51,7 +50,7 @@ cd app && cargo test -p sai-core
 cd app && tests/bypass-corpus.sh
 ```
 
-The second one is every way around the gate or the fence that we know of, as executable checks (46 at the time of writing). It needs the app running and setup done. If you find a way around that is not in it, that is the most valuable contribution you can make: see [SECURITY.md](SECURITY.md).
+The second one is every way around the gate or the fence that we know of, as executable checks (49 at the time of writing). It needs the app running and setup done. If you find a way around that is not in it, that is the most valuable contribution you can make: see [SECURITY.md](SECURITY.md).
 
 ## What it does not do yet
 
