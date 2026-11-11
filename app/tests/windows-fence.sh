@@ -75,6 +75,7 @@ refused "cannot write in the Windows folder"             "$HB" run "$APP" -- "$S
 echo "Headless run"
 out="$("$HB" ci --trust example.com --fail-on-blocked "$APP" -- "$SYS\\curl.exe" -sS -m 25 -o NUL https://example.com/ 2>&1)"; rc=$?
 check "a clean run exits 0 and says nothing was refused" "Nothing was refused. rc=0" "$(echo "$out" | grep -o 'Nothing was refused.') rc=$rc"
+[ "$rc" = 0 ] || echo "$out" | tail -6
 
 "$HB" ask on >/dev/null 2>&1
 echo

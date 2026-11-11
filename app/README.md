@@ -2,7 +2,7 @@
 
 Keep your AI on your computer, and prove it.
 
-A menu-bar app for macOS (Windows and Linux to follow) that runs local AI apps and agents so they can reach only the places you trust, asks you in plain words about anything else, and keeps a signed record of every decision. No virtual machine. Apache-2.0, no accounts, no telemetry, nothing hosted.
+A menu-bar app for macOS (the engine and command line also run on Linux and Windows, see `../docs/platforms.md`) that runs local AI apps and agents so they can reach only the places you trust, asks you in plain words about anything else, and keeps a signed record of every decision. No virtual machine. Apache-2.0, no accounts, no telemetry, nothing hosted.
 
 Status: 11 Nov 2026. Everything in the table runs end to end on this Mac in the release app, installed in `/Applications`. Verified live: all three fence layers, Ollama protected with GPU access, model download and inference under the fence, projects, go-arounds in Activity, Watch, log export, clean stop, windowed apps, launchers, installing into Applications, recovery after the app is force-killed. Verified across a real restart (11 Nov 2026): the watchdog restored the packet filter rules at boot and all 81 bypass cases passed straight afterwards. Not yet verified: the open-at-login switch across a real login; the release workflow (never run); signing and notarization (no Apple Developer identity yet).
 
@@ -175,7 +175,7 @@ So the "219 KB to Anthropic at start-up" noted in the first build was event logg
 - **A refused address closes its connection.** The app is told "403, switched off" and the connection ends; an app that had other requests waiting on the same connection has to reconnect. Refusing an address an app depends on can stop the app working: the switch is yours to turn back on.
 - **Attempts that go around the gate are shown without the address.** macOS reports the program and the port, not where it was trying to go. Attempts to read your files are stopped by ordinary file permissions before the fence sees them, so those are not shown at all. The Network Extension version will show both.
 - **A trusted name can front for another site only where looking inside is off.** The greeting check stops the simple version everywhere; the full check (the site named inside each request) needs looking inside, which Ollama and windowed apps cannot use.
-- **Shared kernel.** A kernel exploit from inside a protected app is not contained. The virtual-machine tier (see `../spike/box`) is the answer and is planned.
+- **Shared kernel.** A kernel exploit from inside a protected app is not contained by the fence. The Box (`box/`, `../docs/box.md`) puts a second kernel in between; it is early and command-line only.
 - **The setup script runs from a file in your account** for the moments between writing it and approving it. A signed privileged helper replaces this once the project has an Apple Developer identity.
 - **Windowed apps get one layer.** They run as you under the launch-time profile, with no private user and no packet filter behind it. They can read your files; only the copy opened from Homebody is protected; their inner sandbox is switched off (macOS refuses a sandbox inside a sandbox); links they try to open in your browser are refused and shown. Apps in Apple's App Sandbox cannot be wrapped. An app deliberately trying to break out has routes left. The Network Extension is the full answer.
 - **macOS only.** The core is portable Rust; `fence.rs` and the control socket are the platform-specific parts.

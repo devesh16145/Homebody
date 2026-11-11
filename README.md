@@ -4,7 +4,7 @@
 
 A small menu-bar app for macOS that runs local AI apps and coding agents so they can reach only the places you trust. Anything else is blocked, or you are asked about it in plain words. Every decision goes into a signed record you can check and hand to someone else.
 
-No virtual machine, no account, no telemetry, nothing hosted. Apache-2.0. Windows and Linux are planned; the core is portable Rust.
+No account, no telemetry, nothing hosted. Apache-2.0. The engine and command line also run on Linux and Windows, each with a fence of its own (no window there yet).
 
 > Early software. It works end to end on the Mac it was built on, the app is not signed yet, and the list of [what it does not do](#what-it-does-not-do-yet) is real. Read that list before relying on it.
 
@@ -23,6 +23,16 @@ No virtual machine, no account, no telemetry, nothing hosted. Apache-2.0. Window
 - **Limits how much can go.** Each trusted place can have an hourly limit on what an app may send there, or be set to downloads only. This works for every app.
 - **Watch mode.** Allow everything for an hour, then see exactly what your AI contacted and choose what to trust.
 - **Report.** An append-only, hash-chained, Ed25519-signed log, with a weekly summary per app. Export it as a folder (the log, a spreadsheet of activity, the rules in force) and anyone can check it with `homebody verify <folder>`. A public time-stamping service can vouch for when it existed; only a fingerprint is sent.
+
+Newer, and less tried than the list above (each has its own page saying exactly what has been run):
+
+- **AI websites.** A separate profile of Chrome, Brave, Edge, Chromium or Vivaldi that can reach only the AI sites you switch on, and cannot read your home folder apart from Downloads. Add app → AI websites.
+- **The Box.** Run an agent in a small Linux machine with no network interface at all; its only way out is the same gate. Apple silicon, command line. [docs/box.md](docs/box.md)
+- **Linux and Windows.** The engine and command line, with a fence built from each system's own parts. [docs/platforms.md](docs/platforms.md)
+- **Build pipelines.** `homebody ci` runs an agent with nobody at the keyboard and ends with a signed report. [docs/ci.md](docs/ci.md)
+- **Organisations.** A fleet server you run yourself: your rules on every joined computer, their signed logs in one place, roles, single sign-on. [docs/fleet.md](docs/fleet.md)
+- **For reviewers.** The rules as Cedar policies, the evidence mapped to NIST SP 800-53 and OWASP's list for AI agents ([docs/compliance.md](docs/compliance.md)), an engine that rebuilds to the same file bit for bit, and a pack for an independent review ([docs/audit](docs/audit/README.md)). No independent review has been done yet.
+- **In your editor.** Plugins for VS Code and Cursor ([editors/vscode](editors/vscode/README.md)) and for JetBrains editors ([editors/jetbrains](editors/jetbrains/README.md)).
 
 Protected today: **Claude Code** and **Ollama** (both tested live, including a model download and GPU inference under the fence). Also recognised and run protected (not signed in), each seen to send everything through the gate: **Codex CLI, Gemini CLI, Aider and opencode**. Presets also exist for **llama.cpp, Cursor CLI and OpenClaw**, written from their documentation and not yet run here. Any other command-line program can be added with *Add app*. So can a windowed app, with [lighter protection](#what-it-does-not-do-yet): tested live with one Electron app (Obsidian), whose three start-up contacts came up as questions instead of going out.
 
@@ -59,7 +69,7 @@ The second one is every way around the gate or the fence that we know of, as exe
 ## What it does not do yet
 
 - **Secrets are recognised by shape, and only some.** Private keys and a handful of token formats, in the content of requests. It catches an agent carelessly sending your `.env` file, not one set on getting a secret out. The same goes for private folders: exact lines only. Looking inside, which it depends on, is not available for Ollama or windowed apps.
-- **Shared kernel.** A kernel exploit from inside a protected app is not contained. A virtual-machine tier is planned (`spike/box` is the experiment).
+- **Shared kernel.** A kernel exploit from inside a protected app is not contained by the fence. The Box (a Linux machine with no network interface, [docs/box.md](docs/box.md)) is the answer; it is early and command-line only.
 - **Agents work on a copy of your project,** not on the folder itself. That is deliberate, and it means changes reach your editor only when you apply them.
 - **Windowed apps get one layer, not three.** A windowed app cannot run as another user, so it runs as you under the launch-time profile alone. Nothing it sends can skip the gate, and the obvious ways out for a program running as you are closed (handing a link to your browser, driving another app, planting a login item, touching Homebody's own files). But it can read your files, only the copy you open from Homebody is protected, its own inner sandbox has to be switched off, and an app that is deliberately trying to break out has other routes, for example writing into a folder another program syncs. Apps that live in Apple's App Sandbox cannot be wrapped at all. Full-strength protection for windowed apps needs the Network Extension, which needs an Apple Developer identity.
 - **Not signed or notarized.** macOS will warn when you open a build from someone else. Building it yourself avoids that.

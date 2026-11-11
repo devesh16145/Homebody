@@ -1,0 +1,41 @@
+# Sets Homebody up on a build machine (Linux or macOS runner) so that later steps can run an
+# agent protected with `homebody ci`. Builds the command line tool from this repository, so the
+# job needs a Rust toolchain (the hosted runners have one).
+#
+#   - uses: devesh16145/Homebody/ci/action@main
+#     with:
+#       add: "My agent=/usr/local/bin/my-agent"     # optional: protect a program Homebody has no preset for
+#   - run: homebody ci --project . --trust registry.npmjs.org --report homebody-report --fail-on-blocked my-my-agent -- my-agent --do-the-thing
+#   - uses: actions/upload-artifact@v4
+#     with: { name: homebody-report, path: homebody-report }
+name: Set up Homebody
+description: Protect an AI agent in this job - it can reach only the places you name, and the run ends with a signed record.
+inputs:
+  add:
+    description: 'Protect a program Homebody has no preset for, as "Name=/full/path/to/program". Its id becomes my-<name in lower case>.'
+    required: false
+    default: ""
+runs:
+  using: composite
+  steps:
+    - name: Build the homebody command
+      shell: bash
+      run: |
+        cargo build --release --locked -p homebody-cli --manifest-path "$GITHUB_ACTION_PATH/../../app/Cargo.toml"
+        sudo install -m 755 "$GITHUB_ACTION_PATH/../../app/target/release/homebody" /usr/local/bin/homebody
+    - name: Protect the named program
+      if: inputs.add != ''
+      shell: bash
+      env:
+        ADD: ${{ inputs.add }}
+      run: |
+        (homebody daemon > "$RUNNER_TEMP/homebody-setup.log" 2>&1 &)
+        sleep 3
+        homebody call app_add "$(python3 -c 'import json,os; n,p=os.environ["ADD"].split("=",1); print(json.dumps({"name":n.strip(),"program":p.strip()}))')" > /dev/null
+        pkill -TERM -f 'homebody daemon' || true
+        sleep 1
+    - name: One-time setup (as administrator)
+      shell: bash
+      run: |
+        homebody setup --print | sudo bash
+        homebody --help | head -1

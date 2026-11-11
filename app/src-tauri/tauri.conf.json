@@ -5,7 +5,7 @@
   "identifier": "app.homebody.mac",
   "build": {
     "frontendDist": "../ui",
-    "beforeBundleCommand": "cargo build --release -p homebody-cli"
+    "beforeBundleCommand": "cargo build --release -p homebody-cli && bash box/build.sh"
   },
   "app": {
     "withGlobalTauri": true,
@@ -31,7 +31,11 @@
     "macOS": {
       "minimumSystemVersion": "13.0",
       "files": {
-        "MacOS/homebody": "../target/release/homebody"
+        "MacOS/homebody": "../target/release/homebody",
+        "MacOS/homebody-box": "../target/box/homebody-box",
+        "Resources/box/image.sh": "../box/image.sh",
+        "Resources/box/guest/forward.py": "../box/guest/forward.py",
+        "Resources/box/guest/user-data": "../box/guest/user-data"
       }
     }
   }

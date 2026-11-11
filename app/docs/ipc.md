@@ -226,7 +226,7 @@ interface PrivateFolders {
 | `get_proof` | — | `Proof` | |
 | `verify_chain` | — | `ChainCheck` | may take a moment on a large log |
 | `export_proof` | — | `{ path: string }` | writes a signed proof file to Downloads and reveals it |
-| `export_log` | `{ reveal?: boolean }` | `{ path: string }` | writes a folder to Downloads: `log.jsonl` (one signed header line, then every record as written), `activity.csv` (the Feed as a table), `rules.json` (the settings in force), `timestamps/` (any independent timestamps) and `README.txt`. `homebody verify <folder or log.jsonl>` checks it without the app |
+| `export_log` | `{ reveal?: boolean, dir?: string }` | `{ path: string }` | writes a folder to Downloads: `log.jsonl` (one signed header line, then every record as written), `activity.csv` (the Feed as a table), `rules.json` (the settings in force), `timestamps/` (any independent timestamps) and `README.txt`. `homebody verify <folder or log.jsonl>` checks it without the app |
 | `timestamp_log` | — | `{ records, time, service, file }` | asks a public time-stamping service to vouch for the log as it stands. Only a fingerprint (a hash) of the log is sent, over the user's own connection, and the request is written to the log. The answer is kept beside the log and included in exports |
 | `get_summary` | `{ days?: number }` | `Summary` | default 7, at most 90 |
 | `get_receipts` | `{ limit?: number }` | `string[]` | raw log lines, newest last (Studio → Logs) |
@@ -265,9 +265,21 @@ interface PrivateFolders {
 | `open_main` | `{ tab?: "feed" \| "proof" \| "studio" }` | `null` | show and focus the main window |
 | `hide_window` | — | `null` | hides the calling window (Glance, prompt) |
 | `quit` | — | `null` | |
-| `fenced_argv` | `{ appId, program, args?: string[], cwd?: string }` | `string[]` | the full command line that runs a program inside this app's fence; what `homebody run` uses |
+| `fenced_argv` | `{ appId, program, args?: string[], cwd?: string, env?: { [name]: string } }` | `string[]` | the full command line that runs a program inside this app's fence; what `homebody run` uses |
 | `get_setup_script` | — | `string` | exactly what the administrator approves in `run_setup`, for showing to the user first |
 | `show` | `{ window: "main" \| "glance" \| "prompt", tab? }` | `null` | for the CLI and scripts: bring a window of the running app forward |
+| `get_ai_sites` | `{ appId?: string }` | `{ browsers: { name, path, appId }[], sites: { id, name, url, on, places }[] }` | browsers that can have a profile kept for AI websites, and the sites; `on` is for `appId` |
+| `browser_add` | `{ browser, sites: string[] }` | `Status & { addedId }` | a separate profile of that browser, fenced, reaching only those sites |
+| `browser_set_site` | `{ appId, site, on }` | `TrustEntry[]` | switch one AI site on or off for a browser profile |
+| `export_policy` | `{ dir?: string, reveal?: boolean }` | `{ path }` | the rules as Cedar policies with a schema and entities; also part of `export_log` |
+| `fleet_status` | — | `{ joined, org?, url?, lastSync?, lastError?, sent?, waiting?, policyVersion?, rules?, locked? }` | whether this computer is in an organisation's fleet |
+| `fleet_join` | `{ url, code, caFile?: string }` | as `fleet_status` | join: its rules then come first and the log is sent to it |
+| `fleet_sync` / `fleet_leave` | — | as `fleet_status` | talk to the server now / leave it (its rules stop applying) |
+| `box_status` | — | `{ supported, helper, prepared, running, appId?, share?, since? }` | the Box (Apple silicon) |
+| `box_setup` | `{ appId?: string, image?: string }` | `{ message, status }` | make the Box's disk; long the first time |
+| `box_start` | `{ appId, project?: string }` | as `box_status` | start it for one agent, sharing that agent's folder or one project |
+| `box_stop` | — | as `box_status` | stop it and throw its disk away |
+| `box_argv` | `{ program, args?: string[], interactive?: boolean }` | `string[]` | the command line that runs something inside the running Box |
 
 Errors reject with a plain string suitable for showing to the user.
 

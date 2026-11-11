@@ -21,6 +21,11 @@ This is a volunteer project with no paid support and no bounty. You will get an 
 - Anything in settings, an app name or a project that ends up running as administrator during setup.
 - With looking inside on: a request that reaches a site other than the approved one, a request the gate passed on without being able to follow it, anything after "?" or any content ending up in the log, the local certificate authority's key being readable by a protected app, any spelling of an address that is switched off reaching the real server, a secret of a recognised shape, sent as it is in the content of a request or of a web socket message, reaching the real server whole or in part, or anything at all reaching the real server on a connection the gate has stopped following.
 - Applying a project's changes writes outside the folder it was brought in from.
+- On Linux or Windows: any of the above for a protected app there. The fences are described in [docs/platforms.md](docs/platforms.md).
+- In the Box: anything inside it reaches the network other than through the gate, sees a folder of the Mac other than the shared one, or leaves something behind that the next start still has.
+- A browser profile kept for AI sites reads a file in your home folder outside Downloads, or reaches a place that is not switched on without asking.
+- Fleet: a computer applies rules that the fleet it joined did not sign, or goes back to an older version of them; the server accepts log records that the computer they are filed under did not sign, or that do not continue its log; someone does something in the console their role does not allow, or without signing in; a page on another website makes a signed-in person's browser change something.
+- `homebody ci` hands a protected run a variable of the job's environment that was not named with `--env`, or leaves a place trusted after the run.
 
 ## What is already known and stated
 
@@ -36,6 +41,10 @@ These are limits of the current design, listed in the README, not new findings:
 - An hourly limit on a trusted place bounds what is sent there; it does not stop sending below the limit, and it does not count what is received.
 - What a server sends back over a web socket is not read.
 - The build is not signed or notarized yet.
+- An organisation's fleet server sees what joined computers' apps reached, and its rules come before the user's own, including rules that trust a place the user had blocked. That is what joining means and the app says so first; it is not a finding.
+- Linux: firewall rules removed by an administrator come back within 20 seconds, not at once.
+- Windows: a protected program gets no console of its own and cannot be stopped from Homebody.
+- The fleet server's console page allows inline script (it is one self-contained file); everything else is forbidden by its content security policy.
 - Protected apps are not started again by themselves after a restart. The packet filter rules are restored at boot (verified on one real restart, macOS 26.5); the app refuses to start protected apps whenever they are missing.
 
 ## When something is fixed

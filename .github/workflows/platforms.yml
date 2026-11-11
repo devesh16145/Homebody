@@ -62,6 +62,24 @@ jobs:
       - name: The engine builds to the same file twice (Linux)
         if: runner.os == 'Linux' && !cancelled()
         run: bash scripts/repro-check.sh 2>&1 | tail -4
+      # The action other people's pipelines would use, on a machine where Homebody was just
+      # removed again: set up from nothing, then one protected run with a report.
+      - name: The pipeline action, from nothing (Linux)
+        if: runner.os == 'Linux' && !cancelled()
+        uses: ./ci/action
+        with:
+          add: "Pipeline probe=/usr/bin/curl"
+      - name: A protected run in a pipeline (Linux)
+        if: runner.os == 'Linux' && !cancelled()
+        run: |
+          pkill -TERM -f 'target/debug/homebody daemon' || true
+          sleep 1
+          homebody ci --trust example.com --report "$RUNNER_TEMP/hb-report" --fail-on-blocked my-pipeline-probe -- /usr/bin/curl -sS -m 20 -o /dev/null https://example.com/
+          homebody verify "$RUNNER_TEMP/hb-report"
+          ls "$RUNNER_TEMP/hb-report" "$RUNNER_TEMP/hb-report/policy"
+          set +e
+          homebody ci --fail-on-blocked my-pipeline-probe -- /bin/sh -c 'curl -sS -m 20 -o /dev/null https://example.org/; true'
+          [ $? -eq 3 ] && echo "a refusal fails the job, as asked"
       - name: What the engine said (Linux)
         if: runner.os == 'Linux' && always()
         run: tail -40 /tmp/homebody-daemon.log || true; cat ~/.local/share/Homebody/logs/* 2>/dev/null | tail -40 || true; sudo journalctl -k -n 15 --no-pager | grep homebody || true

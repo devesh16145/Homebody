@@ -26,12 +26,22 @@ New
 - The log exports as a folder an auditor can use: signed log, activity as a spreadsheet, rules in force, timestamps.
 - A project can suggest the places it needs in `.homebody.json`; nothing is trusted until you tick it.
 - Check for a newer version, only when you ask.
+- AI websites: a separate profile of Chrome, Brave, Edge, Chromium or Vivaldi that can reach only the AI sites you switch on (ChatGPT, Claude, Gemini, Copilot, Perplexity, Le Chat, DeepSeek, Grok). Pages in it cannot read your home folder, apart from Downloads.
+- The Box: run an agent in a small Linux machine that has no network interface at all. Its only way out is the same gate. Apple silicon, command line, early.
+- Linux: the engine and the command line, with a fence made of a private user per app and firewall rules. No window yet.
+- Windows: the engine and the command line, with a fence made of app containers. No setup, no administrator. No window yet.
+- For build pipelines: `homebody ci` runs an agent with nobody at the keyboard and ends with a signed report; a GitHub action sets it up.
+- For organisations: `homebody-fleet`, a server you run yourself. Joined computers take its signed rules and send it their logs. A web console with roles, sign-in through your identity provider, provisioning, evidence bundles, and a management profile for Macs.
+- For reviewers: the rules as Cedar policies (`homebody policy`), a mapping of the evidence to NIST SP 800-53 and OWASP's list for AI agents, and an engine that rebuilds to the same file bit for bit.
+- Editor plugins: VS Code and Cursor, and JetBrains editors. A status indicator, Homebody's questions, an agent opened protected on a copy of the open project.
 
 Built-in rules
 
 - llama.cpp, Cursor CLI and OpenClaw are recognised. Nothing is trusted for them until you say so.
 
 Fixed
+
+- The gate recorded a connection that a browser opened ahead of need and never used as a refused "not an ordinary encrypted connection". A connection that sends nothing is no longer recorded.
 
 - [SAI-2026-003](docs/advisories/README.md): with looking inside on, a request that only claimed to switch to a web socket made the gate stop reading the rest of the connection.
 - An address that is switched off could be reached by respelling it (escapes, capitals, doubled slashes). See [SAI-2026-002](docs/advisories/README.md).
