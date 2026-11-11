@@ -1478,6 +1478,9 @@ impl Engine {
         // 3. The rules that were in force when this was made.
         let rules = serde_json::to_vec_pretty(&*self.0.cfg.lock().unwrap()).unwrap_or_default();
         std::fs::write(dir.join("rules.json"), rules).map_err(|e| fail("rules", e))?;
+        // 3b. The same rules in a formal language, for reviewers who want to check them with
+        // their own tools.
+        let _ = crate::policy::write(&self.0.cfg.lock().unwrap(), &dir.join("policy"));
         // 4. Independent timestamps, if any were asked for.
         let stamps = paths::data_dir().join("timestamps");
         if let Ok(entries) = std::fs::read_dir(&stamps) {
@@ -1487,7 +1490,7 @@ impl Engine {
                 let _ = std::fs::copy(e.path(), out.join(e.file_name()));
             }
         }
-        let readme = "Homebody export\n=================\n\nlog.jsonl      Every decision, exactly as it was written. The first line says what the file is and\n               carries the key to check it with; each following line is one record, linked to the one\n               before and signed. Check it on any computer with:  homebody verify log.jsonl\n               Compare the key it prints with the one on the Report screen to know whose log it is.\nactivity.csv   The same events as a table for a spreadsheet. Convenient to read; it is not signed.\nrules.json     The rules in force when this export was made.\ntimestamps/    Present if independent timestamps were asked for. Each .tsr is a statement by a public\n               time-stamping service that a log ending in a given record existed at that time. Check\n               one with:  openssl ts -reply -in <file>.tsr -text\n";
+        let readme = "Homebody export\n=================\n\nlog.jsonl      Every decision, exactly as it was written. The first line says what the file is and\n               carries the key to check it with; each following line is one record, linked to the one\n               before and signed. Check it on any computer with:  homebody verify log.jsonl\n               Compare the key it prints with the one on the Report screen to know whose log it is.\nactivity.csv   The same events as a table for a spreadsheet. Convenient to read; it is not signed.\nrules.json     The rules in force when this export was made.\npolicy/        The same rules as Cedar policies, a formal language reviewers can check with their\n               own tools. See the README inside.\ntimestamps/    Present if independent timestamps were asked for. Each .tsr is a statement by a public\n               time-stamping service that a log ending in a given record existed at that time. Check\n               one with:  openssl ts -reply -in <file>.tsr -text\n";
         std::fs::write(dir.join("README.txt"), readme).map_err(|e| fail("export", e))?;
         Ok(dir.to_string_lossy().into_owned())
     }
@@ -1846,6 +1849,21 @@ impl Engine {
                 let path = tokio::task::spawn_blocking(move || e.export_log(into)).await.map_err(|e| e.to_string())??;
                 if args.get("reveal").and_then(Value::as_bool).unwrap_or(true) {
                     fence::reveal(&path, true).await;
+                }
+                Ok(json!({ "path": path }))
+            }
+            // The rules in a formal language (Cedar), as a folder next to the other exports.
+            "export_policy" => {
+                let dir = match s("dir") {
+                    Some(d) if std::path::Path::new(&d).is_absolute() => std::path::PathBuf::from(d),
+                    Some(_) => return Err("The export folder must be a full path.".into()),
+                    None => paths::downloads_dir().join(format!("Homebody policy {}", chrono::Local::now().format("%Y-%m-%d %H.%M"))),
+                };
+                let cfg = self.0.cfg.lock().unwrap().clone();
+                crate::policy::write(&cfg, &dir).map_err(|e| format!("The policy could not be saved: {e}"))?;
+                let path = dir.to_string_lossy().into_owned();
+                if args.get("reveal").and_then(Value::as_bool).unwrap_or(true) {
+                    fence::reveal(&path, false).await;
                 }
                 Ok(json!({ "path": path }))
             }

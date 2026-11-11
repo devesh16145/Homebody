@@ -77,6 +77,7 @@ const HELP: &str = "homebody: the Homebody command line
   homebody proof                       the proof statement
   homebody verify [file]               check the log (or an exported log file) has not been altered
   homebody export-log                  save the whole signed log to Downloads
+  homebody policy [folder]             save the rules as Cedar policies, for formal review
   homebody mode watch [minutes]        Watch for a while (default 60; 0 = until switched off)
   homebody watched                     places contacted under Watch that are not decided yet
   homebody start|stop <app>            start or stop a protected model
@@ -276,6 +277,11 @@ async fn main() {
                 println!("FAILED after {} records: {}", c.count, c.error.unwrap_or_default());
                 std::process::exit(2);
             }
+        }
+        "policy" => {
+            let dir = if a(1).is_empty() { Value::Null } else { json!(std::path::absolute(a(1)).map(|p| p.to_string_lossy().into_owned()).unwrap_or_default()) };
+            let r = call("export_policy", json!({ "reveal": false, "dir": dir })).await;
+            println!("{}", s(&r, "path"));
         }
         "export-log" => {
             let r = call("export_log", json!({ "reveal": false })).await;

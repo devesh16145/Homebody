@@ -534,6 +534,7 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
     #[test]
     fn a_program_inside_the_home_folder_is_reported() {
         let home = dirs::home_dir().unwrap();

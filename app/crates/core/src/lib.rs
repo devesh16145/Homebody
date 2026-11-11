@@ -11,6 +11,7 @@
 //! - [`engine`]:   the state machine tying it together, and the command surface in docs/ipc.md
 //! - [`inspect`]:  looking inside traffic to trusted places: a local certificate authority, request lines
 //! - [`secrets`]:  recognising private keys and access tokens in what an app is about to send
+//! - [`policy`]:   the rules in a formal language (Cedar), for review outside the app
 //! - [`projects`]: bring a folder in for an agent to work on, review, apply back
 //! - [`fence`]:    OS-level enforcement: private users, seatbelt profile, packet filter, launchers
 //! - `fence_linux`: the same fence built from Linux's tools: system users, nftables, a systemd service
@@ -31,6 +32,7 @@ pub mod inspect;
 pub mod ledger;
 pub mod model;
 pub mod paths;
+pub mod policy;
 pub mod projects;
 pub mod proxy;
 pub mod secrets;

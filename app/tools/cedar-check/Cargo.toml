@@ -1,0 +1,15 @@
+# Checks Homebody's Cedar export with Cedar's own engine. Kept out of the app's workspace on
+# purpose: Cedar is a large library that only this check needs, and nothing here ships.
+[package]
+name = "cedar-check"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+publish = false
+
+[workspace]
+
+[dependencies]
+homebody-core = { path = "../../crates/core" }
+cedar-policy = "4"
+serde_json = "1"

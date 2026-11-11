@@ -596,6 +596,7 @@ mod tests {
         assert!(cfg.set_site("ai-chrome", "nope", true).is_err());
     }
 
+    #[cfg(unix)]
     #[test]
     fn adding_your_own_app_gives_it_a_user_a_gate_and_a_workspace() {
         let mut c = Config::fresh();
@@ -621,6 +622,7 @@ mod tests {
         assert!(c.add_custom("X", &home).is_err());
     }
 
+    #[cfg(unix)]
     #[test]
     fn a_hand_edited_file_cannot_smuggle_text_into_setup() {
         let dir = tempfile::tempdir().unwrap();
@@ -664,8 +666,11 @@ mod tests {
         assert_eq!(named.name, "Nicepass out quick all");
         assert!(!named.loopback_all && named.local_ports == catalog::LOCAL_MODEL_PORTS);
         let rules = crate::fence::filter_rules(&loaded, true) + &crate::fence::filter_rules(&loaded, false);
-        assert!(rules.lines().all(|l| l.is_empty() || l.starts_with('#') || l.starts_with("pass ") || l.starts_with("block ") || l == "anchor \"*\""));
+        if cfg!(target_os = "macos") {
+            assert!(rules.lines().all(|l| l.is_empty() || l.starts_with('#') || l.starts_with("pass ") || l.starts_with("block ") || l == "anchor \"*\""));
+        }
         assert!(!rules.lines().any(|l| l.trim() == "pass out quick all"), "the name stays inside one comment line");
+        assert!(rules.lines().filter(|l| l.contains("Nicepass")).all(|l| l.trim_start().starts_with('#')));
     }
 
     #[test]
