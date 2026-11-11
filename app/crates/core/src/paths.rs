@@ -2,15 +2,29 @@
 
 use std::path::PathBuf;
 
-/// `$SAI_DATA_DIR` if set (tests, development), else the platform data directory + `SandboxAI`.
-/// macOS: `~/Library/Application Support/SandboxAI`.
+/// `$HOMEBODY_DATA_DIR` if set (tests, development), else the platform data directory + `Homebody`.
+/// macOS: `~/Library/Application Support/Homebody`.
 pub fn data_dir() -> PathBuf {
-    if let Ok(p) = std::env::var("SAI_DATA_DIR") {
+    if let Ok(p) = std::env::var("HOMEBODY_DATA_DIR") {
         if !p.is_empty() {
             return PathBuf::from(p);
         }
     }
-    dirs::data_dir().unwrap_or_else(|| PathBuf::from(".")).join("SandboxAI")
+    let base = dirs::data_dir().unwrap_or_else(|| PathBuf::from("."));
+    let dir = base.join("Homebody");
+    // Before the app was called Homebody its folder was "SandboxAI". Moved once, as a whole, so
+    // the log, its key and the settings stay together.
+    static MOVED: std::sync::Once = std::sync::Once::new();
+    MOVED.call_once(|| {
+        if cfg!(test) {
+            return; // tests never move a real folder
+        }
+        let old = base.join("SandboxAI");
+        if old.is_dir() && !dir.exists() {
+            let _ = std::fs::rename(&old, &dir);
+        }
+    });
+    dir
 }
 
 pub fn ensure_data_dir() -> std::io::Result<PathBuf> {

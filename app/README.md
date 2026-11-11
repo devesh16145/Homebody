@@ -17,19 +17,19 @@ Status: 11 Nov 2026. Everything in the table runs end to end on this Mac in the 
 | Watch: allows everything for a set time (an hour by default), returns to Private by itself, then shows the places contacted that have no rule yet so you can trust the ones you want | Working, tested live with a one-minute timer |
 | Projects: bring a folder in for an agent. It works on a copy inside its workspace (instant, copy-on-write); you review added, changed and deleted files and apply them to your own folder. Files you changed in the meantime are left alone unless you say otherwise. `.git` is never touched | Working, 12 unit tests and a live run as the protected user |
 | Around the gate: a protected program that tries to connect directly, look up a name itself, or listen for other computers is refused by the fence, and the refusal appears in Activity with the program's name | Working, read from the system log; needs an administrator account |
-| Ledger: append-only, hash-chained, Ed25519-signed; verify; signed proof export; export of the whole log as one file that `sai verify <file>` checks on any computer | Working, tamper and cut-file cases tested |
+| Ledger: append-only, hash-chained, Ed25519-signed; verify; signed proof export; export of the whole log as one file that `homebody verify <file>` checks on any computer | Working, tamper and cut-file cases tested |
 | Fence, layer 1: each protected app runs as its own macOS user, in a group of its own | Working: your home folder is closed to them by file permissions alone |
 | Fence, layer 2: seatbelt profile at launch (no network except the app's gate, no name lookups, nothing readable under your home) | Working, 17 bypass cases pass as the protected user |
 | Fence, layer 3: packet filter rules per user, restored at boot by a root watchdog | Working, verified with the seatbelt layer removed: internet blocked, only the app's own gate reachable. Verified across a real restart on macOS 26.5: the watchdog was running three minutes after boot with the rules loaded for all six protected users, and every bypass case passed. A model server that was running before the restart is not started again by itself |
 | Health probes every 30 s; nothing protected starts unless every layer checks out | Working |
 | App: menu-bar icon (the Homebody face) with six states, menu-bar panel with a tile per app, prompt banner, main window with your apps in a sidebar (Home, a page per app, Activity, Report, Settings), first-run setup in three steps | Working |
-| CLI `sai`: status, feed, watch, mode, watched, asks, allow/block, trust, limit, ask, inspect, secrets, inside, private, proof, summary, timestamp, verify, export-log, project, found, update, run, terminal, open, daemon | Working |
+| CLI `homebody`: status, feed, watch, mode, watched, asks, allow/block, trust, limit, ask, inspect, secrets, inside, private, proof, summary, timestamp, verify, export-log, project, found, update, run, terminal, open, daemon | Working |
 | Protected apps | Claude Code (agent) and Ollama (local models): tested live. Codex CLI, Gemini CLI, Aider, opencode: recognised when installed, each with its own private user and gate; their short trusted lists follow the tools' documentation and have not been run here |
 | Protect another app: any command-line program gets its own private user, gate, workspace and an empty Trusted list (Add app) | Built, unit-tested; needs one more approval of setup per added app |
 | Windowed apps (lighter protection): added from Add app, opened protected as you under the launch-time profile, web traffic pointed at the app's own gate; handing things to other apps, driving other apps, login items and Homebody's own files are closed to it | Working for Electron apps, tested live with Obsidian: start-up contacts arrived at the gate as questions, direct connections and lookups were refused and shown. Not tried with LM Studio, Jan or Comfy, or with a non-Electron app (those would be offline rather than asked) |
 | Found on this Mac: known windowed AI apps in the Applications folders are listed under Add app with one-click Protect, or with the reason they cannot be protected | Working; on this Mac it found Antigravity, Bionic, Claude, Comfy Desktop, Cursor (can be asked), ChatGPT and Hermes (offline only) |
 | Launchers: every protected app can have "<Name> (protected)" in `~/Applications/Homebody`, for the Dock or Spotlight. Clicking it opens the app protected, starting Homebody first if it is not running | Working, both cases tested live. The launcher points at where Homebody is now; if the app is moved, use Show launcher again |
-| Installing: a disk image (`scripts/make-dmg.sh`, 3 MB) with the app and the `sai` command-line tool inside it; the app offers to move itself into Applications and reopens from there; launchers and the login entry follow the move | Working, tested live on this Mac. The image is unsigned, so macOS warns on other Macs |
+| Installing: a disk image (`scripts/make-dmg.sh`, 3 MB) with the app and the `homebody` command-line tool inside it; the app offers to move itself into Applications and reopens from there; launchers and the login entry follow the move | Working, tested live on this Mac. The image is unsigned, so macOS warns on other Macs |
 | Recovery: a protected app left running by a run that ended abruptly is stopped at the next start, instead of blocking it | Working, tested by force-killing the app with Ollama running |
 | Own local servers: an agent may connect to servers it started itself on this computer and to nobody else's. The watchdog lists, twice a second while an agent runs, the ports that agent is listening on and opens exactly those to it; for those ports, arrivals at anyone else's socket are refused, so a port that changes hands is not reachable in between. Setup tests this on the computer (own server reachable, someone else's refused) and falls back to the stricter rules if it does not hold | Working, tested live: own server reached on the first try; your server, another agent's server and a port that changed hands all refused. Two things to know. With it on, the launch-time profile allows any local port except other gates, so this one property rests on the packet filter alone. And a refused local connection now times out instead of failing at once |
 | Opening the app shows its window (also when it is already running in the menu bar); a start at login or through a launcher stays quiet | Built, not yet seen by a person |
@@ -46,7 +46,7 @@ Status: 11 Nov 2026. Everything in the table runs end to end on this Mac in the 
 | First run in three steps: what it does, one approval, then a choice between Private and "Watch for an hour" | Working in the preview; the approval step itself was run for real in earlier builds |
 | Report → the last seven days: per app, what was reached, what was blocked, what was stopped | Working, computed from the signed log |
 | Independent timestamp (Report): a public time-stamping service vouches for when the log existed. Only a fingerprint of the log is sent | Working, tested live with DigiCert's service; the answer is kept and exported with the log |
-| Export for an auditor: a folder with the signed log, Activity as a spreadsheet, the rules in force, timestamps and a read-me. `sai verify <folder>` checks it on any computer | Working, verified after export; a changed log fails |
+| Export for an auditor: a folder with the signed log, Activity as a spreadsheet, the rules in force, timestamps and a read-me. `homebody verify <folder>` checks it on any computer | Working, verified after export; a changed log fails |
 | Projects can suggest places: a `.homebody.json` in a folder you bring in lists the places the project needs (a package registry, say). You are shown the list and tick what to trust | Working. The file is only ever a suggestion |
 | Update check (Settings): only when you click, and shown in Activity. Nothing is downloaded | Working; answers "No version has been published yet" because none has |
 | More presets: llama.cpp, Cursor CLI, OpenClaw | Rules written from their documentation; none of the three was installed and run here |
@@ -65,7 +65,7 @@ The Homebody face appears in the menu bar and the main window opens on the first
 
 Then:
 
-- Claude Code → **Open** runs Claude Code fenced. Its files live in `/Users/Shared/SandboxAI/claude-code`.
+- Claude Code → **Open** runs Claude Code fenced. Its files live in `/Users/Shared/Homebody/claude-code`.
 - Claude Code → **Folder…** copies one of your folders into that workspace. **Open terminal** on the project starts Claude Code there; **Review** shows what it changed; **Apply** puts the changes into your own folder.
 - Ollama → **Start** runs the model server fenced on `127.0.0.1:11434`, where your other apps find it as usual. Quit any Ollama you already have running first.
 - The first model download or unknown destination shows a prompt at the top right of the screen.
@@ -73,11 +73,11 @@ Then:
 Command line, same core and same log:
 
 ```bash
-./target/release/sai status
+./target/release/homebody status
 ```
 
 ```bash
-./target/release/sai run claude-code -- claude
+./target/release/homebody run claude-code -- claude
 ```
 
 Build from source: `cargo build` for the core and CLI, `npx tauri build` for the app (needs Rust, Node, and the Xcode Command Line Tools; full Xcode is not required).
@@ -99,14 +99,14 @@ app/
     fence.rs         OS users, seatbelt profile, packet filter rules, setup script, launchers
     projects.rs      bring a folder in for an agent, compare, apply back
     control.rs       private control socket for the CLI
-  crates/cli/      sai
+  crates/cli/      homebody
   src-tauri/       thin shell: windows, menu-bar icon, one command, one event channel
   ui/              plain HTML, CSS and ES modules; no framework, no build step
   docs/ipc.md      the contract between core and UI
   tests/bypass-corpus.sh   every known way around the gate or fence, as executable checks
 ```
 
-The UI calls one command, `sai`, with `{cmd, args}`; the core's `dispatch` serves the app, the CLI and scripts alike. Opened in a plain browser, the UI runs against an in-page mock of the same contract (`ui/dev.html` is a review harness with scenarios).
+The UI calls one command, `homebody`, with `{cmd, args}`; the core's `dispatch` serves the app, the CLI and scripts alike. Opened in a plain browser, the UI runs against an in-page mock of the same contract (`ui/dev.html` is a review harness with scenarios).
 
 Sizes in this build: 90 unit tests, 81 bypass cases, a 7.2 MB app including the command-line tool (the encryption libraries for looking inside added about 2 MB), a 4 MB disk image.
 
@@ -122,7 +122,7 @@ cargo test -p sai-core
 tests/bypass-corpus.sh
 ```
 
-The corpus needs the app (or `sai daemon`) running. The gate half runs anywhere; the fence half runs commands as the protected user and needs setup done.
+The corpus needs the app (or `homebody daemon`) running. The gate half runs anywhere; the fence half runs commands as the protected user and needs setup done.
 
 ## Real apps, run protected (11 Nov 2026)
 
@@ -196,6 +196,6 @@ Setup failures now name the step and command that stopped. The app also compares
 
 ## Development notes
 
-- `SAI_DATA_DIR` moves all state (settings, ledger, key, control socket) to another folder. Keep the path short: macOS limits socket paths to 104 bytes.
-- `SAI_DEV_ALLOW_PARTIAL=1` (debug builds only) treats the fence as up when the user and seatbelt layers pass but the packet filter is not installed. It exists so the app can be developed before setup has been run. Release builds ignore it.
+- `HOMEBODY_DATA_DIR` moves all state (settings, ledger, key, control socket) to another folder. Keep the path short: macOS limits socket paths to 104 bytes.
+- `HOMEBODY_DEV_ALLOW_PARTIAL=1` (debug builds only) treats the fence as up when the user and seatbelt layers pass but the packet filter is not installed. It exists so the app can be developed before setup has been run. Release builds ignore it.
 - Icons are drawn by `src-tauri/icons/make-icons.swift`.

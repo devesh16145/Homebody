@@ -215,7 +215,7 @@ pub fn verify(path: &Path, public_key_b64: &str) -> ChainCheck {
 }
 
 /// The first line of an exported log: says what the file is and carries the key to check it with.
-pub const EXPORT_FORMAT: &str = "sandboxai-log-v1";
+pub const EXPORT_FORMAT: &str = "homebody-log-v1";
 
 /// Check a log exported with "Export" (a header line, then the records exactly as written).
 /// The key is read from the file itself, so a pass means "unchanged since it was signed by the
@@ -230,7 +230,8 @@ pub fn verify_export(path: &Path) -> (ChainCheck, Option<String>) {
         return fail("The file could not be read.");
     }
     let header: Value = serde_json::from_str(first.trim()).unwrap_or(Value::Null);
-    if header.get("format").and_then(Value::as_str) != Some(EXPORT_FORMAT) {
+    // Exports made before the app was called Homebody carry the old name; the format is the same.
+    if !matches!(header.get("format").and_then(Value::as_str), Some(f) if f == EXPORT_FORMAT || f == "sandboxai-log-v1") {
         return fail("This is not a Homebody log export.");
     }
     let Some(key) = header.get("publicKey").and_then(Value::as_str).map(str::to_string) else { return fail("The export does not say which key signed it.") };

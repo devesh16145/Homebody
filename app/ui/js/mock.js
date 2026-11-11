@@ -347,7 +347,7 @@ export function createMock(scenarioName) {
     async get_projects() { return local(mockProjects); },
     async project_import({ path }) {
       const name = String(path).split('/').filter(Boolean).pop() || 'project';
-      const p = { name, source: path, copy: '/Users/Shared/SandboxAI/claude-code/' + name, importedAt: new Date().toISOString(), sourceExists: true, copyExists: true };
+      const p = { name, source: path, copy: '/Users/Shared/Homebody/claude-code/' + name, importedAt: new Date().toISOString(), sourceExists: true, copyExists: true };
       mockProjects.push(p); return { ...local(p), suggested: [{ host: 'registry.npmjs.org', label: 'npm registry', purpose: 'Package downloads' }, { host: 'pypi.org', label: 'Python Package Index', purpose: 'Package downloads' }] };
     },
     async project_changes({ name }) {
@@ -415,7 +415,7 @@ export function createMock(scenarioName) {
       const id = 'my-' + clean.toLowerCase().replace(/[^a-z0-9]+/g, '-');
       const win = String(program).trim().endsWith('.app');
       if (win && /textedit|notes|safari/i.test(program)) throw `${clean} already runs in Apple's own sandbox, and macOS does not allow a second one around it. Apps like this need the Network Extension version of Homebody.`;
-      s.apps.push({ id, name: clean, kind: win ? 'window' : 'agent', icon: 'generic', workspace: win ? null : '/Users/Shared/SandboxAI/' + id, installed: true, protected: true, running: false, custom: true, problem: null });
+      s.apps.push({ id, name: clean, kind: win ? 'window' : 'agent', icon: 'generic', workspace: win ? null : '/Users/Shared/Homebody/' + id, installed: true, protected: true, running: false, custom: true, problem: null });
       queueStatus();
       return status();
     },

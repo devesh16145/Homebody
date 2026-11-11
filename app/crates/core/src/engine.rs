@@ -315,7 +315,7 @@ impl Engine {
     fn save_cfg(&self) {
         let cfg = self.0.cfg.lock().unwrap().clone();
         if let Err(e) = cfg.save(&paths::config_file()) {
-            eprintln!("sandbox-ai: could not save settings: {e}");
+            eprintln!("homebody: could not save settings: {e}");
         }
     }
 
@@ -324,7 +324,7 @@ impl Engine {
         let rec = match self.0.ledger.lock().unwrap().append(kind, fields) {
             Ok(r) => r,
             Err(e) => {
-                eprintln!("sandbox-ai: could not write to the log: {e}");
+                eprintln!("homebody: could not write to the log: {e}");
                 return None;
             }
         };
@@ -725,7 +725,7 @@ impl Engine {
         let mut ledger = self.0.ledger.lock().unwrap();
         for (id, count) in pending {
             if let Err(e) = ledger.append("repeat", fields! { "of" => id, "count" => count }) {
-                eprintln!("sandbox-ai: could not write to the log: {e}");
+                eprintln!("homebody: could not write to the log: {e}");
             }
         }
     }
@@ -1132,8 +1132,9 @@ impl Engine {
 
     fn to_event(row: &Row, cfg: &Config) -> FeedEvent {
         let app = cfg.app(&row.app);
-        // "sandbox-ai" is the app itself (update check, timestamps): an internal id kept in the log.
-        let app_name = app.map(|a| a.name.clone()).unwrap_or_else(|| if row.app == "sandbox-ai" { "Homebody".to_string() } else { row.app.clone() });
+        // "homebody" is the app itself (update check, timestamps); "sandbox-ai" is the same, written
+        // before the app was renamed and kept as it was in the signed log.
+        let app_name = app.map(|a| a.name.clone()).unwrap_or_else(|| if row.app == "homebody" || row.app == "sandbox-ai" { "Homebody".to_string() } else { row.app.clone() });
         let (label, purpose) = if row.reason == Reason::AroundGate {
             let label = match row.detail.as_str() {
                 "direct" => "Direct connection",
@@ -1434,7 +1435,7 @@ impl Engine {
         let proof = self.proof();
         let (count, head) = self.0.ledger.lock().unwrap().head();
         let body = json!({
-            "format": "sandboxai-proof-v1",
+            "format": "homebody-proof-v1",
             "generatedAt": now_iso(),
             "statement": proof.statement,
             "privateSince": proof.private_since,
@@ -1456,7 +1457,7 @@ impl Engine {
     }
 
     /// The whole log, exactly as written, with one signed line in front saying what it is.
-    /// `sai verify <file>` (or anyone's own code) can check it without this computer.
+    /// `homebody verify <file>` (or anyone's own code) can check it without this computer.
     fn export_log(&self) -> Result<String, String> {
         let dir = paths::downloads_dir().join(format!("Homebody export {}", chrono::Local::now().format("%Y-%m-%d %H.%M")));
         let fail = |what: &str, e: std::io::Error| format!("The {what} could not be saved: {e}");
@@ -1478,7 +1479,7 @@ impl Engine {
                 let _ = std::fs::copy(e.path(), out.join(e.file_name()));
             }
         }
-        let readme = "Homebody export\n=================\n\nlog.jsonl      Every decision, exactly as it was written. The first line says what the file is and\n               carries the key to check it with; each following line is one record, linked to the one\n               before and signed. Check it on any computer with:  sai verify log.jsonl\n               Compare the key it prints with the one on the Proof screen to know whose log it is.\nactivity.csv   The same events as a table for a spreadsheet. Convenient to read; it is not signed.\nrules.json     The rules in force when this export was made.\ntimestamps/    Present if independent timestamps were asked for. Each .tsr is a statement by a public\n               time-stamping service that a log ending in a given record existed at that time. Check\n               one with:  openssl ts -reply -in <file>.tsr -text\n";
+        let readme = "Homebody export\n=================\n\nlog.jsonl      Every decision, exactly as it was written. The first line says what the file is and\n               carries the key to check it with; each following line is one record, linked to the one\n               before and signed. Check it on any computer with:  homebody verify log.jsonl\n               Compare the key it prints with the one on the Report screen to know whose log it is.\nactivity.csv   The same events as a table for a spreadsheet. Convenient to read; it is not signed.\nrules.json     The rules in force when this export was made.\ntimestamps/    Present if independent timestamps were asked for. Each .tsr is a statement by a public\n               time-stamping service that a log ending in a given record existed at that time. Check\n               one with:  openssl ts -reply -in <file>.tsr -text\n";
         std::fs::write(dir.join("README.txt"), readme).map_err(|e| fail("export", e))?;
         Ok(dir.to_string_lossy().into_owned())
     }
@@ -1525,7 +1526,7 @@ impl Engine {
             return Err("The timestamp request could not be prepared.".into());
         }
         let sent = run(vec!["/usr/bin/curl".into(), "-sS".into(), "--max-time".into(), "20".into(), "-H".into(), "Content-Type: application/timestamp-query".into(), "--data-binary".into(), format!("@{}", query.to_string_lossy()), "-o".into(), reply.to_string_lossy().into_owned(), SERVICE.into()]).await;
-        self.append("conn", fields! { "app" => "sandbox-ai", "host" => "timestamp.digicert.com", "port" => 80, "decision" => "allow", "reason" => "you_allowed_once", "detail" => "self" });
+        self.append("conn", fields! { "app" => "homebody", "host" => "timestamp.digicert.com", "port" => 80, "decision" => "allow", "reason" => "you_allowed_once", "detail" => "self" });
         if !sent.map(|o| o.status.success()).unwrap_or(false) {
             let _ = std::fs::remove_file(&reply);
             return Err("The time-stamping service could not be reached.".into());
@@ -1555,7 +1556,7 @@ impl Engine {
         .await
         .ok()
         .and_then(|r| r.ok());
-        self.append("conn", fields! { "app" => "sandbox-ai", "host" => "api.github.com", "port" => 443, "decision" => "allow", "reason" => "you_allowed_once", "detail" => "self" });
+        self.append("conn", fields! { "app" => "homebody", "host" => "api.github.com", "port" => 443, "decision" => "allow", "reason" => "you_allowed_once", "detail" => "self" });
         let Some(out) = out.filter(|o| o.status.success()) else { return Err("The place where Homebody is published could not be reached.".into()) };
         let reply: Value = serde_json::from_slice(&out.stdout).unwrap_or(Value::Null);
         let latest = reply.get("tag_name").and_then(Value::as_str).map(|t| t.trim_start_matches('v').to_string());

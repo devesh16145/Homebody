@@ -15,6 +15,7 @@ New
 - Your AI apps show their makers' own icons when those Mac apps are installed (Claude for Claude Code, Cursor for the Cursor CLI).
 - The Homebody lettering (Fredoka) ships with the app; nothing is loaded from the web.
 - The cat moves: it peeks up, ducks when everything is blocked, hops when a question arrives, and blinks.
+- Everything behind the scenes is called Homebody too: the protection service, its rules, the private users (`_hb…`), the data and workspace folders, and the command line (`homebody`). An existing setup is moved over in one approval: users are renamed in place, so sign-ins and project copies stay.
 - Web socket messages are read while looking inside, and examined for secrets like any other request.
 - A switch inside a trusted place can apply to one kind of request (refuse sending, allow reading).
 - Private folders: a request that repeats lines from a file in a folder you marked is stopped.

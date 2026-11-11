@@ -354,7 +354,7 @@ async function startWith(mode) {
 // ---------- "not in Applications yet" ----------
 
 let install = null, installBusy = false;
-const installLater = () => { try { return localStorage.getItem('sai.install.later') === '1'; } catch (e) { return false; } };
+const installLater = () => { try { return localStorage.getItem('homebody.install.later') === '1'; } catch (e) { return false; } };
 function installHtml() {
   if (!install || !install.canInstall || installLater()) return '';
   return `<div class="hm-set" role="status">${icon('info')}<span class="grow"><b>Move Homebody to Applications</b><small>Keeps it in one place and easy to find.</small></span>
@@ -523,7 +523,7 @@ on(el.view, 'click', '[data-do]', (ev, b) => {
   if (what === 'fr-next') { setup.step = 2; enterUntil = Date.now() + 700; return render(); }
   if (what === 'fr-back') { setup.step = 1; enterUntil = Date.now() + 700; return render(); }
   if (what === 'fr-start') return startWith(b.dataset.modeTo);
-  if (what === 'install-later') { try { localStorage.setItem('sai.install.later', '1'); } catch (e) { /* private mode */ } return render(); }
+  if (what === 'install-later') { try { localStorage.setItem('homebody.install.later', '1'); } catch (e) { /* private mode */ } return render(); }
   if (what === 'install-go') { installBusy = true; render(); return invoke('install_and_restart').catch((e) => { installBusy = false; ctx.toast(errText(e)); render(); }); }
   if (what === 'ack') return invoke('ack_presets').then(ctx.setStatus).catch((e) => ctx.toast(errText(e)));
   if (what === 'pick') return invoke('pick_program').then((p) => { if (p) { add.program = p; if (!add.name) add.name = p.split('/').pop().replace(/\.app$/, ''); render(); } });

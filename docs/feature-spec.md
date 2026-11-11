@@ -38,7 +38,7 @@ One line per feature. Tags: **[MVP]** macOS v0.1 · **[v0.2]** · **[v0.3]** · 
 - **No network interface** — the VM has no NIC; the only route out is a vsock channel to the host proxy. [MVP]
 - **DNS in the proxy** — the guest cannot resolve names itself, so DNS tunneling and resolver side doors are closed by construction. [MVP]
 - **Project-only mounts** — only the chosen folder is visible inside; home dotfiles, keychains and credential paths are never mounted. [MVP]
-- **Run any agent** — `Run in Box` for Claude Code, Codex CLI and Gemini CLI from the app or `sai run <agent>` from the CLI. [MVP]
+- **Run any agent** — `Run in Box` for Claude Code, Codex CLI and Gemini CLI from the app or `homebody run <agent>` from the CLI. [MVP]
 - **MCP servers inside the Box** — the agent's MCP servers run under the same policy, closing the gap every vendor sandbox leaves. [MVP]
 - **Credential injection at the boundary** — API keys never enter the guest; the proxy swaps sentinels for real keys on approved hosts only. [MVP]
 - **Memory ballooning** — the VM returns idle RAM to the host; default ceiling 4 GB, configurable. [MVP]
@@ -73,7 +73,7 @@ One line per feature. Tags: **[MVP]** macOS v0.1 · **[v0.2]** · **[v0.3]** · 
 
 - **Signed receipts** — every allow, deny and ask becomes a hash-chained, Ed25519-signed record with process, destination, bytes and rule. [MVP]
 - **Live feed** — scrolling connection view with filters by app, decision and time. [MVP]
-- **Verify** — one click or `sai log verify` checks the chain for tampering. [MVP]
+- **Verify** — one click or `homebody log verify` checks the chain for tampering. [MVP]
 - **Export** — signed JSONL or CSV bundle with the governing policy and public key. [MVP]
 - **Zero-egress certificate** — a signed statement that a named app sent nothing over a period, suitable to share. [MVP]
 - **Local-only logs** — logs never leave the machine unless the user exports them or joins a Team. [MVP]
@@ -92,8 +92,8 @@ One line per feature. Tags: **[MVP]** macOS v0.1 · **[v0.2]** · **[v0.3]** · 
 
 ## 8. Developer and automation
 
-- **CLI** — `sai` for init, run, policy, log and model commands, sharing the app's core. [MVP]
-- **Agent launchers** — `sai run claude`, `sai run codex`, `sai run gemini` with flags passed through. [MVP]
+- **CLI** — `homebody` for init, run, policy, log and model commands, sharing the app's core. [MVP]
+- **Agent launchers** — `homebody run claude`, `homebody run codex`, `homebody run gemini` with flags passed through. [MVP]
 - **Per-project policy** — policy file checked into the repo, auto-applied when the project is opened. [MVP]
 - **Local API** — localhost socket for IDEs and scripts to start sandboxes and query the log. [v0.2]
 - **CI mode** — headless Box for running agents in pipelines with the same policy and receipts. [v0.3]

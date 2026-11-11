@@ -1,4 +1,4 @@
-//! A local control socket, so the `sai` command line and scripts can drive a running engine.
+//! A local control socket, so the `homebody` command line and scripts can drive a running engine.
 //!
 //! The socket lives in the user's private data folder (mode 0700), which protected apps cannot
 //! enter, so a protected app cannot use it to approve its own requests. One JSON object per line:
@@ -79,7 +79,7 @@ async fn client(engine: Engine, stream: UnixStream) -> std::io::Result<()> {
 
 /// Send one command to the running engine.
 pub async fn call(cmd: &str, args: Value) -> Result<Value, String> {
-    let stream = UnixStream::connect(paths::control_socket()).await.map_err(|_| "Homebody is not running. Open the app, or run `sai daemon`.".to_string())?;
+    let stream = UnixStream::connect(paths::control_socket()).await.map_err(|_| "Homebody is not running. Open the app, or run `homebody daemon`.".to_string())?;
     let (read, mut write) = stream.into_split();
     let mut line = serde_json::to_vec(&json!({ "cmd": cmd, "args": args })).unwrap_or_default();
     line.push(b'\n');

@@ -1,12 +1,12 @@
 //! Homebody desktop shell.
 //!
 //! Deliberately thin: it owns the windows and the menu-bar icon, and forwards everything else to
-//! `sai-core`. The UI calls one command, `sai`, with `{cmd, args}` exactly as in docs/ipc.md, and
-//! listens on one event channel, `sai:event`.
+//! `homebody-core`. The UI calls one command, `homebody`, with `{cmd, args}` exactly as in docs/ipc.md, and
+//! listens on one event channel, `homebody:event`.
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use sai_core::{Engine, Event, Indicator};
+use homebody_core::{Engine, Event, Indicator};
 use serde_json::Value;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -28,7 +28,7 @@ struct Shell {
 }
 
 #[tauri::command]
-async fn sai(app: AppHandle, window: WebviewWindow, shell: tauri::State<'_, Shell>, cmd: String, args: Option<Value>) -> Result<Value, String> {
+async fn homebody(app: AppHandle, window: WebviewWindow, shell: tauri::State<'_, Shell>, cmd: String, args: Option<Value>) -> Result<Value, String> {
     let args = args.unwrap_or(Value::Null);
     match cmd.as_str() {
         "open_main" => {
@@ -84,7 +84,7 @@ fn pick(what: &str) -> Result<Value, String> {
     Ok(if path.is_empty() { Value::Null } else { Value::String(path) })
 }
 
-const LOGIN_ITEM: &str = "com.sandboxai.app";
+const LOGIN_ITEM: &str = "app.homebody.mac";
 
 fn login_item_path() -> Option<std::path::PathBuf> {
     std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join("Library/LaunchAgents").join(format!("{LOGIN_ITEM}.plist")))
@@ -136,7 +136,7 @@ fn show_main(app: &AppHandle, tab: Option<&str>) {
         let _ = w.set_focus();
     }
     if let Some(tab) = tab {
-        let _ = app.emit("sai:event", Event::Navigate { tab: tab.to_string() });
+        let _ = app.emit("homebody:event", Event::Navigate { tab: tab.to_string() });
     }
 }
 
@@ -300,7 +300,7 @@ fn pump_events(app: AppHandle, engine: Engine) {
                 }
                 _ => {}
             }
-            let _ = app.emit("sai:event", &event);
+            let _ = app.emit("homebody:event", &event);
         }
     });
 }
@@ -321,12 +321,12 @@ fn main() {
     let args: Vec<String> = std::env::args().collect();
     let wanted = args.iter().position(|a| a == "--open-protected").and_then(|i| args.get(i + 1)).cloned();
     if let Some(id) = &wanted {
-        if tauri::async_runtime::block_on(sai_core::control::is_running()) {
+        if tauri::async_runtime::block_on(homebody_core::control::is_running()) {
             // Homebody is already running: hand the request over and leave.
             tauri::async_runtime::block_on(async {
                 let mut last = String::new();
                 for _ in 0..40 {
-                    match sai_core::control::call("app_open", serde_json::json!({ "appId": id })).await {
+                    match homebody_core::control::call("app_open", serde_json::json!({ "appId": id })).await {
                         Ok(_) => return,
                         Err(e) if not_ready(&e) => last = e,
                         Err(e) => return alert(&e),
@@ -339,11 +339,11 @@ fn main() {
         }
     }
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![sai])
+        .invoke_handler(tauri::generate_handler![homebody])
         .setup(move |app| {
             let handle = app.handle().clone();
-            // One engine per user: if `sai daemon` or another copy of the app is running, bow out.
-            if tauri::async_runtime::block_on(sai_core::control::is_running()) {
+            // One engine per user: if `homebody daemon` or another copy of the app is running, bow out.
+            if tauri::async_runtime::block_on(homebody_core::control::is_running()) {
                 eprintln!("Homebody is already running.");
                 std::process::exit(0);
             }
@@ -351,8 +351,11 @@ fn main() {
             app.manage(Shell { engine: engine.clone(), glance_hidden_at: Mutex::new(None), indicator: Mutex::new(None) });
             if let Ok(exe) = std::env::current_exe() {
                 engine.set_opener(&exe.to_string_lossy());
-                // "Open at login" follows the app when it has moved.
-                if login_item_path().map(|p| p.exists()).unwrap_or(false) {
+                // "Open at login" follows the app when it has moved, and moves to the new name
+                // from the entry written before the app was called Homebody.
+                let legacy = std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join("Library/LaunchAgents/com.sandboxai.app.plist"));
+                let had_legacy = legacy.as_ref().map(|p| std::fs::remove_file(p).is_ok()).unwrap_or(false);
+                if had_legacy || login_item_path().map(|p| p.exists()).unwrap_or(false) {
                     let _ = set_login_item(true);
                 }
             }
@@ -382,8 +385,8 @@ fn main() {
 
             let control_engine = engine.clone();
             tauri::async_runtime::spawn(async move {
-                if let Err(e) = sai_core::control::serve(control_engine).await {
-                    eprintln!("sandbox-ai: control socket: {e}");
+                if let Err(e) = homebody_core::control::serve(control_engine).await {
+                    eprintln!("homebody: control socket: {e}");
                 }
             });
 
@@ -410,7 +413,7 @@ fn main() {
             tauri::async_runtime::spawn(async move {
                 tokio::time::sleep(Duration::from_millis(if quiet { 2500 } else { 600 })).await;
                 let status = first.state::<Shell>().engine.status();
-                if !quiet || status.setup_needed || std::env::var("SAI_SHOW_MAIN").is_ok() {
+                if !quiet || status.setup_needed || std::env::var("HOMEBODY_SHOW_MAIN").is_ok() {
                     show_main(&first, None);
                 }
             });
@@ -432,7 +435,7 @@ fn main() {
                 show_main(app, None);
             }
             if let tauri::RunEvent::Exit = event {
-                let _ = std::fs::remove_file(sai_core::paths::control_socket());
+                let _ = std::fs::remove_file(homebody_core::paths::control_socket());
                 let _ = app;
             }
         });

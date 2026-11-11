@@ -1,5 +1,5 @@
 [package]
-name = "sai-core"
+name = "homebody-core"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

@@ -22,7 +22,7 @@ No virtual machine, no account, no telemetry, nothing hosted. Apache-2.0. Window
 - **Keeps your private folders private.** Mark a folder and, while it looks inside, a request that repeats lines from a file in it is stopped.
 - **Limits how much can go.** Each trusted place can have an hourly limit on what an app may send there, or be set to downloads only. This works for every app.
 - **Watch mode.** Allow everything for an hour, then see exactly what your AI contacted and choose what to trust.
-- **Proof.** An append-only, hash-chained, Ed25519-signed log, with a weekly summary per app. Export it as a folder (the log, a spreadsheet of activity, the rules in force) and anyone can check it with `sai verify <folder>`. A public time-stamping service can vouch for when it existed; only a fingerprint is sent.
+- **Report.** An append-only, hash-chained, Ed25519-signed log, with a weekly summary per app. Export it as a folder (the log, a spreadsheet of activity, the rules in force) and anyone can check it with `homebody verify <folder>`. A public time-stamping service can vouch for when it existed; only a fingerprint is sent.
 
 Protected today: **Claude Code** and **Ollama** (both tested live, including a model download and GPU inference under the fence). Also recognised and run protected (not signed in), each seen to send everything through the gate: **Codex CLI, Gemini CLI, Aider and opencode**. Presets also exist for **llama.cpp, Cursor CLI and OpenClaw**, written from their documentation and not yet run here. Any other command-line program can be added with *Add app*. So can a windowed app, with [lighter protection](#what-it-does-not-do-yet): tested live with one Electron app (Obsidian), whose three start-up contacts came up as questions instead of going out.
 
@@ -38,10 +38,10 @@ That builds the app and packs `app/target/release/bundle/dmg/Homebody-<version>-
 
 The Homebody face appears in the menu bar and the window opens on the first-run steps. **Turn on protection** asks for your Mac password once: it creates the private users, loads the packet filter rules and installs a small watchdog that restores them after a restart. *What exactly it sets up* shows the exact script before you approve it, and can remove all of it again.
 
-There is also a command line, `sai`, that drives the same core:
+There is also a command line, `homebody`, that drives the same core:
 
 ```bash
-/Applications/Homebody.app/Contents/MacOS/sai status
+/Applications/Homebody.app/Contents/MacOS/homebody status
 ```
 
 ## Check it yourself
@@ -73,7 +73,7 @@ The second one is every way around the gate or the fence that we know of, as exe
 
 | Folder | What is in it |
 |---|---|
-| `app/` | The product: Rust core (`crates/core`), the `sai` command line (`crates/cli`), the Tauri shell (`src-tauri`) and the UI (`ui`, plain HTML/CSS/JS, no build step). Start with `app/README.md`; `app/docs/ipc.md` is the contract between core and UI. |
+| `app/` | The product: Rust core (`crates/core`), the `homebody` command line (`crates/cli`), the Tauri shell (`src-tauri`) and the UI (`ui`, plain HTML/CSS/JS, no build step). Start with `app/README.md`; `app/docs/ipc.md` is the contract between core and UI. |
 | `docs/` | Product spec, one-line feature spec, design principles. |
 | `reports/`, `research_notes/` | The market research behind the product, with sources. |
 | `spike/` | Earlier experiments that de-risked the design: the packet-filter fence, a Network Extension fence, the virtual-machine Box, a UI prototype. Superseded by `app/`, except the Box. |

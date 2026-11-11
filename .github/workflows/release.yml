@@ -47,7 +47,7 @@ jobs:
         run: npm ci
 
       - name: Unit tests
-        run: cargo test -p sai-core
+        run: cargo test -p homebody-core
 
       - name: Build and pack
         env:

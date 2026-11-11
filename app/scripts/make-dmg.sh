@@ -17,7 +17,7 @@ fi
 
 APP="target/release/bundle/macos/Homebody.app"
 [ -d "$APP" ] || { echo "No app at $APP. Run without --no-build." >&2; exit 1; }
-[ -x "$APP/Contents/MacOS/sai" ] || { echo "The command line tool is missing from the app." >&2; exit 1; }
+[ -x "$APP/Contents/MacOS/homebody" ] || { echo "The command line tool is missing from the app." >&2; exit 1; }
 
 VERSION="$(/usr/bin/plutil -extract CFBundleShortVersionString raw -o - "$APP/Contents/Info.plist")"
 ARCH="$(uname -m)"

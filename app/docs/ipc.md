@@ -1,6 +1,6 @@
 # IPC contract: core ⇄ UI
 
-The single source of truth for what the Rust core exposes and what the UI consumes. The UI never talks to anything else. In the Tauri app the transport is one command, `invoke('sai', { cmd, args })`, plus one event channel; in a plain browser (UI development) `ui/js/api.js` falls back to an in-page mock that implements this same contract.
+The single source of truth for what the Rust core exposes and what the UI consumes. The UI never talks to anything else. In the Tauri app the transport is one command, `invoke('homebody', { cmd, args })`, plus one event channel; in a plain browser (UI development) `ui/js/api.js` falls back to an in-page mock that implements this same contract.
 
 All JSON is camelCase. Times are ISO 8601 UTC strings. Byte counts are integers.
 
@@ -226,7 +226,7 @@ interface PrivateFolders {
 | `get_proof` | — | `Proof` | |
 | `verify_chain` | — | `ChainCheck` | may take a moment on a large log |
 | `export_proof` | — | `{ path: string }` | writes a signed proof file to Downloads and reveals it |
-| `export_log` | `{ reveal?: boolean }` | `{ path: string }` | writes a folder to Downloads: `log.jsonl` (one signed header line, then every record as written), `activity.csv` (the Feed as a table), `rules.json` (the settings in force), `timestamps/` (any independent timestamps) and `README.txt`. `sai verify <folder or log.jsonl>` checks it without the app |
+| `export_log` | `{ reveal?: boolean }` | `{ path: string }` | writes a folder to Downloads: `log.jsonl` (one signed header line, then every record as written), `activity.csv` (the Feed as a table), `rules.json` (the settings in force), `timestamps/` (any independent timestamps) and `README.txt`. `homebody verify <folder or log.jsonl>` checks it without the app |
 | `timestamp_log` | — | `{ records, time, service, file }` | asks a public time-stamping service to vouch for the log as it stands. Only a fingerprint (a hash) of the log is sent, over the user's own connection, and the request is written to the log. The answer is kept beside the log and included in exports |
 | `get_summary` | `{ days?: number }` | `Summary` | default 7, at most 90 |
 | `get_receipts` | `{ limit?: number }` | `string[]` | raw log lines, newest last (Studio → Logs) |
@@ -265,7 +265,7 @@ interface PrivateFolders {
 | `open_main` | `{ tab?: "feed" \| "proof" \| "studio" }` | `null` | show and focus the main window |
 | `hide_window` | — | `null` | hides the calling window (Glance, prompt) |
 | `quit` | — | `null` | |
-| `fenced_argv` | `{ appId, program, args?: string[], cwd?: string }` | `string[]` | the full command line that runs a program inside this app's fence; what `sai run` uses |
+| `fenced_argv` | `{ appId, program, args?: string[], cwd?: string }` | `string[]` | the full command line that runs a program inside this app's fence; what `homebody run` uses |
 | `get_setup_script` | — | `string` | exactly what the administrator approves in `run_setup`, for showing to the user first |
 | `show` | `{ window: "main" \| "glance" \| "prompt", tab? }` | `null` | for the CLI and scripts: bring a window of the running app forward |
 
@@ -273,7 +273,7 @@ Errors reject with a plain string suitable for showing to the user.
 
 ## Events
 
-One channel, `sai:event`. Payload is `{ type, data }`:
+One channel, `homebody:event`. Payload is `{ type, data }`:
 
 | `type` | `data` | When |
 |---|---|---|

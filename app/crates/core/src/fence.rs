@@ -17,11 +17,11 @@ use std::process::Stdio;
 use std::time::Duration;
 use tokio::process::Command;
 
-pub const GROUP: &str = "_sai";
-pub const SYSTEM_DIR: &str = "/Library/Application Support/SandboxAI";
-pub const FILTER_STATUS: &str = "/var/run/sandboxai.fence";
-pub const FILTER_ANCHOR: &str = "sandboxai";
-pub const WORKSPACE_ROOT: &str = "/Users/Shared/SandboxAI";
+pub const GROUP: &str = "_homebody";
+pub const SYSTEM_DIR: &str = "/Library/Application Support/Homebody";
+pub const FILTER_STATUS: &str = "/var/run/homebody.fence";
+pub const FILTER_ANCHOR: &str = "homebody";
+pub const WORKSPACE_ROOT: &str = "/Users/Shared/Homebody";
 
 #[derive(Clone, Debug, Default)]
 pub struct Health {
@@ -87,7 +87,7 @@ impl Health {
 /// Development only: treat the fence as up when the user and seatbelt layers pass but the packet
 /// filter layer is not installed. Never honoured in release builds.
 pub fn dev_allow_partial() -> bool {
-    cfg!(debug_assertions) && std::env::var("SAI_DEV_ALLOW_PARTIAL").map(|v| v == "1").unwrap_or(false)
+    cfg!(debug_assertions) && std::env::var("HOMEBODY_DEV_ALLOW_PARTIAL").map(|v| v == "1").unwrap_or(false)
 }
 
 pub fn real_user() -> String {
@@ -197,7 +197,7 @@ pub fn window_argv(app: &AppConfig) -> Result<Vec<String>, String> {
     }
     // Parts of these apps are plain Node programs, which ignore the app's own gate setting
     // unless told to read it from the environment.
-    v.extend(["NO_PROXY=localhost,127.0.0.1".to_string(), "no_proxy=localhost,127.0.0.1".to_string(), "NODE_USE_ENV_PROXY=1".to_string(), "SANDBOX_AI=1".to_string(), bundle.exe]);
+    v.extend(["NO_PROXY=localhost,127.0.0.1".to_string(), "no_proxy=localhost,127.0.0.1".to_string(), "NODE_USE_ENV_PROXY=1".to_string(), "HOMEBODY=1".to_string(), bundle.exe]);
     if bundle.electron {
         v.extend(["--no-sandbox".to_string(), format!("--proxy-server={gate}"), "--proxy-bypass-list=<-loopback>;127.0.0.1;localhost".to_string()]);
     }
@@ -217,7 +217,7 @@ fn regex_escape(s: &str) -> String {
 
 /// Written by setup after it has tested, on this computer, that an agent can reach a server it
 /// started itself and is refused at anyone else's. "own" when that held.
-pub const LOCAL_SERVERS_FILE: &str = "/Library/Application Support/SandboxAI/local-servers";
+pub const LOCAL_SERVERS_FILE: &str = "/Library/Application Support/Homebody/local-servers";
 
 /// Whether agents are allowed to reach servers they started themselves on this computer.
 pub fn own_servers() -> bool {
@@ -228,7 +228,7 @@ pub fn own_servers() -> bool {
 /// keeps it current (see `WATCHDOG`).
 #[cfg(test)]
 fn own_anchor(os_user: &str) -> String {
-    format!("own_{}", os_user.trim_start_matches("_sai"))
+    format!("own_{}", os_user.trim_start_matches("_hb"))
 }
 
 /// An app that should reach its own local servers and nobody else's: every command-line agent.
@@ -348,7 +348,7 @@ pub fn write_launcher(app: &AppConfig, opener: &str) -> Result<String, String> {
     }
     let xml = |t: &str| t.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;");
     let plist = format!(
-        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n<plist version=\"1.0\"><dict>\n  <key>CFBundleName</key><string>{name} (protected)</string>\n  <key>CFBundleDisplayName</key><string>{name} (protected)</string>\n  <key>CFBundleIdentifier</key><string>com.sandboxai.launcher.{id}</string>\n  <key>CFBundleExecutable</key><string>launcher</string>\n  <key>CFBundlePackageType</key><string>APPL</string>\n  <key>CFBundleVersion</key><string>1</string>\n  <key>LSUIElement</key><true/>\n{icon_line}</dict></plist>\n",
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n<plist version=\"1.0\"><dict>\n  <key>CFBundleName</key><string>{name} (protected)</string>\n  <key>CFBundleDisplayName</key><string>{name} (protected)</string>\n  <key>CFBundleIdentifier</key><string>app.homebody.launcher.{id}</string>\n  <key>CFBundleExecutable</key><string>launcher</string>\n  <key>CFBundlePackageType</key><string>APPL</string>\n  <key>CFBundleVersion</key><string>1</string>\n  <key>LSUIElement</key><true/>\n{icon_line}</dict></plist>\n",
         name = xml(&app.name),
         id = xml(&app.id),
     );
@@ -386,7 +386,7 @@ pub fn remove_launcher(app: &AppConfig) {
     }
 }
 
-const VIOLATION_TAG: &str = "sai-app=";
+const VIOLATION_TAG: &str = "homebody-app=";
 
 /// One refused attempt to reach the network without going through the gate.
 #[derive(Debug, PartialEq, Clone)]
@@ -408,7 +408,7 @@ pub struct Violation {
 ///
 /// ```text
 /// Sandbox: curl(40242) deny(1) network-outbound remote:*:443
-/// sai-app=claude-code;net
+/// homebody-app=claude-code;net
 /// ```
 ///
 /// Returns nothing for refusals that do not carry our tag. The program name comes from the
@@ -470,7 +470,14 @@ pub fn violation_in(line: &str) -> Option<Violation> {
 
 /// Home folder of a protected app's OS user.
 pub fn home_for(os_user: &str) -> String {
-    format!("/var/sai/{}", os_user.trim_start_matches("_sai").trim_start_matches('_'))
+    let name = os_user.trim_start_matches("_hb").trim_start_matches('_');
+    // Private users made before the app was called Homebody keep their home folder where it was:
+    // macOS does not let anyone, administrator included, move a user's home folder.
+    let legacy = format!("/var/sai/{name}");
+    if std::path::Path::new(&legacy).is_dir() {
+        return legacy;
+    }
+    format!("/var/homebody/{name}")
 }
 
 /// The seatbelt profile for one app. Later rules win over earlier ones.
@@ -543,7 +550,7 @@ pub fn fenced_env(app: &AppConfig) -> Vec<(String, String)> {
         ("no_proxy".into(), "localhost,127.0.0.1".into()),
         // Node programs read the gate from the environment only when asked to.
         ("NODE_USE_ENV_PROXY".into(), "1".into()),
-        ("SANDBOX_AI".into(), "1".into()),
+        ("HOMEBODY".into(), "1".into()),
     ];
     if app.inspect && !app.windowed && app.kind != "model" {
         // Tell the app about the local certificate, or it would refuse every inspected connection.
@@ -572,7 +579,7 @@ pub fn fenced_argv(app: &AppConfig, program: &str, args: &[String], extra_env: &
         for k in ["HTTPS_PROXY", "HTTP_PROXY", "https_proxy", "http_proxy", "ALL_PROXY"] {
             v.push(format!("{k}={gate}"));
         }
-        v.extend(["NO_PROXY=localhost,127.0.0.1".to_string(), "no_proxy=localhost,127.0.0.1".to_string(), "SANDBOX_AI=1".to_string()]);
+        v.extend(["NO_PROXY=localhost,127.0.0.1".to_string(), "no_proxy=localhost,127.0.0.1".to_string(), "HOMEBODY=1".to_string()]);
         v.extend(extra_env.iter().map(|(k, val)| format!("{k}={val}")));
         v.extend(["/bin/sh".into(), "-c".into(), "cd \"$1\" && shift && exec \"$@\"".into(), "sh".into(), cwd.unwrap_or("/").to_string(), program.to_string()]);
         v.extend(args.iter().cloned());
@@ -609,7 +616,7 @@ async fn run_owned(argv: Vec<String>, timeout: Duration) -> Option<(bool, String
 fn untagged(mut argv: Vec<String>) -> Vec<String> {
     for a in &mut argv {
         if a.contains(VIOLATION_TAG) {
-            *a = a.replace(VIOLATION_TAG, "sai-check=");
+            *a = a.replace(VIOLATION_TAG, "homebody-check=");
         }
     }
     argv
@@ -780,9 +787,7 @@ pub async fn reveal(path: &str, select: bool) {
 
 /// Packet filter rules for every protected app. Loopback is limited to the ports each app needs.
 pub fn filter_rules(cfg: &Config, own_servers: bool) -> String {
-    // The header keeps the old name: the installed copy is compared with this text, and changing it
-    // would ask everyone to approve setup again for nothing.
-    let mut s = String::from("# Sandbox-ai packet filter rules. Generated by the app; changes are overwritten.\n");
+    let mut s = String::from("# Homebody packet filter rules. Generated by the app; changes are overwritten.\n");
     let (lo, hi) = (crate::catalog::GATE_PORTS.start(), crate::catalog::GATE_PORTS.end());
     if own_servers && cfg.apps.iter().any(wants_own_servers) {
         // One small rule set per agent, kept current by the watchdog: the ports that agent is
@@ -822,13 +827,13 @@ fn own_rules(os_user: &str, ports: &[u16]) -> String {
 const WATCHDOG: &str = r#"#!/bin/bash
 # Homebody fence watchdog. Runs as root from launchd and keeps the packet filter rules loaded,
 # including after restarts and after anything else reloads the system rules.
-ANCHOR=sandboxai
-RULES=/etc/pf.anchors/sandboxai
-CONF="/Library/Application Support/SandboxAI/pf.conf"
-STATUS=/var/run/sandboxai.fence
+ANCHOR=homebody
+RULES=/etc/pf.anchors/homebody
+CONF="/Library/Application Support/Homebody/pf.conf"
+STATUS=/var/run/homebody.fence
 USERS="@USERS@"
 OWN_USERS="@OWN@"
-MODE="/Library/Application Support/SandboxAI/local-servers"
+MODE="/Library/Application Support/Homebody/local-servers"
 
 # Agents and the servers they start themselves. Twice a second, while any agent is running: list
 # the ports each agent is listening on and load exactly those into that agent's own small anchor.
@@ -844,14 +849,14 @@ own_tick() {
   fi
   for u in $OWN_USERS; do
     ports="$(printf '%s\n' "$listing" | awk -v u="$u" '/^L/ { cur = substr($0, 2) } /^n/ { if (cur == u) { n = $0; sub(/.*:/, "", n); if (n ~ /^[0-9]+$/) print n } }' | sort -un | tr '\n' ' ')"
-    [ "$ports" = "$(cat "/var/run/sandboxai.own.$u" 2>/dev/null)" ] && continue
+    [ "$ports" = "$(cat "/var/run/homebody.own.$u" 2>/dev/null)" ] && continue
     if [ -z "$ports" ]; then
-      pfctl -q -a "$ANCHOR/own_${u#_sai}" -F rules 2>/dev/null
+      pfctl -q -a "$ANCHOR/own_${u#_hb}" -F rules 2>/dev/null
     else
       list="$(printf '%s' "$ports" | sed 's/ *$//' | tr ' ' ',')"
-      printf 'pass out quick on lo0 proto tcp from any to any port { %s } user %s\nblock return in quick on lo0 proto tcp from any to any port { %s } user != %s\n' "$list" "$u" "$list" "$u" | pfctl -q -a "$ANCHOR/own_${u#_sai}" -f - 2>>"$STATUS.err"
+      printf 'pass out quick on lo0 proto tcp from any to any port { %s } user %s\nblock return in quick on lo0 proto tcp from any to any port { %s } user != %s\n' "$list" "$u" "$list" "$u" | pfctl -q -a "$ANCHOR/own_${u#_hb}" -f - 2>>"$STATUS.err"
     fi
-    printf '%s' "$ports" > "/var/run/sandboxai.own.$u"
+    printf '%s' "$ports" > "/var/run/homebody.own.$u"
   done
 }
 
@@ -878,7 +883,7 @@ ensure() {
 
 if [ "${1:-}" = "--once" ]; then ensure; cat "$STATUS"; exit 0; fi
 # Nothing from before this start can be trusted to be loaded still.
-rm -f /var/run/sandboxai.own.* 2>/dev/null
+rm -f /var/run/homebody.own.* 2>/dev/null
 n=0
 while true; do
   if [ "$n" -eq 0 ]; then ensure; fi
@@ -892,9 +897,9 @@ const DAEMON_PLIST: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-	<key>Label</key><string>com.sandboxai.fence</string>
+	<key>Label</key><string>app.homebody.fence</string>
 	<key>ProgramArguments</key>
-	<array><string>/bin/bash</string><string>/Library/Application Support/SandboxAI/fence-watchdog.sh</string></array>
+	<array><string>/bin/bash</string><string>/Library/Application Support/Homebody/fence-watchdog.sh</string></array>
 	<key>RunAtLoad</key><true/>
 	<key>KeepAlive</key><true/>
 </dict>
@@ -907,7 +912,8 @@ pub fn setup_script(cfg: &Config, real_user: &str) -> String {
     let mut s = String::new();
     s.push_str("#!/bin/bash\n# Homebody one-time setup. Generated by the app. Safe to run again.\nset -Eeuo pipefail\n");
     s.push_str(&format!("REAL_USER={}\nGROUP={GROUP}\nSUPPORT={}\nWORKROOT={}\n", sh_quote(real_user), sh_quote(SYSTEM_DIR), sh_quote(WORKSPACE_ROOT)));
-    s.push_str(r#"
+    let renames: String = cfg.apps.iter().filter(|a| !a.windowed).filter_map(|a| a.os_user.strip_prefix("_hb").map(|rest| format!("rename_user {} {}\n", sh_quote(&format!("_sai{rest}")), sh_quote(&a.os_user)))).collect();
+    s.push_str(&r#"
 free_id() { # first id in 590..599 then 500..589 used by neither a user nor a group
   local used; used="$( { dscl . -list /Users UniqueID; dscl . -list /Groups PrimaryGroupID; } | awk '{print $2}' | sort -n | uniq)"
   for i in $(seq 590 599) $(seq 500 589); do echo "$used" | grep -qx "$i" || { echo "$i"; return; }; done
@@ -916,6 +922,40 @@ free_id() { # first id in 590..599 then 500..589 used by neither a user nor a gr
 
 STEP="starting"
 trap 'echo "Setup stopped at: $STEP (while running: $BASH_COMMAND)" >&2' ERR
+
+# 0. Names used before the app was called Homebody: moved over once, harmless afterwards.
+# The protected users are renamed, not replaced, so they keep their numbers and with them the
+# files they own (an agent's sign-in, the copies of your projects) and the folder permissions.
+STEP="moving over from the old names"
+FIX_OWNERS=""
+launchctl bootout system/com.sandboxai.fence 2>/dev/null || true
+rm -f /Library/LaunchDaemons/com.sandboxai.fence.plist /etc/sudoers.d/sandbox-ai /etc/pf.anchors/sandboxai
+pfctl -q -a sandboxai -F all 2>/dev/null || true
+rm -f /var/run/sandboxai.fence /var/run/sandboxai.fence.err /var/run/sandboxai.own.* 2>/dev/null || true
+if dscl . -read /Groups/_sai >/dev/null 2>&1 && ! dscl . -read "/Groups/$GROUP" >/dev/null 2>&1; then
+  dscl . -change /Groups/_sai RecordName _sai "$GROUP" && dscl . -create "/Groups/$GROUP" RealName "Homebody protected apps" || echo "the old group could not be renamed; a new one is made" >&2
+fi
+rename_user() { # old new
+  if dscl . -read "/Users/$1" >/dev/null 2>&1 && ! dscl . -read "/Users/$2" >/dev/null 2>&1; then
+    pkill -KILL -u "$1" 2>/dev/null || true
+    if dscl . -change "/Users/$1" RecordName "$1" "$2"; then
+      dscl . -create "/Users/$2" RealName "Homebody protected app"
+    else
+      echo "$1 could not be renamed; a new private user is made for it" >&2
+    fi
+  fi
+  # Its home folder stays where it is (see home_for): macOS refuses to move a home folder.
+}
+@RENAMES@if [ -d /Users/Shared/SandboxAI ]; then
+  mkdir -p "$WORKROOT"
+  for d in /Users/Shared/SandboxAI/*; do
+    [ -d "$d" ] || continue
+    n="$(basename "$d")"
+    if [ ! -e "$WORKROOT/$n" ]; then mv "$d" "$WORKROOT/$n"; FIX_OWNERS="$FIX_OWNERS|$WORKROOT/$n|"; fi
+  done
+  rmdir /Users/Shared/SandboxAI 2>/dev/null || true
+fi
+rm -rf "/Library/Application Support/SandboxAI"
 
 STEP="system folders"
 mkdir -p "$SUPPORT" "$WORKROOT"
@@ -966,6 +1006,8 @@ ensure_workspace() { # dir owner
   STEP="workspace folder $d"
   local rights="read,write,execute,append,delete,delete_child,readattr,writeattr,readextattr,writeextattr,readsecurity,file_inherit,directory_inherit"
   mkdir -p "$d"
+  # A workspace moved from the old folder: whatever is inside belongs to its app.
+  case "$FIX_OWNERS" in *"|$d|"*) chown -R "$u:$GROUP" "$d" ;; esac
   chown "$u:$GROUP" "$d"; chmod 770 "$d"
   chmod -N "$d" 2>/dev/null || true
   chmod +a "user:$REAL_USER allow $rights" "$d"
@@ -973,7 +1015,7 @@ ensure_workspace() { # dir owner
   [ -f "$d/README.txt" ] || { printf 'This folder is the only place the protected app can write.\nPut the files you want it to work on here.\n' > "$d/README.txt"; chown "$u:$GROUP" "$d/README.txt"; chmod 660 "$d/README.txt"; }
 }
 
-"#);
+"#.replace("@RENAMES@", &renames));
     for app in cfg.apps.iter().filter(|a| !a.windowed) {
         s.push_str(&format!("ensure_user {} {}\n", sh_quote(&app.os_user), sh_quote(&home_for(&app.os_user))));
         if let Some(w) = &app.workspace {
@@ -982,22 +1024,22 @@ ensure_workspace() { # dir owner
     }
     s.push_str("\n# 2. Packet filter rules, and a watchdog that keeps them loaded across restarts.\nSTEP=\"packet filter rules\"\nmkdir -p /etc/pf.anchors\n");
     s.push_str(&format!(
-        "write_rules() {{ # none | own\n  if [ \"$1\" = own ]; then\ncat > /etc/pf.anchors/{FILTER_ANCHOR} <<'SAI_EOF'\n{}SAI_EOF\n  else\ncat > /etc/pf.anchors/{FILTER_ANCHOR} <<'SAI_EOF'\n{}SAI_EOF\n  fi\n  chown root:wheel /etc/pf.anchors/{FILTER_ANCHOR}; chmod 644 /etc/pf.anchors/{FILTER_ANCHOR}\n}}\nwrite_rules none\n",
+        "write_rules() {{ # none | own\n  if [ \"$1\" = own ]; then\ncat > /etc/pf.anchors/{FILTER_ANCHOR} <<'HB_EOF'\n{}HB_EOF\n  else\ncat > /etc/pf.anchors/{FILTER_ANCHOR} <<'HB_EOF'\n{}HB_EOF\n  fi\n  chown root:wheel /etc/pf.anchors/{FILTER_ANCHOR}; chmod 644 /etc/pf.anchors/{FILTER_ANCHOR}\n}}\nwrite_rules none\n",
         filter_rules(cfg, true),
         filter_rules(cfg, false),
     ));
     let own_users: Vec<&str> = cfg.apps.iter().filter(|a| wants_own_servers(a)).map(|a| a.os_user.as_str()).collect();
     s.push_str(&format!("TEST_USER={}\nOWN_USERS={}\n", sh_quote(own_users.first().copied().unwrap_or("")), sh_quote(&own_users.join(" "))));
-    s.push_str(&format!("cat > \"$SUPPORT/fence-watchdog.sh\" <<'SAI_EOF'\n{}SAI_EOF\n", WATCHDOG.replace("@USERS@", &users.join(",")).replace("@OWN@", &own_users.join(" "))));
+    s.push_str(&format!("cat > \"$SUPPORT/fence-watchdog.sh\" <<'HB_EOF'\n{}HB_EOF\n", WATCHDOG.replace("@USERS@", &users.join(",")).replace("@OWN@", &own_users.join(" "))));
     s.push_str("chown root:wheel \"$SUPPORT/fence-watchdog.sh\"; chmod 755 \"$SUPPORT/fence-watchdog.sh\"\n");
-    s.push_str(&format!("cat > /Library/LaunchDaemons/com.sandboxai.fence.plist <<'SAI_EOF'\n{DAEMON_PLIST}SAI_EOF\n"));
-    s.push_str(r#"chown root:wheel /Library/LaunchDaemons/com.sandboxai.fence.plist; chmod 644 /Library/LaunchDaemons/com.sandboxai.fence.plist
-launchctl bootout system/com.sandboxai.fence 2>/dev/null || true
+    s.push_str(&format!("cat > /Library/LaunchDaemons/app.homebody.fence.plist <<'HB_EOF'\n{DAEMON_PLIST}HB_EOF\n"));
+    s.push_str(r#"chown root:wheel /Library/LaunchDaemons/app.homebody.fence.plist; chmod 644 /Library/LaunchDaemons/app.homebody.fence.plist
+launchctl bootout system/app.homebody.fence 2>/dev/null || true
 sleep 1
 
 # Start from the rules that allow agents their own local servers when there are agents; whether
 # they stay is decided by the test below. Anything left from an earlier run goes first.
-forget_own() { for u in $OWN_USERS; do pfctl -q -a "sandboxai/own_${u#_sai}" -F rules 2>/dev/null || true; rm -f "/var/run/sandboxai.own.$u"; done; }
+forget_own() { for u in $OWN_USERS; do pfctl -q -a "homebody/own_${u#_hb}" -F rules 2>/dev/null || true; rm -f "/var/run/homebody.own.$u"; done; }
 set_local() { # none | own
   write_rules "$1"
   printf '%s\n' "$1" > "$SUPPORT/local-servers"; chown root:wheel "$SUPPORT/local-servers"; chmod 644 "$SUPPORT/local-servers"
@@ -1007,9 +1049,9 @@ if [ -n "$TEST_USER" ]; then set_local own; else set_local none; fi
 
 # Reload the rules now (the anchor may already hold an older set).
 STEP="starting the watchdog"
-pfctl -q -a sandboxai -F rules 2>/dev/null || true
-launchctl enable system/com.sandboxai.fence 2>/dev/null || true
-launchctl bootstrap system /Library/LaunchDaemons/com.sandboxai.fence.plist 2>/dev/null || launchctl kickstart -k system/com.sandboxai.fence
+pfctl -q -a homebody -F rules 2>/dev/null || true
+launchctl enable system/app.homebody.fence 2>/dev/null || true
+launchctl bootstrap system /Library/LaunchDaemons/app.homebody.fence.plist 2>/dev/null || launchctl kickstart -k system/app.homebody.fence
 
 # 2b. Can agents be allowed the servers they start themselves, and only those? Tested here, on
 # this computer, with the real rules and the real watchdog, before it is relied on: an agent's
@@ -1026,7 +1068,7 @@ if [ -n "$TEST_USER" ]; then
   done
   if sudo -n -u "$TEST_USER" /usr/bin/nc -z -G 2 127.0.0.1 47993 >/dev/null 2>&1; then other=yes; fi
   echo "local servers: its own reachable: $own; somebody else's reachable: $other"
-  { pfctl -a sandboxai -sr | head -3; pfctl -a "sandboxai/own_${TEST_USER#_sai}" -sr; } 2>/dev/null | sed 's/^/    /' || true
+  { pfctl -a homebody -sr | head -3; pfctl -a "homebody/own_${TEST_USER#_hb}" -sr; } 2>/dev/null | sed 's/^/    /' || true
   # The ordinary "please stop" signal is ignored in this context (seen on a real run: setup
   # waited forever on a test server nobody had connected to), so the test servers are stopped
   # the way that cannot be ignored, and nothing waits on them.
@@ -1036,16 +1078,16 @@ if [ -n "$TEST_USER" ]; then
     yes*/no) echo "local servers: on" ;;
     *) echo "local servers: the test did not pass, staying with the stricter rules"
        set_local none; forget_own
-       pfctl -q -a sandboxai -f /etc/pf.anchors/sandboxai 2>/dev/null || true ;;
+       pfctl -q -a homebody -f /etc/pf.anchors/homebody 2>/dev/null || true ;;
   esac
 fi
 
 # 3. Let the app start things as the protected users without asking for a password each time.
 STEP="permission to start protected apps"
 "#);
-    s.push_str(&format!("printf '%s ALL=({}) NOPASSWD: ALL\\n' \"$REAL_USER\" > /etc/sudoers.d/sandbox-ai.tmp\n", users.join(",")));
-    s.push_str(r#"chmod 440 /etc/sudoers.d/sandbox-ai.tmp
-if visudo -cf /etc/sudoers.d/sandbox-ai.tmp >/dev/null; then mv /etc/sudoers.d/sandbox-ai.tmp /etc/sudoers.d/sandbox-ai; else rm -f /etc/sudoers.d/sandbox-ai.tmp; echo "could not write the permission file" >&2; exit 1; fi
+    s.push_str(&format!("printf '%s ALL=({}) NOPASSWD: ALL\\n' \"$REAL_USER\" > /etc/sudoers.d/homebody.tmp\n", users.join(",")));
+    s.push_str(r#"chmod 440 /etc/sudoers.d/homebody.tmp
+if visudo -cf /etc/sudoers.d/homebody.tmp >/dev/null; then mv /etc/sudoers.d/homebody.tmp /etc/sudoers.d/homebody; else rm -f /etc/sudoers.d/homebody.tmp; echo "could not write the permission file" >&2; exit 1; fi
 
 # 4. Leftovers from earlier experiments on this computer.
 rm -f /etc/sudoers.d/sandbox-ai-agent /etc/pf.anchors/com.sandboxai.fence /etc/pf.anchors/com.sandboxai.agent /etc/pf.anchors/com.sandboxai.main.conf
@@ -1055,7 +1097,7 @@ STEP="confirming the rules are loaded"
 state="$(/bin/bash "$SUPPORT/fence-watchdog.sh" --once)"
 case "$state" in
   ok*) echo "$state" ;;
-  *) echo "The packet filter rules did not load: $(tail -3 /var/run/sandboxai.fence.err 2>/dev/null | tr '\n' ' ')" >&2; false ;;
+  *) echo "The packet filter rules did not load: $(tail -3 /var/run/homebody.fence.err 2>/dev/null | tr '\n' ' ')" >&2; false ;;
 esac
 "#);
     s
@@ -1064,19 +1106,23 @@ esac
 pub fn remove_script(cfg: &Config) -> String {
     let mut s = String::from("#!/bin/bash\n# Homebody: remove everything setup created. Workspace folders are kept.\nset -uo pipefail\n");
     s.push_str(r#"launchctl bootout system/com.sandboxai.fence 2>/dev/null || true
-rm -f /Library/LaunchDaemons/com.sandboxai.fence.plist /etc/sudoers.d/sandbox-ai /etc/sudoers.d/sandbox-ai-agent
+rm -f /Library/LaunchDaemons/com.sandboxai.fence.plist /etc/sudoers.d/sandbox-ai /etc/pf.anchors/sandboxai /var/run/sandboxai.fence
 pfctl -q -a sandboxai -F all 2>/dev/null || true
-pfctl -q -f /etc/pf.conf 2>/dev/null || true
-rm -f /etc/pf.anchors/sandboxai /var/run/sandboxai.fence
 rm -rf "/Library/Application Support/SandboxAI"
+launchctl bootout system/app.homebody.fence 2>/dev/null || true
+rm -f /Library/LaunchDaemons/app.homebody.fence.plist /etc/sudoers.d/homebody /etc/sudoers.d/homebody-agent
+pfctl -q -a homebody -F all 2>/dev/null || true
+pfctl -q -f /etc/pf.conf 2>/dev/null || true
+rm -f /etc/pf.anchors/homebody /var/run/homebody.fence
+rm -rf "/Library/Application Support/Homebody"
 "#);
     for app in cfg.apps.iter().filter(|a| !a.windowed) {
         let u = sh_quote(&app.os_user);
         s.push_str(&format!("pkill -u {u} 2>/dev/null || true\ndscl . -delete /Users/{} 2>/dev/null || true\nrm -rf {}\n", app.os_user, sh_quote(&home_for(&app.os_user))));
     }
     // Private users left behind by apps that were added and later removed from the list.
-    s.push_str("for u in $(dscl . -list /Users | grep '^_sai'); do\n  if dscl . -read \"/Users/$u\" RealName 2>/dev/null | grep -Eq 'Sandbox-ai protected app|Homebody protected app'; then pkill -u \"$u\" 2>/dev/null || true; dscl . -delete \"/Users/$u\" 2>/dev/null || true; rm -rf \"/var/sai/${u#_sai}\"; fi\ndone\n");
-    s.push_str(&format!("dscl . -delete /Groups/{GROUP} 2>/dev/null || true\necho removed\n"));
+    s.push_str("for u in $(dscl . -list /Users | grep -E '^_(hb|sai)'); do\n  if dscl . -read \"/Users/$u\" RealName 2>/dev/null | grep -Eq 'Sandbox-ai protected app|Homebody protected app'; then pkill -u \"$u\" 2>/dev/null || true; dscl . -delete \"/Users/$u\" 2>/dev/null || true; rm -rf \"/var/homebody/${u#_hb}\" \"/var/sai/${u#_sai}\"; fi\ndone\n");
+    s.push_str(&format!("dscl . -delete /Groups/{GROUP} 2>/dev/null || true\ndscl . -delete /Groups/_sai 2>/dev/null || true\necho removed\n"));
     s
 }
 
@@ -1157,7 +1203,7 @@ mod tests {
         a.name = "Window".into();
         a.kind = "window".into();
         a.binary = bundle.into();
-        a.os_user = "_saiwin1".into();
+        a.os_user = "_hbwin1".into();
         a.proxy_port = crate::catalog::FIRST_CUSTOM_PORT;
         a.custom = true;
         a.windowed = true;
@@ -1188,9 +1234,9 @@ mod tests {
         // It never appears in anything an administrator approves or the packet filter loads.
         let mut cfg = Config::fresh();
         cfg.apps.push(a);
-        assert!(!filter_rules(&cfg, false).contains("_saiwin1") && !filter_rules(&cfg, true).contains("_saiwin1"));
-        assert!(!setup_script(&cfg, "tester").contains("_saiwin1"));
-        assert!(!remove_script(&cfg).contains("_saiwin1 "));
+        assert!(!filter_rules(&cfg, false).contains("_hbwin1") && !filter_rules(&cfg, true).contains("_hbwin1"));
+        assert!(!setup_script(&cfg, "tester").contains("_hbwin1"));
+        assert!(!remove_script(&cfg).contains("_hbwin1 "));
         assert!(cfg.provisioned().app("my-window").is_none());
     }
 
@@ -1208,8 +1254,8 @@ mod tests {
             script
         };
         // A path with a quote and a space cannot break out of the script.
-        let s = script_for("/Apps/It's here/Homebody.app/Contents/MacOS/sandbox-ai");
-        assert!(s.contains("'/Apps/It'\\''s here/Homebody.app/Contents/MacOS/sandbox-ai'"));
+        let s = script_for("/Apps/It's here/Homebody.app/Contents/MacOS/homebody-app");
+        assert!(s.contains("'/Apps/It'\\''s here/Homebody.app/Contents/MacOS/homebody-app'"));
     }
 
     #[test]
@@ -1224,17 +1270,17 @@ mod tests {
         let strict = filter_rules(&cfg, false);
         assert_eq!(rules.replace("\n# Agents reach the servers they started themselves, and nobody else's\nanchor \"*\"\n", ""), strict);
         assert!(!strict.contains("anchor"));
-        assert!(!strict.contains("pass out quick on lo0 proto tcp from any to any user _saiagent\n"));
+        assert!(!strict.contains("pass out quick on lo0 proto tcp from any to any user _hbagent\n"));
         // What the watchdog loads for an agent serving on two ports: those ports, for that agent,
         // and for those ports nobody else's socket.
-        let own = own_rules("_saiagent", &[3000, 5173]);
-        assert!(own.contains("port { 3000, 5173 } user _saiagent\n") && own.contains("port { 3000, 5173 } user != _saiagent\n"));
-        assert_eq!(own_anchor("_saiagent"), "own_agent");
+        let own = own_rules("_hbagent", &[3000, 5173]);
+        assert!(own.contains("port { 3000, 5173 } user _hbagent\n") && own.contains("port { 3000, 5173 } user != _hbagent\n"));
+        assert_eq!(own_anchor("_hbagent"), "own_agent");
         // The watchdog script writes the same two rules, and is told which users to do it for.
         assert!(WATCHDOG.contains("pass out quick on lo0 proto tcp from any to any port { %s } user %s") && WATCHDOG.contains("user != %s"));
         let script = setup_script(&cfg, "tester");
         let agents: Vec<&str> = cfg.apps.iter().filter(|a| a.kind == "agent").map(|a| a.os_user.as_str()).collect();
-        assert!(agents.len() >= 5 && !agents.contains(&"_saiollama"));
+        assert!(agents.len() >= 5 && !agents.contains(&"_hbollama"));
         assert!(script.contains(&format!("OWN_USERS=\"{}\"", agents.join(" "))) && !script.contains("@OWN@"));
         // The launch-time profile follows the same switch, and never opens another app's gate.
         let p = seatbelt_profile_for(claude, true);
@@ -1262,7 +1308,7 @@ mod tests {
                 // Checked as one file: the child rules use the same grammar as the main ones.
                 rules.push_str(&own_rules("root", &[3000, 5173]));
             }
-            assert!(!rules.contains("user _sai"));
+            assert!(!rules.contains("user _hb"));
             std::fs::write(&p, rules).unwrap();
             let out = std::process::Command::new("/sbin/pfctl").arg("-n").arg("-f").arg(&p).output().unwrap();
             let err = String::from_utf8_lossy(&out.stderr);
@@ -1272,8 +1318,8 @@ mod tests {
 
     #[test]
     fn the_app_bundle_is_found_from_its_executable() {
-        assert_eq!(bundle_of("/Applications/Homebody.app/Contents/MacOS/sandbox-ai").as_deref(), Some("/Applications/Homebody.app"));
-        assert_eq!(bundle_of("/Volumes/Homebody/Homebody.app/Contents/MacOS/sandbox-ai").as_deref(), Some("/Volumes/Homebody/Homebody.app"));
+        assert_eq!(bundle_of("/Applications/Homebody.app/Contents/MacOS/homebody-app").as_deref(), Some("/Applications/Homebody.app"));
+        assert_eq!(bundle_of("/Volumes/Homebody/Homebody.app/Contents/MacOS/homebody-app").as_deref(), Some("/Volumes/Homebody/Homebody.app"));
         assert_eq!(bundle_of("/usr/local/bin/sai"), None);
     }
 
@@ -1309,41 +1355,41 @@ mod tests {
 
     #[test]
     fn refusals_are_read_from_the_system_log() {
-        let v = parse_violation("Sandbox: Obsidian(7) deny(1) lsopen\nsai-app=my-window;open").unwrap();
+        let v = parse_violation("Sandbox: Obsidian(7) deny(1) lsopen\nhomebody-app=my-window;open").unwrap();
         assert_eq!((v.what, v.port), ("open", 0));
-        let v = parse_violation("Sandbox: Obsidian(7) deny(1) appleevent-send com.apple.finder\nsai-app=my-window;event").unwrap();
+        let v = parse_violation("Sandbox: Obsidian(7) deny(1) appleevent-send com.apple.finder\nhomebody-app=my-window;event").unwrap();
         assert_eq!(v.what, "control");
-        let v = parse_violation("Sandbox: curl(40242) deny(1) network-outbound remote:*:443\nsai-app=claude-code;net").unwrap();
+        let v = parse_violation("Sandbox: curl(40242) deny(1) network-outbound remote:*:443\nhomebody-app=claude-code;net").unwrap();
         assert_eq!(v, Violation { app: "claude-code".into(), process: "curl".into(), what: "direct", port: 443, count: 1 });
-        let v = parse_violation("Sandbox: node(7) deny(1) network-outbound /private/var/run/mDNSResponder\nsai-app=claude-code;dns").unwrap();
+        let v = parse_violation("Sandbox: node(7) deny(1) network-outbound /private/var/run/mDNSResponder\nhomebody-app=claude-code;dns").unwrap();
         assert_eq!((v.what, v.port), ("lookup", 0));
-        let v = parse_violation("Sandbox: x(7) deny(1) mach-lookup com.apple.dnssd.service\nsai-app=ollama;dns").unwrap();
+        let v = parse_violation("Sandbox: x(7) deny(1) mach-lookup com.apple.dnssd.service\nhomebody-app=ollama;dns").unwrap();
         assert_eq!((v.app.as_str(), v.what), ("ollama", "lookup"));
-        let v = parse_violation("Sandbox: python3.12(9) deny(1) network-bind local:*:8080\nsai-app=claude-code;net").unwrap();
+        let v = parse_violation("Sandbox: python3.12(9) deny(1) network-bind local:*:8080\nhomebody-app=claude-code;net").unwrap();
         assert_eq!((v.process.as_str(), v.what, v.port), ("python3.12", "listen", 0));
-        let v = parse_violation("Sandbox: ollama(9) deny(1) network-outbound remote:*:47110\nsai-app=ollama;gate").unwrap();
+        let v = parse_violation("Sandbox: ollama(9) deny(1) network-outbound remote:*:47110\nhomebody-app=ollama;gate").unwrap();
         assert_eq!((v.what, v.port), ("gate", 47110));
-        let v = parse_violation("4 duplicate reports for Sandbox: curl(1) deny(1) network-outbound remote:*:80\nsai-app=claude-code;net").unwrap();
+        let v = parse_violation("4 duplicate reports for Sandbox: curl(1) deny(1) network-outbound remote:*:80\nhomebody-app=claude-code;net").unwrap();
         assert_eq!((v.count, v.port), (4, 80));
-        let v = parse_violation("1 duplicate report for Sandbox: curl(1) deny(1) network-outbound remote:*:80\nsai-app=claude-code;net").unwrap();
+        let v = parse_violation("1 duplicate report for Sandbox: curl(1) deny(1) network-outbound remote:*:80\nhomebody-app=claude-code;net").unwrap();
         assert_eq!(v.count, 1);
     }
 
     #[test]
     fn refusals_without_our_tag_or_with_odd_names_are_handled() {
         assert!(parse_violation("Sandbox: curl(1) deny(1) network-outbound remote:*:443").is_none());
-        assert!(parse_violation("Sandbox: curl(1) deny(1) network-outbound remote:*:443\nsai-app=../x;net").is_none());
-        assert!(parse_violation("sai-app=claude-code;net").is_none());
+        assert!(parse_violation("Sandbox: curl(1) deny(1) network-outbound remote:*:443\nhomebody-app=../x;net").is_none());
+        assert!(parse_violation("homebody-app=claude-code;net").is_none());
         // A program chooses its own name; nothing but plain characters survives.
-        let v = parse_violation("Sandbox: <b>evil\u{1b}[31m(1) deny(1) network-outbound remote:*:443\nsai-app=claude-code;net").unwrap();
+        let v = parse_violation("Sandbox: <b>evil\u{1b}[31m(1) deny(1) network-outbound remote:*:443\nhomebody-app=claude-code;net").unwrap();
         assert_eq!(v.process, "bevil31m");
-        let long = format!("Sandbox: {}(1) deny(1) network-outbound remote:*:443\nsai-app=claude-code;net", "a".repeat(200));
+        let long = format!("Sandbox: {}(1) deny(1) network-outbound remote:*:443\nhomebody-app=claude-code;net", "a".repeat(200));
         assert_eq!(parse_violation(&long).unwrap().process.len(), 32);
     }
 
     #[test]
     fn only_kernel_records_count() {
-        let msg = "Sandbox: curl(1) deny(1) network-outbound remote:*:443\nsai-app=claude-code;net";
+        let msg = "Sandbox: curl(1) deny(1) network-outbound remote:*:443\nhomebody-app=claude-code;net";
         let kernel = serde_json::json!({ "processImagePath": "/kernel", "processID": 0, "eventMessage": msg }).to_string();
         assert!(violation_in(&kernel).is_some());
         let forged = serde_json::json!({ "processImagePath": "/usr/bin/logger", "processID": 500, "eventMessage": msg }).to_string();
@@ -1384,7 +1430,7 @@ mod tests {
 
     #[test]
     fn fenced_env_does_not_inherit_the_real_environment() {
-        std::env::set_var("SAI_TEST_SECRET", "hunter2");
+        std::env::set_var("HOMEBODY_TEST_SECRET", "hunter2");
         let cfg = Config::fresh();
         let app = cfg.app("claude-code").unwrap();
         let argv = fenced_argv(app, "/usr/bin/true", &[], &[], None);
@@ -1403,7 +1449,7 @@ mod tests {
         std::fs::write(&p, &script).unwrap();
         assert!(std::process::Command::new("/bin/zsh").arg("-n").arg(&p).status().unwrap().success(), "syntax error in:\n{script}");
         assert!(script.contains("/usr/bin/sandbox-exec"));
-        assert!(script.contains("-u' '_saiagent'") || script.contains("'-u' '_saiagent'"));
+        assert!(script.contains("-u' '_hbagent'") || script.contains("'-u' '_hbagent'"));
         assert!(script.contains("(deny network*"));
     }
 
@@ -1418,4 +1464,23 @@ mod tests {
             assert!(ok, "{name} script has a syntax error");
         }
     }
+
+    #[test]
+    fn setup_moves_this_computer_over_from_the_old_names_once() {
+        let cfg = Config::fresh();
+        let s = setup_script(&cfg, "me");
+        // The old service, rules and permission file go; the users are renamed in place.
+        assert!(s.contains("launchctl bootout system/com.sandboxai.fence"));
+        assert!(s.contains("pfctl -q -a sandboxai -F all"));
+        assert!(s.contains("rename_user '_saiagent' '_hbagent'") && s.contains("rename_user '_saiollama' '_hbollama'"));
+        assert!(s.contains("dscl . -change /Groups/_sai RecordName _sai \"$GROUP\""));
+        // ... before anything is made under the new names, so a rename never meets a new user.
+        let moved = s.find("rename_user '_saiagent'").unwrap();
+        assert!(moved < s.find("ensure_user '_hbagent'").unwrap());
+        assert!(moved < s.find("system folders").unwrap());
+        // Moved workspaces are given to their app.
+        assert!(s.contains("chown -R \"$u:$GROUP\" \"$d\""));
+        assert!(!s.contains("@RENAMES@"));
+    }
+
 }

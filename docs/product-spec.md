@@ -85,12 +85,12 @@ Out of scope (at least through v1.0):
 
 Components, all local except the optional self-hosted fleet server:
 
-1. CLI (`sai` as working command name). Creates and manages sandboxes, applies policy, launches agents, tails and exports logs. Single static binary, Homebrew cask and DMG on macOS.
+1. CLI (`homebody` as working command name). Creates and manages sandboxes, applies policy, launches agents, tails and exports logs. Single static binary, Homebrew cask and DMG on macOS.
 2. Guest image. A minimal Linux image we build and sign. Contains the agent runtimes (Node, Python, common toolchains), our guest agent, and our CA certificate baked into the system trust store and the Node, Python, Go, Rust and curl trust paths. The guest has no NIC. It has a vsock channel to the host.
 3. Guest agent. Runs in the guest. Reports process metadata (pid, binary, cwd) for each outbound connection to the proxy so receipts carry "which process asked." Enforces that `/etc/resolv.conf` points at the proxy and that no other resolver exists. Provides the in-guest `ask` UI hook.
 4. Egress proxy (host). Rust. Speaks HTTP CONNECT, SOCKS5 and a DNS-over-vsock resolver. Applies the compiled policy. Optionally terminates TLS using our CA for hosts marked `inspect`. Performs sentinel credential substitution. Emits receipts.
 5. Policy engine. Declarative policy file compiled to a validated, canonical, signed bundle. Presets for ecosystems and agents. Three modes: `strict` (deny unmatched), `ask` (prompt on unmatched, remember answer), `audit` (allow all, log all; onboarding and "what does this agent actually call?" discovery).
-6. Audit log. Append-only JSONL of receipts, each hash-chained to the previous and signed with a per-install Ed25519 key. `sai log verify` checks the chain. `sai log export` produces a signed bundle with the policy version that governed it.
+6. Audit log. Append-only JSONL of receipts, each hash-chained to the previous and signed with a per-install Ed25519 key. `homebody log verify` checks the chain. `homebody log export` produces a signed bundle with the policy version that governed it.
 7. Inference fence (host). Runs the local model daemon as a dedicated OS user with no outbound network permitted, and forwards a single localhost port into the guest over vsock. MVP implementation is a pf (macOS) or nftables (Linux) rule keyed on that user. v0.3 upgrades macOS to a Network Extension content filter for per-process attribution in the same audit log.
 8. Fleet server (v1.0, self-hosted). Open-source service that distributes signed policy bundles, collects receipts from fleet installs, provides SSO/SCIM, RBAC, MDM profile generation and compliance evidence export.
 
@@ -145,7 +145,7 @@ Rules of the model:
 
 Each receipt contains: timestamp, sandbox id, policy bundle hash, guest process (pid, binary, argv hash, cwd) when the guest agent could attribute it, destination name and resolved IP, port, protocol, SNI, decision (allow, deny, ask-allow, ask-deny), rule id, bytes in and out, duration, inspection result (none, clean, blocked-secret with pattern class), previous receipt hash, signature.
 
-Commands: `sai log tail`, `sai log query --deny --since 1h`, `sai log verify`, `sai log export --since <date> --format jsonl|csv`. Export includes the public key and the policy bundles referenced so a third party can verify without the install.
+Commands: `homebody log tail`, `homebody log query --deny --since 1h`, `homebody log verify`, `homebody log export --since <date> --format jsonl|csv`. Export includes the public key and the policy bundles referenced so a third party can verify without the install.
 
 ## 9. Threat model and published residual channels
 
@@ -168,23 +168,23 @@ We maintain a public bypass corpus as integration tests: null-byte and CRLF host
 - Proxy overhead: under 2 ms added latency for allow decisions without inspection, under 10 ms with inspection on typical API payloads.
 - Inference: host daemon serves the guest at native Metal or CUDA speed. No measurable regression versus running the agent on the host.
 - Footprint: guest image under 1 GB, memory configurable, default 4 GB.
-- UX: one command to wrap any supported agent, for example `sai run claude` or `sai run codex -- --full-auto`. First run offers `audit` mode for ten minutes, then proposes a policy from what it saw.
+- UX: one command to wrap any supported agent, for example `homebody run claude` or `homebody run codex -- --full-auto`. First run offers `audit` mode for ten minutes, then proposes a policy from what it saw.
 - Security engineering: parser fuzzing in CI, a published security policy with a 90-day disclosure window, signed releases with reproducible builds for the engine, third-party audit of the proxy before v1.0.
 - Privacy of the product itself: the CLI makes no network calls except update checks and preset fetches, both off by default and both logged through the same proxy. We are the first entry in our own audit log.
 
 ## 11. MVP definition (v0.1, macOS)
 
-v0.2 amendment: the MVP ships as the desktop app with Fence mode for native AI apps alongside the Box items below. Fence MVP: detect installed local-AI apps (Ollama, LM Studio, Jan, OpenClaw), one-click Private mode that denies their egress except user-approved destinations, plain-language alerts, and a "nothing left" proof view backed by the same signed log. Fence requires the Network Extension system extension, so the app installs to `/Applications` and is distributed directly, not via the Mac App Store. The `sai model fence` CLI item below becomes the CLI face of Fence.
+v0.2 amendment: the MVP ships as the desktop app with Fence mode for native AI apps alongside the Box items below. Fence MVP: detect installed local-AI apps (Ollama, LM Studio, Jan, OpenClaw), one-click Private mode that denies their egress except user-approved destinations, plain-language alerts, and a "nothing left" proof view backed by the same signed log. Fence requires the Network Extension system extension, so the app installs to `/Applications` and is distributed directly, not via the Mac App Store. The `homebody model fence` CLI item below becomes the CLI face of Fence.
 
 Ships when all of the following work on macOS Apple silicon (macOS 14 and later):
 
-1. `sai init` creates a policy from a preset list. `sai run claude` and `sai run codex` launch the agent in a guest with the current directory mounted.
+1. `homebody init` creates a policy from a preset list. `homebody run claude` and `homebody run codex` launch the agent in a guest with the current directory mounted.
 2. Guest has no NIC. All egress through the host proxy. DNS in the proxy. Verified by the bypass corpus.
 3. Policy modes `strict`, `ask` and `audit`. Presets: claude-code, codex, gemini-cli, npm, pypi, cargo, go, homebrew-in-guest, github-git. Telemetry hosts off by default.
 4. Credential shielding: home dotfiles never mounted; `ANTHROPIC_API_KEY` and `OPENAI_API_KEY` injected at the proxy via sentinel substitution.
 5. MCP servers configured for the agent run inside the guest and are governed by the same policy. This is the headline coverage difference versus vendor sandboxes.
 6. Signed, hash-chained receipts with `log tail`, `log query`, `log verify`, `log export`.
-7. Inference fence: `sai model fence ollama` runs Ollama as a dedicated user with pf denying its egress and forwards port 11434 into the guest. `sai model verify` proves zero egress over a window by reading the pf log.
+7. Inference fence: `homebody model fence ollama` runs Ollama as a dedicated user with pf denying its egress and forwards port 11434 into the guest. `homebody model verify` proves zero egress over a window by reading the pf log.
 8. Public GitHub repo under Apache-2.0, notarized DMG, Homebrew cask, bypass corpus in CI, residual-channels page, security policy.
 
 Explicitly not in v0.1: TLS inspection and content rules (v0.2), Linux (v0.2), filesystem snapshots and rollback (v0.3), Cursor and OpenClaw presets (v0.2), Windows (v1.x), fleet server (v1.0).
@@ -245,6 +245,6 @@ The product is free and open source in full. There are no tiers, no gated featur
 1a. Desktop shell: decided in v0.2. Tauri 2 with a shared Rust core. Electron rejected on size and memory.
 1b. Platform order: decided in v0.2. macOS, then Windows 11 (Hyper-V, user-mode WFP), then Linux (KVM, nftables).
 2. Policy language: custom YAML schema as sketched, or Cedar. Recommendation: YAML schema for v0.1 with a stable compiled form, keep Cedar as an export target for enterprise policy review.
-3. Working name and command. `sai` is a placeholder.
+3. Working name and command. Decided: the app is Homebody and the command line is `homebody`.
 4. Pricing and tiers: decided in v0.3. None. Fully open source under Apache-2.0.
 5. Governance model: single maintainer with public RFCs at first, or a foundation from the start. Recommendation: single maintainer now, revisit at v1.0.

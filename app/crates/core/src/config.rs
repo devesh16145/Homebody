@@ -140,7 +140,7 @@ impl AppConfig {
 }
 
 fn valid_os_user(u: &str) -> bool {
-    u.strip_prefix("_sai").map(|r| !r.is_empty() && r.len() <= 16 && r.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit())).unwrap_or(false)
+    u.strip_prefix("_hb").map(|r| !r.is_empty() && r.len() <= 16 && r.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit())).unwrap_or(false)
 }
 
 fn valid_id(id: &str) -> bool {
@@ -148,7 +148,7 @@ fn valid_id(id: &str) -> bool {
 }
 
 fn valid_workspace(w: &str) -> bool {
-    w.strip_prefix("/Users/Shared/SandboxAI/").map(valid_id).unwrap_or(false)
+    w.strip_prefix("/Users/Shared/Homebody/").map(valid_id).unwrap_or(false)
 }
 
 /// A display name with nothing in it but letters, digits, spaces and a little punctuation.
@@ -234,7 +234,7 @@ impl Config {
                         serves_port: p.serves_port,
                         loopback_all: p.loopback_all,
                         protected: true,
-                        workspace: if p.kind == "agent" { Some(format!("/Users/Shared/SandboxAI/{}", p.id)) } else { None },
+                        workspace: if p.kind == "agent" { Some(format!("/Users/Shared/Homebody/{}", p.id)) } else { None },
                         custom: false,
                         inspect: false,
                         secrets: true,
@@ -277,11 +277,28 @@ impl Config {
     pub fn load(path: &Path) -> Config {
         match std::fs::read(path).ok().and_then(|b| serde_json::from_slice::<Config>(&b).ok()) {
             Some(mut c) => {
+                c.rename_from_sandbox_ai();
                 c.merge_presets();
                 c.sanitize();
                 c
             }
             None => Config::fresh(),
+        }
+    }
+
+    /// Settings written before the app was called Homebody name the protected users "_sai…" and
+    /// put workspaces under /Users/Shared/SandboxAI. Setup renames both on this computer; this
+    /// moves the settings along with them.
+    fn rename_from_sandbox_ai(&mut self) {
+        for a in &mut self.apps {
+            if let Some(rest) = a.os_user.strip_prefix("_sai") {
+                a.os_user = format!("_hb{rest}");
+            }
+            if let Some(w) = &a.workspace {
+                if let Some(rest) = w.strip_prefix("/Users/Shared/SandboxAI/") {
+                    a.workspace = Some(format!("{}/{rest}", crate::fence::WORKSPACE_ROOT));
+                }
+            }
         }
     }
 
@@ -360,7 +377,7 @@ impl Config {
             return Err(problem);
         }
         let port = (catalog::FIRST_CUSTOM_PORT..=*catalog::GATE_PORTS.end()).find(|p| !self.apps.iter().any(|a| a.proxy_port == *p)).ok_or("No more apps can be added.")?;
-        let user_prefix = if windowed { "_saiwin" } else { "_saiapp" };
+        let user_prefix = if windowed { "_hbwin" } else { "_hbapp" };
         let n = (1..100).find(|n| !self.apps.iter().any(|a| a.os_user == format!("{user_prefix}{n}"))).ok_or("No more apps can be added.")?;
         let slug: String = name.to_lowercase().chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '-' }).collect::<String>().split('-').filter(|p| !p.is_empty()).collect::<Vec<_>>().join("-");
         let base = if slug.is_empty() { format!("app-{n}") } else { format!("my-{slug}") };
@@ -377,7 +394,7 @@ impl Config {
             serves_port: None,
             loopback_all: windowed,
             protected: true,
-            workspace: if windowed { None } else { Some(format!("/Users/Shared/SandboxAI/{id}")) },
+            workspace: if windowed { None } else { Some(format!("/Users/Shared/Homebody/{id}")) },
             custom: true,
             inspect: false,
             secrets: true,
@@ -473,14 +490,14 @@ mod tests {
         let mut c = Config::fresh();
         let id = c.add_custom("My Script!", "/bin/sh").unwrap();
         let a = c.app(&id).unwrap().clone();
-        assert_eq!((a.id.as_str(), a.name.as_str(), a.os_user.as_str(), a.proxy_port), ("my-my-script", "My Script", "_saiapp1", catalog::FIRST_CUSTOM_PORT));
-        assert_eq!(a.workspace.as_deref(), Some("/Users/Shared/SandboxAI/my-my-script"));
+        assert_eq!((a.id.as_str(), a.name.as_str(), a.os_user.as_str(), a.proxy_port), ("my-my-script", "My Script", "_hbapp1", catalog::FIRST_CUSTOM_PORT));
+        assert_eq!(a.workspace.as_deref(), Some("/Users/Shared/Homebody/my-my-script"));
         assert!(a.custom && a.protected && a.trust.is_empty() && a.kind == "agent");
         // A second one gets the next user and port; names must differ.
         assert!(c.add_custom("my script", "/bin/sh").unwrap_err().contains("already"));
         let id2 = c.add_custom("Other", "sh").unwrap();
         let b = c.app(&id2).unwrap();
-        assert_eq!((b.os_user.as_str(), b.proxy_port), ("_saiapp2", catalog::FIRST_CUSTOM_PORT + 1));
+        assert_eq!((b.os_user.as_str(), b.proxy_port), ("_hbapp2", catalog::FIRST_CUSTOM_PORT + 1));
         // Presets cannot be removed, added apps can.
         assert!(c.remove_custom("ollama").is_err());
         c.remove_custom(&id).unwrap();
@@ -503,14 +520,14 @@ mod tests {
         // An app whose user name would add a line to the administrator's permission file.
         let mut evil = c.app(&id).unwrap().clone();
         evil.id = "evil".into();
-        evil.os_user = "_saix ALL=(ALL) NOPASSWD: ALL\nroot".into();
+        evil.os_user = "_hbx ALL=(ALL) NOPASSWD: ALL\nroot".into();
         evil.proxy_port = 47130;
         c.apps.push(evil);
         // One whose name would add packet filter rules, one pointing its workspace elsewhere,
         // and one reusing another app's gate.
         let mut named = c.app(&id).unwrap().clone();
         named.id = "named".into();
-        named.os_user = "_sainamed".into();
+        named.os_user = "_hbnamed".into();
         named.proxy_port = 47131;
         named.name = "Nice\npass out quick all".into();
         named.local_ports = vec![22, 5432];
@@ -518,13 +535,13 @@ mod tests {
         c.apps.push(named);
         let mut elsewhere = c.app(&id).unwrap().clone();
         elsewhere.id = "elsewhere".into();
-        elsewhere.os_user = "_saielse".into();
+        elsewhere.os_user = "_hbelse".into();
         elsewhere.proxy_port = 47132;
-        elsewhere.workspace = Some("/Users/Shared/SandboxAI/../../etc".into());
+        elsewhere.workspace = Some("/Users/Shared/Homebody/../../etc".into());
         c.apps.push(elsewhere);
         let mut clash = c.app(&id).unwrap().clone();
         clash.id = "clash".into();
-        clash.os_user = "_saiclash".into();
+        clash.os_user = "_hbclash".into();
         clash.proxy_port = 47110;
         c.apps.push(clash);
         c.save(&p).unwrap();
@@ -577,4 +594,21 @@ mod tests {
         assert!(loaded.apps[0].trust.iter().all(|r| hostname::valid_pattern(&r.host)));
         assert!(!loaded.apps[0].trust.iter().any(|r| r.host == "*" || r.host == "127.0.0.1" || r.host == "*.com"));
     }
+
+    #[test]
+    fn settings_from_before_the_rename_follow_the_new_names() {
+        let mut c = Config::fresh();
+        c.apps[0].os_user = "_saiagent".into();
+        c.apps[0].workspace = Some("/Users/Shared/SandboxAI/claude-code".into());
+        let dir = std::env::temp_dir().join(format!("hb-rename-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let f = dir.join("settings.json");
+        std::fs::write(&f, serde_json::to_vec(&c).unwrap()).unwrap();
+        let back = Config::load(&f);
+        let a = back.app("claude-code").unwrap();
+        assert_eq!(a.os_user, "_hbagent");
+        assert_eq!(a.workspace.as_deref(), Some("/Users/Shared/Homebody/claude-code"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
 }

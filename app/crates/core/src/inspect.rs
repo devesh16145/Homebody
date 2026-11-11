@@ -160,12 +160,12 @@ fn pem_to_der(pem: &str) -> Option<CertificateDer<'static>> {
 /// Where protected apps can read the certificate. They cannot enter the user's home, so it
 /// lives in the shared folder, in a subfolder that belongs to the user.
 pub fn public_dir() -> PathBuf {
-    PathBuf::from(format!("/Users/Shared/SandboxAI-certificates/{}", crate::fence::real_user()))
+    PathBuf::from(format!("/Users/Shared/Homebody-certificates/{}", crate::fence::real_user()))
 }
 
 /// Only our authority: for programs that add to what they already trust.
 pub fn public_ca_path() -> PathBuf {
-    public_dir().join("sandbox-ai-ca.pem")
+    public_dir().join("homebody-ca.pem")
 }
 
 /// The system's authorities plus ours: for programs that replace what they trust with one file.
@@ -193,6 +193,13 @@ pub fn publish(ca_pem: &str, system_roots_pem: &str) -> Result<(), String> {
     }
     std::fs::write(public_ca_path(), ca_pem).map_err(fail)?;
     std::fs::write(public_bundle_path(), format!("{system_roots_pem}\n{ca_pem}")).map_err(fail)?;
+    // The folder used before the app was called Homebody. Ours, so ours to remove.
+    let legacy = PathBuf::from("/Users/Shared/SandboxAI-certificates");
+    let mine = legacy.join(crate::fence::real_user());
+    if owned_by_us(&mine).is_ok() {
+        let _ = std::fs::remove_dir_all(&mine);
+        let _ = std::fs::remove_dir(&legacy);
+    }
     Ok(())
 }
 

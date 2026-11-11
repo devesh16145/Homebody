@@ -1,55 +1,55 @@
-//! `sai` — the Homebody command line.
+//! `homebody`: the Homebody command line.
 //!
 //! Talks to the running app over its private control socket, or runs the engine itself with
-//! `sai daemon` when the app is not open. Same core, same rules, same log.
+//! `homebody daemon` when the app is not open. Same core, same rules, same log.
 
-use sai_core::{control, Engine};
+use homebody_core::{control, Engine};
 use serde_json::{json, Value};
 use std::os::unix::process::CommandExt;
 
-const HELP: &str = "sai — Homebody command line
+const HELP: &str = "homebody: the Homebody command line
 
-  sai status                      what is protected and how it is going
-  sai feed [-n N]                 recent connections
-  sai watch                       follow events live
-  sai mode private|watch|off      change mode
-  sai lockdown on|off             block everything / release
-  sai asks                        questions waiting for an answer
-  sai allow <id> [--always]       answer a question: allow once, or always
-  sai block <id>                  answer a question: block
-  sai trust <app> <host>          always allow a destination for an app
-  sai untrust <app> <host>        block a destination for an app
-  sai trusted [app]               list trusted and blocked destinations
-  sai proof                       the proof statement
-  sai verify [file]               check the log (or an exported log file) has not been altered
-  sai export-log                  save the whole signed log to Downloads
-  sai mode watch [minutes]        Watch for a while (default 60; 0 = until switched off)
-  sai watched                     places contacted under Watch that are not decided yet
-  sai start|stop <app>            start or stop a protected model
-  sai terminal <app> [project]    open a protected terminal for an agent, optionally in a project
-  sai project list <app>          projects brought in for an agent
-  sai project add <app> <folder>  bring a folder in: the agent works on a copy
-  sai project changes <app> <name>   what the agent changed in its copy
-  sai project apply <app> <name> [--replace-mine]   put those changes into your folder
-  sai project remove <app> <name>    delete the copy (your folder is not touched)
-  sai run <app> -- <command...>   run a command protected, in this terminal
-  sai open [feed|proof|studio|glance]   show a window of the running app
-  sai inspect <app> on|off        look inside an app's connections to trusted places
-  sai secrets <app> on|off        while looking inside, stop requests that carry a secret
-  sai inside [app]                switches for addresses inside trusted places
-  sai ask on|off                  ask about new places, or block them without asking
-  sai limit <app> <place> <MB|off>   megabytes an app may send to a place per hour
-  sai private [add|remove <folder>]  folders whose contents must never be sent
-  sai summary [days]              what each app did lately, and what was stopped
-  sai timestamp                   have a public service vouch for when the log existed
-  sai update                      ask whether a newer version has been published
-  sai inside <app> <place> <path> on|off   allow or refuse one address inside a place
-  sai found                       AI apps on this computer that are not protected yet
-  sai open-protected <app>        open an app protected (what a launcher does)
-  sai check                       re-check protection now
-  sai setup                       one-time setup (asks for the administrator password)
-  sai daemon                      run the engine without the app (foreground)
-  sai call <command> [json]       send a raw command (see docs/ipc.md)
+  homebody status                      what is protected and how it is going
+  homebody feed [-n N]                 recent connections
+  homebody watch                       follow events live
+  homebody mode private|watch|off      change mode
+  homebody lockdown on|off             block everything / release
+  homebody asks                        questions waiting for an answer
+  homebody allow <id> [--always]       answer a question: allow once, or always
+  homebody block <id>                  answer a question: block
+  homebody trust <app> <host>          always allow a destination for an app
+  homebody untrust <app> <host>        block a destination for an app
+  homebody trusted [app]               list trusted and blocked destinations
+  homebody proof                       the proof statement
+  homebody verify [file]               check the log (or an exported log file) has not been altered
+  homebody export-log                  save the whole signed log to Downloads
+  homebody mode watch [minutes]        Watch for a while (default 60; 0 = until switched off)
+  homebody watched                     places contacted under Watch that are not decided yet
+  homebody start|stop <app>            start or stop a protected model
+  homebody terminal <app> [project]    open a protected terminal for an agent, optionally in a project
+  homebody project list <app>          projects brought in for an agent
+  homebody project add <app> <folder>  bring a folder in: the agent works on a copy
+  homebody project changes <app> <name>   what the agent changed in its copy
+  homebody project apply <app> <name> [--replace-mine]   put those changes into your folder
+  homebody project remove <app> <name>    delete the copy (your folder is not touched)
+  homebody run <app> -- <command...>   run a command protected, in this terminal
+  homebody open [feed|proof|studio|glance]   show a window of the running app
+  homebody inspect <app> on|off        look inside an app's connections to trusted places
+  homebody secrets <app> on|off        while looking inside, stop requests that carry a secret
+  homebody inside [app]                switches for addresses inside trusted places
+  homebody ask on|off                  ask about new places, or block them without asking
+  homebody limit <app> <place> <MB|off>   megabytes an app may send to a place per hour
+  homebody private [add|remove <folder>]  folders whose contents must never be sent
+  homebody summary [days]              what each app did lately, and what was stopped
+  homebody timestamp                   have a public service vouch for when the log existed
+  homebody update                      ask whether a newer version has been published
+  homebody inside <app> <place> <path> on|off   allow or refuse one address inside a place
+  homebody found                       AI apps on this computer that are not protected yet
+  homebody open-protected <app>        open an app protected (what a launcher does)
+  homebody check                       re-check protection now
+  homebody setup                       one-time setup (asks for the administrator password)
+  homebody daemon                      run the engine without the app (foreground)
+  homebody call <command> [json]       send a raw command (see docs/ipc.md)
 
 Apps: claude-code, ollama";
 
@@ -132,7 +132,7 @@ async fn main() {
                 }
                 std::process::exit(1);
             }
-            eprintln!("sai daemon running. Ctrl-C to stop.");
+            eprintln!("homebody daemon running. Ctrl-C to stop.");
             // Stop cleanly however we are asked to: Ctrl-C, or a plain kill, logout or shutdown.
             let mut term = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()).expect("signal handler");
             tokio::select! {
@@ -140,7 +140,7 @@ async fn main() {
                 _ = term.recv() => {}
             }
             engine.shutdown().await;
-            let _ = std::fs::remove_file(sai_core::paths::control_socket());
+            let _ = std::fs::remove_file(homebody_core::paths::control_socket());
         }
         "status" => {
             let st = call("get_status", Value::Null).await;
@@ -222,13 +222,13 @@ async fn main() {
             // export folder, the log inside it is the thing to check.
             let given = std::path::Path::new(a(1));
             let file = if given.is_dir() { given.join("log.jsonl") } else { given.to_path_buf() };
-            let (c, key) = sai_core::ledger::verify_export(&file);
+            let (c, key) = homebody_core::ledger::verify_export(&file);
             if let Some(k) = key {
                 println!("signed with key: {k}");
             }
             if c.ok {
                 println!("OK: {} records, chain intact, all signatures valid.", c.count);
-                println!("Compare the key above with the one on the Proof screen (or `sai proof`) to know whose log this is.");
+                println!("Compare the key above with the one on the Report screen (or `homebody proof`) to know whose log this is.");
             } else {
                 println!("FAILED after {} records: {}", c.count, c.error.unwrap_or_default());
                 std::process::exit(2);
@@ -376,11 +376,11 @@ async fn main() {
         }
         "run" => {
             let Some(sep) = args.iter().position(|x| x == "--") else {
-                eprintln!("usage: sai run <app> -- <command...>");
+                eprintln!("usage: homebody run <app> -- <command...>");
                 std::process::exit(1);
             };
             let Some(program) = args.get(sep + 1) else {
-                eprintln!("usage: sai run <app> -- <command...>");
+                eprintln!("usage: homebody run <app> -- <command...>");
                 std::process::exit(1);
             };
             let cwd = args.iter().position(|x| x == "--cwd").filter(|i| *i < sep).and_then(|i| args.get(i + 1)).cloned();

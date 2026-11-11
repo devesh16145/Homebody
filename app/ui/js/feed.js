@@ -135,7 +135,7 @@ function bytesCell(e) {
 
 function rowHtml(e, open) {
   // Homebody's own contacts (the update check, a timestamp) carry the cat.
-  const who = e.appId === 'sandbox-ai' ? mark(28, 'private') : appTile(e.appIcon, e.appName, 28);
+  const who = e.appId === 'homebody' || e.appId === 'sandbox-ai' ? mark(28, 'private') : appTile(e.appIcon, e.appName, 28);
   return `<button class="ev-row" data-key="row" aria-expanded="${open}">
     ${who}
     <span class="ev-main"><b class="ev-what ellipsis">${esc(e.label || e.host)}</b><small class="ellipsis">${esc(e.appName)}${e.purpose ? ` · ${esc(e.purpose)}` : ''}</small></span>

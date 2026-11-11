@@ -1,5 +1,5 @@
 // The only module that touches the transport.
-// In the app: Tauri invoke + the single `sai:event` channel.
+// In the app: Tauri invoke + the single `homebody:event` channel.
 // In a plain browser: the in-page mock (shared with sibling iframes under dev.html).
 
 const tauri = typeof window !== 'undefined' ? window.__TAURI__ : null;
@@ -9,11 +9,11 @@ let mockPromise = null;
 function getMock() {
   if (!mockPromise) {
     let shared = null;
-    try { if (window.parent !== window) shared = window.parent.__SAI_MOCK__ || null; } catch (e) { /* cross-origin parent */ }
+    try { if (window.parent !== window) shared = window.parent.__HB_MOCK__ || null; } catch (e) { /* cross-origin parent */ }
     mockPromise = shared ? Promise.resolve(shared) : import('./mock.js').then((m) => {
       const scenario = new URLSearchParams(location.search).get('scenario') || 'private';
-      window.__SAI_MOCK__ = m.createMock(scenario);
-      return window.__SAI_MOCK__;
+      window.__HB_MOCK__ = m.createMock(scenario);
+      return window.__HB_MOCK__;
     });
   }
   return mockPromise;
@@ -25,7 +25,7 @@ const local = (v) => (v == null ? null : JSON.parse(JSON.stringify(v)));
 /** Call a core command. Resolves with the result, rejects with a plain string. */
 export async function invoke(cmd, args) {
   // The shell exposes one command; the core dispatches on `cmd` exactly as in docs/ipc.md.
-  if (tauri) return tauri.core.invoke('sai', { cmd, args: args ?? null });
+  if (tauri) return tauri.core.invoke('homebody', { cmd, args: args ?? null });
   const mock = await getMock();
   return local(await mock.invoke(cmd, args, { window: windowName }));
 }
@@ -35,7 +35,7 @@ export function onEvent(handler) {
   let off = null, cancelled = false;
   const stop = () => { cancelled = true; if (off) off(); };
   if (tauri) {
-    tauri.event.listen('sai:event', (e) => handler(e.payload)).then((un) => { off = un; if (cancelled) un(); });
+    tauri.event.listen('homebody:event', (e) => handler(e.payload)).then((un) => { off = un; if (cancelled) un(); });
   } else {
     getMock().then((mock) => {
       if (cancelled) return;

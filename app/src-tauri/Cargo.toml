@@ -1,5 +1,5 @@
 [package]
-name = "sandbox-ai"
+name = "homebody-app"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -10,6 +10,6 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 tauri = { version = "2", features = ["tray-icon", "macos-private-api", "image-png"] }
-sai-core = { path = "../crates/core" }
+homebody-core = { path = "../crates/core" }
 serde_json = "1"
 tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "signal"] }

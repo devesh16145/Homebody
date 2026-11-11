@@ -1,7 +1,7 @@
 #!/bin/bash
 # bypass-corpus.sh — every way we know of to get past the gate or the fence, as executable checks.
 #
-# Runs against a live engine (the app, or `sai daemon`). Each case is something that was a real
+# Runs against a live engine (the app, or `homebody daemon`). Each case is something that was a real
 # bypass in some agent sandbox in 2025–2026, or an obvious variation. A case passes when the
 # attempt is refused. Add a case here whenever a new bypass is published anywhere.
 #
@@ -10,7 +10,7 @@
 #   tests/bypass-corpus.sh fence      only the OS fence (runs commands as the protected user)
 set -u   # no pipefail: a refused command exits non-zero, and that is the outcome we are testing for
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-SAI="${SAI:-$HERE/../target/debug/sai}"
+SAI="${SAI:-$HERE/../target/debug/homebody}"
 APP="${APP_ID:-claude-code}"
 PORT="${GATE_PORT:-47110}"
 GATE="http://127.0.0.1:$PORT"
@@ -23,7 +23,7 @@ check() { # name, expected substring, actual
 code() { curl -x "$GATE" -sS -m 12 -o /dev/null -w '%{http_code}' "$@" 2>&1 | tr '\n' ' '; }
 raw()  { (printf "$1"; sleep "${2:-1}") | nc 127.0.0.1 "$PORT" 2>/dev/null | head -1 | tr -d '\r'; }
 
-"$SAI" status >/dev/null 2>&1 || { echo "The engine is not running. Open the app or run: sai daemon"; exit 1; }
+"$SAI" status >/dev/null 2>&1 || { echo "The engine is not running. Open the app or run: homebody daemon"; exit 1; }
 
 gate() {
   echo "Gate: destination names"
@@ -74,7 +74,7 @@ fence() {
 
   echo "Fence: who and where"
   check "runs as the protected user, not as you"        "NOT_ME" "$([ "$(R /usr/bin/id -un | tail -1)" != "$ME" ] && echo NOT_ME || echo SAME_USER)"
-  export SAI_CORPUS_SECRET=hunter2
+  export HOMEBODY_CORPUS_SECRET=hunter2
   check "your environment does not leak in"             "CLEAN"  "$(R /usr/bin/env | grep -q hunter2 && echo LEAKED || echo CLEAN)"
   check "trusted name through the gate (control)"       "404"    "$(R /usr/bin/curl -sS -m 10 -o /dev/null -w '%{http_code}' https://api.anthropic.com/ | tail -1)"
 
@@ -112,7 +112,7 @@ fence() {
   check "read a file in your home by exact path"        "denied" "$(R /bin/cat "$MYHOME/.zshrc" 2>&1 | grep -qiE 'not permitted|denied' && echo denied || echo READ)"
   check "read your SSH keys"                            "denied" "$(R /bin/ls "$MYHOME/.ssh" 2>&1 | grep -qiE 'not permitted|denied' && echo denied || echo LISTED)"
   check "create a file in your home"                    "denied" "$(refused R /usr/bin/touch "$MYHOME/.sai-corpus-probe")"
-  check "reach the control socket (approve itself)"     "denied" "$(R /bin/ls "$("$SAI" call get_policy_text >/dev/null 2>&1; echo "${SAI_DATA_DIR:-$MYHOME/Library/Application Support/SandboxAI}")/control.sock" 2>&1 | grep -qiE 'not permitted|denied' && echo denied || echo REACHED)"
+  check "reach the control socket (approve itself)"     "denied" "$(R /bin/ls "$("$SAI" call get_policy_text >/dev/null 2>&1; echo "${HOMEBODY_DATA_DIR:-$MYHOME/Library/Application Support/Homebody}")/control.sock" 2>&1 | grep -qiE 'not permitted|denied' && echo denied || echo REACHED)"
 }
 
 # Looking inside connections to trusted places. Switched on for the test and put back after.
@@ -125,7 +125,7 @@ inside() {
   marker="corpus-secret-$$"
   echo "Inside: connections to a trusted place"
   check "an ordinary request gets the real answer"       "401" "$(code "https://api.anthropic.com/v1/models?key=$marker")"
-  check "what follows \"?\" is never written down"        "0"   "$(grep -c "$marker" "${SAI_DATA_DIR:-$HOME/Library/Application Support/SandboxAI}/ledger.jsonl")"
+  check "what follows \"?\" is never written down"        "0"   "$(grep -c "$marker" "${HOMEBODY_DATA_DIR:-$HOME/Library/Application Support/Homebody}/ledger.jsonl")"
   check "a program not told about the certificate"       "000" "$(R /usr/bin/env -u CURL_CA_BUNDLE -u SSL_CERT_FILE /usr/bin/curl -sS -m 12 -o /dev/null -w '%{http_code}' https://api.anthropic.com/ | tail -1)"
   check "the trusted name as cover for another site"     "000" "$(code -H 'Host: attacker.example.net' -d 'stolen=data' https://api.anthropic.com/upload)"
   check "another site named with its port"               "000" "$(code -H 'Host: attacker.example.net:443' https://api.anthropic.com/)"
@@ -165,7 +165,7 @@ inside() {
   check "a private key in the content"                   "403" "$(code -d "{\"content\":\"$pad $key\"}" https://api.anthropic.com/v1/messages)"
   check "a token sent in chunks"                         "403" "$(code -H 'Transfer-Encoding: chunked' -d "{\"content\":\"$pad $tok $pad\"}" https://api.anthropic.com/v1/messages)"
   check "a token as the very last thing"                 "403" "$(code -d "$tok" https://api.anthropic.com/v1/messages)"
-  check "the token never reaches the log"                "0"   "$(grep -c "$tok" "${SAI_DATA_DIR:-$HOME/Library/Application Support/SandboxAI}/ledger.jsonl")"
+  check "the token never reaches the log"                "0"   "$(grep -c "$tok" "${HOMEBODY_DATA_DIR:-$HOME/Library/Application Support/Homebody}/ledger.jsonl")"
   "$SAI" secrets "$APP" off >/dev/null
   check "with the check switched off it goes"            "401" "$(code -d "{\"content\":\"$tok\"}" https://api.anthropic.com/v1/messages)"
   "$SAI" secrets "$APP" on >/dev/null

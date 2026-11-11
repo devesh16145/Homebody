@@ -63,9 +63,9 @@ function syncControls() {
 }
 
 function start() {
-  if (window.__SAI_MOCK__) window.__SAI_MOCK__.dispose();
+  if (window.__HB_MOCK__) window.__HB_MOCK__.dispose();
   const mock = createMock(state.scenario);
-  window.__SAI_MOCK__ = mock;          // the iframes pick this up through window.parent
+  window.__HB_MOCK__ = mock;          // the iframes pick this up through window.parent
   mock.onHost(onHost);
   mock.setFlag('failSetup', $('#fail').checked);
   mock.setLive($('#live').checked);
@@ -82,14 +82,14 @@ function start() {
 $('#scenario').innerHTML = SCENARIOS.map((s) => `<option value="${s}">${s}</option>`).join('');
 $('#scenario').addEventListener('change', (e) => { state.scenario = e.target.value; start(); });
 $('#reset').addEventListener('click', start);
-$('#live').addEventListener('change', (e) => window.__SAI_MOCK__.setLive(e.target.checked));
-$('#fail').addEventListener('change', (e) => window.__SAI_MOCK__.setFlag('failSetup', e.target.checked));
+$('#live').addEventListener('change', (e) => window.__HB_MOCK__.setLive(e.target.checked));
+$('#fail').addEventListener('change', (e) => window.__HB_MOCK__.setFlag('failSetup', e.target.checked));
 frames.forEach((f) => f.addEventListener('load', applyTheme));
 
 document.addEventListener('click', (ev) => {
   const t = ev.target.closest('button');
   if (!t) return;
-  if (t.dataset.sim) window.__SAI_MOCK__.simulate(t.dataset.sim);
+  if (t.dataset.sim) window.__HB_MOCK__.simulate(t.dataset.sim);
   else if (t.dataset.themeSet) { state.theme = t.dataset.themeSet; applyTheme(); syncControls(); }
   else if (t.dataset.size) { state.size = t.dataset.size; applySize(); syncControls(); }
   else if (t.dataset.show) setOff(t.dataset.show, false);

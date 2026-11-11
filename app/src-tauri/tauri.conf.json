@@ -2,10 +2,10 @@
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Homebody",
   "version": "0.1.0",
-  "identifier": "com.sandboxai.app",
+  "identifier": "app.homebody.mac",
   "build": {
     "frontendDist": "../ui",
-    "beforeBundleCommand": "cargo build --release -p sai"
+    "beforeBundleCommand": "cargo build --release -p homebody-cli"
   },
   "app": {
     "withGlobalTauri": true,
@@ -31,7 +31,7 @@
     "macOS": {
       "minimumSystemVersion": "13.0",
       "files": {
-        "MacOS/sai": "../target/release/sai"
+        "MacOS/homebody": "../target/release/homebody"
       }
     }
   }

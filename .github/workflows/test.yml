@@ -33,9 +33,9 @@ jobs:
         with:
           workspaces: app
       - name: Core unit tests
-        run: cargo test -p sai-core
+        run: cargo test -p homebody-core
       - name: The command line tool builds
-        run: cargo build -p sai
+        run: cargo build -p homebody-cli
       - uses: actions/setup-node@v4
         with:
           node-version: 22
