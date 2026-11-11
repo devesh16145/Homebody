@@ -59,18 +59,31 @@ rm -f "$HOME/hb-private.txt"
 refused "cannot become root with sudo"                   "$HB" run "$APP" --cwd / -- /usr/bin/sudo -n /usr/bin/true
 check "set-user-ID programs give it nothing"             "NoNewPrivs:	1" "$(R /bin/grep NoNewPrivs /proc/self/status)"
 
+# Each refusal below is only worth something if the same thing works without the fence, so the
+# same commands are run as you first. (A refusal that is really "no such program" proves nothing.)
+echo "Controls: the same things work for you"
+UDP_ASK='import socket; s=socket.socket(socket.AF_INET, socket.SOCK_DGRAM); s.settimeout(3); s.sendto(b"\x12\x34\x01\x00\x00\x01\x00\x00\x00\x00\x00\x00\x07example\x03com\x00\x00\x01\x00\x01", (HOST, 53)); print(len(s.recv(512)) > 0)'
+check "direct connection to an address works for you"    "ok"            "$(/usr/bin/curl -sS --noproxy '*' -m 8 -o /dev/null https://1.1.1.1/ && echo ok)"
+check "a UDP question to a name server works for you"    "True"          "$(/usr/bin/python3 -c "HOST='1.1.1.1'; $UDP_ASK" 2>&1)"
+check "a lookup through the system works for you"        "example.com"   "$(/usr/bin/getent hosts example.com 2>&1)"
+check "getaddrinfo works for you"                        "ok"            "$(/usr/bin/python3 -c 'import socket; socket.getaddrinfo("example.com", 443); print("ok")' 2>&1)"
+for tool in /usr/bin/curl /usr/bin/python3 /usr/bin/getent /usr/bin/ping /usr/bin/sudo /bin/ls /bin/cat /usr/bin/touch; do
+  [ -x "$tool" ] || { fail=$((fail+1)); printf '  \033[31m✗ %s is missing, so the cases using it would pass for the wrong reason\033[0m\n' "$tool"; }
+done
+
 echo "Straight to the internet"
 refused "direct connection to an address (TCP 443)"      "$HB" run "$APP" --cwd / -- /usr/bin/curl -sS --noproxy '*' -m 6 https://1.1.1.1/
 refused "direct connection on another port (TCP 80)"     "$HB" run "$APP" --cwd / -- /usr/bin/curl -sS --noproxy '*' -m 6 http://1.1.1.1/
 refused "direct connection over IPv6"                    "$HB" run "$APP" --cwd / -- /usr/bin/curl -sS --noproxy '*' -m 6 'https://[2606:4700:4700::1111]/'
-refused "UDP packet to a name server"                    "$HB" run "$APP" --cwd / -- /usr/bin/python3 -c 'import socket; s=socket.socket(socket.AF_INET, socket.SOCK_DGRAM); s.settimeout(3); s.sendto(b"\x12\x34\x01\x00\x00\x01\x00\x00\x00\x00\x00\x00\x07example\x03com\x00\x00\x01\x00\x01", ("1.1.1.1", 53)); print(s.recv(512))'
+refused "UDP packet to a name server"                    "$HB" run "$APP" --cwd / -- /usr/bin/python3 -c "HOST='1.1.1.1'; $UDP_ASK"
 refused "ping"                                           "$HB" run "$APP" --cwd / -- /usr/bin/ping -c 1 -W 3 1.1.1.1
 
 echo "Name lookups"
 refused "lookup through the system (getent)"             "$HB" run "$APP" --cwd / -- /usr/bin/getent hosts example.com
 refused "lookup from a program (getaddrinfo)"            "$HB" run "$APP" --cwd / -- /usr/bin/python3 -c 'import socket; print(socket.getaddrinfo("example.com", 443))'
-refused "lookup through the local resolver's own port"   "$HB" run "$APP" --cwd / -- /usr/bin/python3 -c 'import socket; s=socket.socket(socket.AF_INET, socket.SOCK_DGRAM); s.settimeout(3); s.sendto(b"\x12\x34\x01\x00\x00\x01\x00\x00\x00\x00\x00\x00\x07example\x03com\x00\x00\x01\x00\x01", ("127.0.0.53", 53)); print(s.recv(512))'
-if command -v resolvectl >/dev/null; then
+refused "lookup through the local resolver's own port"   "$HB" run "$APP" --cwd / -- /usr/bin/python3 -c "HOST='127.0.0.53'; $UDP_ASK"
+if [ -x /usr/bin/resolvectl ]; then
+  check "asking the resolver service works for you"      "example.com"   "$(/usr/bin/resolvectl query example.com 2>&1 | head -1)"
   refused "lookup by asking the resolver service"        "$HB" run "$APP" --cwd / -- /usr/bin/resolvectl query example.com
 fi
 refused "curl without the gate cannot find a name"       "$HB" run "$APP" --cwd / -- /usr/bin/curl -sS --noproxy '*' -m 6 https://example.com/

@@ -56,6 +56,9 @@ jobs:
       - name: Fence, end to end (Linux)
         if: runner.os == 'Linux' && !cancelled()
         run: bash tests/linux-fence.sh --remove
+      - name: The engine builds to the same file twice (Linux)
+        if: runner.os == 'Linux' && !cancelled()
+        run: bash scripts/repro-check.sh 2>&1 | tail -4
       - name: What the engine said (Linux)
         if: runner.os == 'Linux' && always()
         run: tail -40 /tmp/homebody-daemon.log || true; cat ~/.local/share/Homebody/logs/* 2>/dev/null | tail -40 || true; sudo journalctl -k -n 15 --no-pager | grep homebody || true

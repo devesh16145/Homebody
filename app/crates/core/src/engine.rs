@@ -1481,6 +1481,8 @@ impl Engine {
         // 3b. The same rules in a formal language, for reviewers who want to check them with
         // their own tools.
         let _ = crate::policy::write(&self.0.cfg.lock().unwrap(), &dir.join("policy"));
+        // 3c. Where this evidence fits in public control catalogues.
+        let _ = std::fs::write(dir.join("compliance.json"), serde_json::to_vec_pretty(&crate::compliance::json_table()).unwrap_or_default());
         // 4. Independent timestamps, if any were asked for.
         let stamps = paths::data_dir().join("timestamps");
         if let Ok(entries) = std::fs::read_dir(&stamps) {
@@ -1490,7 +1492,7 @@ impl Engine {
                 let _ = std::fs::copy(e.path(), out.join(e.file_name()));
             }
         }
-        let readme = "Homebody export\n=================\n\nlog.jsonl      Every decision, exactly as it was written. The first line says what the file is and\n               carries the key to check it with; each following line is one record, linked to the one\n               before and signed. Check it on any computer with:  homebody verify log.jsonl\n               Compare the key it prints with the one on the Report screen to know whose log it is.\nactivity.csv   The same events as a table for a spreadsheet. Convenient to read; it is not signed.\nrules.json     The rules in force when this export was made.\npolicy/        The same rules as Cedar policies, a formal language reviewers can check with their\n               own tools. See the README inside.\ntimestamps/    Present if independent timestamps were asked for. Each .tsr is a statement by a public\n               time-stamping service that a log ending in a given record existed at that time. Check\n               one with:  openssl ts -reply -in <file>.tsr -text\n";
+        let readme = "Homebody export\n=================\n\nlog.jsonl      Every decision, exactly as it was written. The first line says what the file is and\n               carries the key to check it with; each following line is one record, linked to the one\n               before and signed. Check it on any computer with:  homebody verify log.jsonl\n               Compare the key it prints with the one on the Report screen to know whose log it is.\nactivity.csv   The same events as a table for a spreadsheet. Convenient to read; it is not signed.\nrules.json     The rules in force when this export was made.\ncompliance.json  Which controls in NIST SP 800-53 and OWASP's list for AI agents this evidence\n               speaks to, and how far. The project's own mapping, not an auditor's.\npolicy/        The same rules as Cedar policies, a formal language reviewers can check with their\n               own tools. See the README inside.\ntimestamps/    Present if independent timestamps were asked for. Each .tsr is a statement by a public\n               time-stamping service that a log ending in a given record existed at that time. Check\n               one with:  openssl ts -reply -in <file>.tsr -text\n";
         std::fs::write(dir.join("README.txt"), readme).map_err(|e| fail("export", e))?;
         Ok(dir.to_string_lossy().into_owned())
     }

@@ -11,6 +11,7 @@
 //! - [`engine`]:   the state machine tying it together, and the command surface in docs/ipc.md
 //! - [`inspect`]:  looking inside traffic to trusted places: a local certificate authority, request lines
 //! - [`secrets`]:  recognising private keys and access tokens in what an app is about to send
+//! - [`compliance`]: where the evidence fits in NIST SP 800-53 and OWASP's agentic list
 //! - [`policy`]:   the rules in a formal language (Cedar), for review outside the app
 //! - [`projects`]: bring a folder in for an agent to work on, review, apply back
 //! - [`fence`]:    OS-level enforcement: private users, seatbelt profile, packet filter, launchers
@@ -20,6 +21,7 @@
 
 pub mod appicons;
 pub mod catalog;
+pub mod compliance;
 pub mod config;
 pub mod control;
 pub mod engine;
