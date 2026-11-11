@@ -96,6 +96,8 @@ function history(apps, now) {
   add(now - 100 * MIN, cc, 'github.com', A, 'trusted', 6100, 310000, 1100);
   add(now - 58 * MIN, cc, 'sentry.io', B, 'not_trusted');
   add(now - 44 * MIN, cc, '', B, 'around_gate');
+  add(now - 25 * MIN, cc, 'api.anthropic.com', B, 'not_trusted');
+  Object.assign(out[out.length - 1], { secret: { kind: 'a GitHub token', fingerprint: '3f9a1c0b7d2e4a65', allowed: false }, explanation: 'Claude Code was about to send what looks like a GitHub token to Anthropic API. Sandbox-ai stopped the request before it left.' });
   add(now - 31 * MIN, 'ollama', 'registry.ollama.ai', A, 'trusted', 4100, 1900000000, 48000);
   add(now - 14 * MIN, cc, 'api.anthropic.com', A, 'trusted', 22300, 140000, 3300);
   add(now - 9 * MIN, cc, 'statsig.anthropic.com', B, 'not_trusted');

@@ -150,6 +150,8 @@ pub struct AppStatus {
     pub inspect: bool,
     /// Whether it can be switched on for this kind of app.
     pub can_inspect: bool,
+    /// While looking inside, requests carrying something that looks like a secret are stopped.
+    pub secrets: bool,
     /// Installed, but in a way a protected app cannot use. A sentence for the user.
     pub problem: Option<String>,
 }
@@ -240,6 +242,19 @@ pub struct FeedEvent {
     /// Present when the connection was looked inside: what was asked for there, most frequent
     /// first. Paths only, never anything after "?".
     pub requests: Option<Vec<RequestKind>>,
+    /// Present when this row is a request that was stopped for carrying a secret.
+    pub secret: Option<SecretSeen>,
+}
+
+#[derive(Serialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SecretSeen {
+    /// In plain words, with its article: "a GitHub token".
+    pub kind: String,
+    /// Identifies this one secret on this computer without holding it.
+    pub fingerprint: String,
+    /// The user has since said this one may be sent.
+    pub allowed: bool,
 }
 
 #[derive(Serialize, Clone, Debug, PartialEq)]

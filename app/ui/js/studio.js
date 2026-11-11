@@ -267,7 +267,11 @@ const apps = {
       ${a.canStart && a.canInspect ? `<label class="ap-inside"><span class="grow"><b>Look inside</b><br><span class="muted">${a.inspect
           ? `On. The Feed shows what ${esc(a.name)} asks for inside its connections to trusted places, and a trusted name cannot be used as cover for another site. Applies the next time it is opened.`
           : `See what ${esc(a.name)} asks for inside its connections to trusted places: which addresses and how much, never the content. Uses a certificate that exists only on this computer and that only protected apps are told about.`}</span></span>
-        <span class="switch sm green"><input type="checkbox" role="switch" data-inside data-key="in-${esc(a.id)}" aria-label="Look inside ${esc(a.name)}'s connections"${a.inspect ? ' checked' : ''}><i></i></span></label>` : ''}
+        <span class="switch sm green"><input type="checkbox" role="switch" data-inside data-key="in-${esc(a.id)}" aria-label="Look inside ${esc(a.name)}'s connections"${a.inspect ? ' checked' : ''}><i></i></span></label>
+      ${a.inspect ? `<label class="ap-inside sub"><span class="grow"><b>Stop secrets leaving</b><br><span class="muted">${a.secrets
+          ? `On. If ${esc(a.name)} is about to send something that looks like a private key or an access token, the request is stopped before it leaves and shown in the Feed, where you can let that one through.`
+          : `Off. ${esc(a.name)} can send private keys and access tokens to the places it is trusted to reach.`}</span></span>
+        <span class="switch sm green"><input type="checkbox" role="switch" data-secrets data-key="sec-${esc(a.id)}" aria-label="Stop secrets leaving from ${esc(a.name)}"${a.secrets ? ' checked' : ''}><i></i></span></label>` : ''}` : ''}
       ${a.kind === 'window' ? `<div class="ap-meta ap-lighter"><b>Lighter protection.</b> Nothing it sends can skip the gate: you see it and are asked, or it is refused. It can still read your files, as it always could, and only the copy you open from here is protected. To make that possible its own inner sandbox is switched off.</div>` : ''}
       ${a.kind === 'agent' && a.canStart ? projects.section(a) : ''}
       ${err ? `<div class="notice error" role="alert">${icon('alert')}<span>${esc(err)}</span></div>` : ''}
@@ -301,6 +305,7 @@ export function init(el, context) {
   on(root, 'change', 'input[data-login]', (ev, i) => advanced.setLogin(i.checked));
   on(root, 'change', 'input[data-inside-rule]', (ev, i) => trusted.setInside(i.closest('.tr-app').dataset.app, i.dataset.host, i.dataset.path, i.checked));
   on(root, 'change', 'input[data-inside]', (ev, i) => apps.run(i.closest('.ap-card').dataset.app, 'app_set_inspect', { on: i.checked }));
+  on(root, 'change', 'input[data-secrets]', (ev, i) => apps.run(i.closest('.ap-card').dataset.app, 'app_set_secrets', { on: i.checked }));
   on(root, 'submit', '.ap-form', (ev, form) => { ev.preventDefault(); apps.add(form); });
   on(root, 'input', '.ap-form input', (ev, i) => apps.keep(i.form));
   on(root, 'click', '[data-do]', (ev, b) => {

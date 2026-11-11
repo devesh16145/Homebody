@@ -35,6 +35,7 @@ const HELP: &str = "sai — Sandbox-ai command line
   sai run <app> -- <command...>   run a command protected, in this terminal
   sai open [feed|proof|studio|glance]   show a window of the running app
   sai inspect <app> on|off        look inside an app's connections to trusted places
+  sai secrets <app> on|off        while looking inside, stop requests that carry a secret
   sai inside [app]                switches for addresses inside trusted places
   sai inside <app> <place> <path> on|off   allow or refuse one address inside a place
   sai found                       AI apps on this computer that are not protected yet
@@ -291,6 +292,14 @@ async fn main() {
             for app in st["apps"].as_array().into_iter().flatten() {
                 if s(app, "id") == a(1) {
                     println!("{}: looking inside is {}", s(app, "name"), if app["inspect"].as_bool() == Some(true) { "on" } else { "off" });
+                }
+            }
+        }
+        "secrets" => {
+            let st = call("app_set_secrets", json!({ "appId": a(1), "on": a(2) != "off" })).await;
+            for app in st["apps"].as_array().into_iter().flatten() {
+                if s(app, "id") == a(1) {
+                    println!("{}: stopping secrets is {}", s(app, "name"), if app["secrets"].as_bool() == Some(true) { "on" } else { "off" });
                 }
             }
         }

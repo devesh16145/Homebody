@@ -493,6 +493,36 @@ impl Engine {
         Ok(())
     }
 
+    /// The recogniser for secrets in this app's requests, if that is switched on for it.
+    pub(crate) fn secret_scanner(&self, app_id: &str) -> Option<crate::secrets::Scanner> {
+        if !self.0.cfg.lock().unwrap().app(app_id).map(|a| a.secrets).unwrap_or(false) {
+            return None;
+        }
+        // Fingerprints are particular to this computer: salted with its own log key.
+        let salt = self.0.ledger.lock().unwrap().public_key_b64();
+        let (engine, app_id) = (self.clone(), app_id.to_string());
+        Some(crate::secrets::Scanner::new(&salt, move |fp| engine.0.cfg.lock().unwrap().app(&app_id).map(|a| a.allowed_secrets.iter().any(|f| f == fp)).unwrap_or(false)))
+    }
+
+    /// Let one particular secret through for an app from now on, or stop doing so.
+    fn allow_secret(&self, app_id: &str, fingerprint: &str, allowed: bool) -> Result<(), String> {
+        if fingerprint.len() != 16 || !fingerprint.chars().all(|c| c.is_ascii_hexdigit()) {
+            return Err("That is not a fingerprint from the Feed.".into());
+        }
+        {
+            let mut cfg = self.0.cfg.lock().unwrap();
+            let app = cfg.app_mut(app_id).ok_or("Unknown app.")?;
+            app.allowed_secrets.retain(|f| f != fingerprint);
+            if allowed {
+                app.allowed_secrets.push(fingerprint.to_string());
+            }
+        }
+        self.save_cfg();
+        self.append("trust", fields! { "app" => app_id, "secret" => fingerprint, "enabled" => allowed, "via" => "secret" });
+        self.touch();
+        Ok(())
+    }
+
     /// Whether a request for this address inside a trusted place may go (the user's switches).
     pub(crate) fn inside_allowed(&self, app_id: &str, host: &str, path: &str) -> bool {
         self.0.cfg.lock().unwrap().app(app_id).map(|a| a.inside_allows(host, path)).unwrap_or(false)
@@ -909,6 +939,10 @@ impl Engine {
             Reason::YouAllowedOnce => "You allowed this once.".into(),
             Reason::YouAlwaysAllow => "You chose to always allow this.".into(),
             Reason::YouBlocked => "You blocked this.".into(),
+            Reason::NotTrusted if row.detail == "secret" => {
+                let kind = row.other.split('|').next().unwrap_or("a secret");
+                format!("{app_name} was about to send what looks like {kind} to {label}. Sandbox-ai stopped the request before it left.")
+            }
             Reason::NotTrusted if row.detail == "path" => {
                 let (what, _) = catalog::describe_inside(&row.host, &row.other);
                 let named = if what.is_empty() { row.other.clone() } else { format!("{what} ({})", row.other) };
@@ -992,6 +1026,10 @@ impl Engine {
             bytes_in: row.bytes_in,
             duration_ms: row.duration_ms,
             trusted,
+            secret: (row.detail == "secret").then(|| {
+                let (kind, fingerprint) = row.other.split_once('|').unwrap_or((row.other.as_str(), ""));
+                SecretSeen { kind: kind.to_string(), fingerprint: fingerprint.to_string(), allowed: app.map(|a| a.allowed_secrets.iter().any(|f| f == fingerprint)).unwrap_or(false) }
+            }),
             requests: row.requests.as_ref().map(|r| {
                 r.iter()
                     .map(|(what, times)| {
@@ -1099,6 +1137,7 @@ impl Engine {
                 custom: a.custom,
                 inspect: a.inspect && Self::cannot_inspect(a).is_none(),
                 can_inspect: Self::cannot_inspect(a).is_none(),
+                secrets: a.secrets,
                 problem,
             });
         }
@@ -1586,6 +1625,18 @@ impl Engine {
             "remove_inside_rule" => {
                 self.set_inside(&req("appId")?, &req("host")?, &req("path")?, None)?;
                 ok(&self.inside_list(None))
+            }
+            "app_set_secrets" => {
+                let id = req("appId")?;
+                let on = b("on")?;
+                self.0.cfg.lock().unwrap().app_mut(&id).ok_or("Unknown app.")?.secrets = on;
+                self.save_cfg();
+                self.append("app", fields! { "action" => if on { "stop_secrets_on" } else { "stop_secrets_off" }, "app" => id.as_str() });
+                ok(&self.status())
+            }
+            "allow_secret" => {
+                self.allow_secret(&req("appId")?, &req("fingerprint")?, b("allowed")?)?;
+                Ok(Value::Null)
             }
             "app_set_inspect" => {
                 self.set_inspect(&req("appId")?, b("on")?)?;

@@ -58,6 +58,7 @@ interface AppStatus {
   problem: string | null;       // installed, but where a protected app cannot reach it (inside the home folder). A sentence for the user
   inspect: boolean;             // looking inside is switched on
   canInspect: boolean;          // false for windowed apps and model servers: they take trusted certificates from the Mac
+  secrets: boolean;             // requests carrying a secret are stopped (acts only while inspect is on)
 }
 
 type Verb = "allowed" | "blocked" | "asked" | "seen";
@@ -93,7 +94,10 @@ interface FeedEvent {
   bytesIn: number | null;
   durationMs: number | null;
   trusted: boolean;             // is this destination currently Trusted for this app
-  requests?: { what: string; times: number; path: string; label: string; allowed: boolean }[] | null;
+  requests?: { what: string; times: number; path: string; label: string; allowed: boolean   secret?: { kind: string; fingerprint: string; allowed: boolean } | null;
+                                // present when this row is a request stopped for carrying a secret. `kind` reads
+                                // "a GitHub token"; the secret itself is never stored, only this fingerprint
+}[] | null;
                                 // present when the connection was looked inside: "POST /v1/messages" and how often,
                                 // most frequent first; `label` in plain words when known ("Conversation");
                                 // `allowed` is the current switch for that path. Never anything after "?"
@@ -211,6 +215,8 @@ interface SetupResult { ok: boolean; message: string; }
 | `get_inside_rules` | `{ appId?: string }` | `InsideEntry[]` | switches for addresses inside trusted places. `InsideEntry = { appId, host, hostLabel, path, label, purpose, enabled, source }`; `path` is the start of a path, matched by whole segments |
 | `set_inside_rule` | `{ appId, host, path, enabled }` | `InsideEntry[]` | allow or refuse one address inside a place; creates the switch if missing (source "you"). Acts only while the app's connections are looked inside |
 | `remove_inside_rule` | `{ appId, host, path }` | `InsideEntry[]` | only switches with source "you" |
+| `app_set_secrets` | `{ appId, on }` | `Status` | while looking inside, stop requests whose content holds something that looks like a private key or access token. On by default |
+| `allow_secret` | `{ appId, fingerprint, allowed }` | `null` | let one particular secret through for this app from now on, or stop doing so. `fingerprint` comes from `FeedEvent.secret` |
 | `app_set_inspect` | `{ appId, on }` | `Status` | look inside this app's connections to trusted places (see "Looking inside" in the README). Switching on creates this computer's certificate authority if needed and puts its certificate where protected apps can read it. Rejects apps that cannot support it with a sentence for the user |
 | `app_set_protected` | `{ appId, protected }` | `Status` | |
 | `app_start` | `{ appId }` | `Status` | model apps: start the protected instance |

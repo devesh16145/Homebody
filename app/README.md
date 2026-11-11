@@ -36,6 +36,7 @@ Status: 11 Nov 2026. Everything in the table runs end to end on this Mac in the 
 | Every run of setup keeps a record of what it did as administrator (`logs/setup.sh.last.log`) | Working; it is what explained the failed first design |
 | Looking inside (off by default, per app): the gate ends the app's encrypted connection with a certificate from an authority that exists only on this computer, opens its own to the real server and checks that server's certificate the ordinary way, and reads the request lines in between. The Feed shows which paths were asked for and how often. The site named inside a request must be the approved one, which stops a trusted name being used as cover for another site; requests that cannot be followed (two lengths, unusual encodings, a tunnel inside) are not let through. Only method and path are recorded, never what follows "?", headers or content. Nothing is added to the Mac's trusted certificates: only protected apps are told, through their environment | Working, tested live with Claude Code, Codex, Gemini, Aider and opencode (each accepted it), seven bypass cases. Not available for Ollama or windowed apps: they take trusted certificates from the Mac itself. HTTP/1.1 only is offered while looking inside |
 | Switches inside a place: with looking inside on, one address inside a trusted place can be refused while the rest keeps working ("Refuse" in the Feed, or Studio → Trusted). Each request is held back until it has been checked, so nothing of a refused request leaves, not even its first line. An address is judged as written and as a forgiving server would read it (escapes, capitals, dot segments, doubled slashes, parameters), so respelling it does not get around the switch. Claude Code's event logging comes switched off | Working: 13 bypass cases, tested live with direct requests (the refused address gets a 403 from Sandbox-ai, its neighbours and the conversation address reach the real server). Not yet seen: Claude Code itself being refused its event logging, because it did not try to send any in the runs after the switch existed |
+| Stop secrets leaving (on whenever looking inside is on): the content of each request is examined as it passes for private key blocks and for access tokens with a maker's prefix (GitHub, Slack, Stripe, Anthropic, OpenAI project keys, Google API keys, AWS access key ids). A request carrying one is stopped and the app is told why. The most recent 512 bytes of content are always held back, so a secret sent in pieces does not get its first half out. The Feed shows the kind and offers "Let this one through", which applies to that one secret for that one app. The secret is never stored: only a fingerprint particular to this computer | Working: 10 unit tests on the recogniser and the hold-back, 7 bypass cases, and the whole flow run live with made-up tokens |
 | A program installed inside your home folder is detected and explained instead of failing silently | Working |
 | Open at login (Studio → Advanced) | Built; not yet tried across a real login |
 
@@ -80,6 +81,7 @@ app/
     feed.rs          ledger records folded into Feed rows (same code live and at startup)
     proxy.rs         the gate: request parsing, TLS greeting check, relay with byte counts
     inspect.rs       looking inside: the local certificate authority, reading request lines
+    secrets.rs       recognising private keys and access tokens in what is about to be sent
     engine.rs        decisions, ask flow, status, proof, the command surface
     fence.rs         OS users, seatbelt profile, packet filter rules, setup script, launchers
     projects.rs      bring a folder in for an agent, compare, apply back
@@ -93,7 +95,7 @@ app/
 
 The UI calls one command, `sai`, with `{cmd, args}`; the core's `dispatch` serves the app, the CLI and scripts alike. Opened in a plain browser, the UI runs against an in-page mock of the same contract (`ui/dev.html` is a review harness with scenarios).
 
-Sizes in this build: 80 unit tests, 69 bypass cases, a 7.2 MB app including the command-line tool (the encryption libraries for looking inside added about 2 MB), a 4 MB disk image.
+Sizes in this build: 86 unit tests, 76 bypass cases, a 7.2 MB app including the command-line tool (the encryption libraries for looking inside added about 2 MB), a 4 MB disk image.
 
 ## Verify it yourself
 
@@ -147,7 +149,10 @@ So the "219 KB to Anthropic at start-up" noted in the first build was event logg
 
 - **Agents work on a copy of your project, not on the folder itself.** This is deliberate: nothing an agent does can damage your work until you apply it. The costs: changes are not live in your editor until applied, the agent's own commits stay in the copy (its changes arrive in your folder as ordinary edits), and files you edit after bringing a project in do not reach the copy. Sharing a folder in place is possible but was left out for now, because granting an agent a path into your home also exposes neighbouring files to it by file permissions alone.
 - **A link an agent creates is applied as a link.** The review shows where every new link points; read that line before applying.
-- **Content is not examined.** With looking inside on you see, and can switch off, addresses inside a trusted place; what is said in a request that is allowed is not read. With looking inside off (the default) the Feed shows only the place and the size, and the switches inside a place do nothing.
+- **Secrets are recognised by shape, and only some.** Private key blocks and a handful of token formats. Not passwords, not secrets without a tell-tale form, and not one that has been encoded, compressed, split with other text in between or reworded. It catches an agent carelessly sending your `.env` file; it does not stop an agent set on getting a secret out. Only the content of requests is examined, not addresses or headers.
+- **Web sockets are not examined.** After an app switches a connection to a web socket, what flows is no longer read. Codex talks to its provider that way, so for Codex the check covers little.
+- **A stopped secret can stall a conversation.** If the secret is in an agent's conversation so far, every later request carries it and is stopped too, until you let that one through or start a fresh conversation.
+- **With looking inside off (the default) none of this acts.** The Feed shows only the place and the size, and the switches inside a place and the check for secrets do nothing.
 - **A refused address closes its connection.** The app is told "403, switched off" and the connection ends; an app that had other requests waiting on the same connection has to reconnect. Refusing an address an app depends on can stop the app working: the switch is yours to turn back on.
 - **Attempts that go around the gate are shown without the address.** macOS reports the program and the port, not where it was trying to go. Attempts to read your files are stopped by ordinary file permissions before the fence sees them, so those are not shown at all. The Network Extension version will show both.
 - **A trusted name can front for another site only where looking inside is off.** The greeting check stops the simple version everywhere; the full check (the site named inside each request) needs looking inside, which Ollama and windowed apps cannot use.

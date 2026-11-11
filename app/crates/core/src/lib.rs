@@ -10,6 +10,7 @@
 //! - [`proxy`]:    the local gate each protected app must go through
 //! - [`engine`]:   the state machine tying it together, and the command surface in docs/ipc.md
 //! - [`inspect`]:  looking inside traffic to trusted places: a local certificate authority, request lines
+//! - [`secrets`]:  recognising private keys and access tokens in what an app is about to send
 //! - [`projects`]: bring a folder in for an agent to work on, review, apply back
 //! - [`fence`]:    OS-level enforcement: private users, seatbelt profile, packet filter, launchers
 //! - [`control`]:  a local socket so the CLI and scripts can drive a running engine
@@ -27,6 +28,7 @@ pub mod model;
 pub mod paths;
 pub mod projects;
 pub mod proxy;
+pub mod secrets;
 
 pub use engine::{Engine, Event};
 pub use model::*;

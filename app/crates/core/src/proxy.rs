@@ -376,7 +376,11 @@ async fn inspected(engine: &Engine, app_id: &str, host: &str, decision: &Decisio
         let (engine, app_id, host) = (engine.clone(), app_id.to_string(), host.to_string());
         move |path: &str| engine.inside_allowed(&app_id, &host, path)
     };
-    let sniffer = std::sync::Mutex::new(crate::inspect::Sniffer::with_rules(host, rules));
+    let mut reader = crate::inspect::Sniffer::with_rules(host, rules);
+    if let Some(scanner) = engine.secret_scanner(app_id) {
+        reader = reader.scanning(scanner);
+    }
+    let sniffer = std::sync::Mutex::new(reader);
     let trouble: std::sync::Mutex<Option<crate::inspect::Trouble>> = std::sync::Mutex::new(None);
     let (mut cr, cw) = tokio::io::split(client);
     let (mut ur, mut uw) = tokio::io::split(upstream);
@@ -401,9 +405,13 @@ async fn inspected(engine: &Engine, app_id: &str, host: &str, decision: &Decisio
                         out.fetch_add(pass.len() as u64, Ordering::Relaxed);
                     }
                     if let Err(t) = verdict {
-                        if matches!(t, crate::inspect::Trouble::Refused(_)) {
+                        let said = match &t {
+                            crate::inspect::Trouble::Refused(_) => Some("Blocked by Sandbox-ai: this address is switched off.".to_string()),
+                            crate::inspect::Trouble::Secret(found) => Some(format!("Blocked by Sandbox-ai: this request contained what looks like {}. It was not sent.", found.kind)),
+                            _ => None,
+                        };
+                        if let Some(body) = said {
                             // Tell the app plainly, so it sees a refusal and not a dropped line.
-                            let body = "Blocked by Sandbox-ai: this address is switched off.";
                             let no = format!("HTTP/1.1 403 Forbidden\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len());
                             let mut w = cw.lock().await;
                             let _ = w.write_all(no.as_bytes()).await;
@@ -449,6 +457,7 @@ async fn inspected(engine: &Engine, app_id: &str, host: &str, decision: &Decisio
         Some(crate::inspect::Trouble::OtherSite(other)) => engine.record_refusal(app_id, host, 443, Reason::Malformed, "other_site", &other),
         Some(crate::inspect::Trouble::NotUnderstood(what)) => engine.record_refusal(app_id, host, 443, Reason::Malformed, "not_followed", what),
         Some(crate::inspect::Trouble::Refused(path)) => engine.record_refusal(app_id, host, 443, Reason::NotTrusted, "path", &path),
+        Some(crate::inspect::Trouble::Secret(found)) => engine.record_refusal(app_id, host, 443, Reason::NotTrusted, "secret", &format!("{}|{}", found.kind, found.fingerprint)),
         None => {}
     }
 }

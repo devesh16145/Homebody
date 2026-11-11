@@ -233,6 +233,8 @@ pub enum Trouble {
     NotUnderstood(&'static str),
     /// A request for an address inside the site that the user has switched off.
     Refused(String),
+    /// The content of a request held something that looks like a secret.
+    Secret(crate::secrets::Found),
 }
 
 const HEAD_LIMIT: usize = 64 * 1024;
@@ -264,15 +266,75 @@ pub struct Sniffer {
     /// Whether a request for this path (no query) may go. The user's switches for addresses
     /// inside a trusted place.
     allow: Box<dyn Fn(&str) -> bool + Send>,
+    /// Looks at the content of requests for secrets, when that is switched on.
+    scanner: Option<crate::secrets::Scanner>,
+    /// Bytes waiting to be passed on, in order, while the scanner still holds back the content
+    /// before them. Each piece is marked as content (true) or as the framing around it.
+    waiting: std::collections::VecDeque<(Vec<u8>, bool)>,
+    /// How many waiting content bytes the scanner has cleared.
+    cleared: usize,
 }
 
 impl Sniffer {
+    /// Also look at the content of each request for secrets (see `secrets`).
+    pub fn scanning(mut self, scanner: crate::secrets::Scanner) -> Sniffer {
+        self.scanner = Some(scanner);
+        self
+    }
+
+    /// Pass these bytes on, or queue them behind content the scanner is still holding back.
+    fn emit(&mut self, bytes: &[u8], content: bool, pass: &mut Vec<u8>) -> Result<(), Trouble> {
+        let Some(scanner) = self.scanner.as_mut() else {
+            pass.extend_from_slice(bytes);
+            return Ok(());
+        };
+        if content {
+            self.cleared += scanner.push(bytes).map_err(Trouble::Secret)?;
+            self.waiting.push_back((bytes.to_vec(), true));
+        } else if self.waiting.is_empty() {
+            pass.extend_from_slice(bytes);
+            return Ok(());
+        } else {
+            self.waiting.push_back((bytes.to_vec(), false));
+        }
+        self.release(pass);
+        Ok(())
+    }
+
+    /// The content of the current request has ended: what was held back is judged and let go.
+    fn content_ended(&mut self, pass: &mut Vec<u8>) -> Result<(), Trouble> {
+        if let Some(scanner) = self.scanner.as_mut() {
+            self.cleared += scanner.finish().map_err(Trouble::Secret)?;
+            self.release(pass);
+        }
+        Ok(())
+    }
+
+    fn release(&mut self, pass: &mut Vec<u8>) {
+        while let Some((bytes, content)) = self.waiting.front_mut() {
+            if !*content {
+                pass.extend_from_slice(bytes);
+            } else if self.cleared >= bytes.len() {
+                self.cleared -= bytes.len();
+                pass.extend_from_slice(bytes);
+            } else {
+                // Part of this piece is cleared; the rest stays.
+                let n = self.cleared;
+                pass.extend_from_slice(&bytes[..n]);
+                bytes.drain(..n);
+                self.cleared = 0;
+                return;
+            }
+            self.waiting.pop_front();
+        }
+    }
+
     pub fn new(host: &str) -> Sniffer {
         Sniffer::with_rules(host, |_| true)
     }
 
     pub fn with_rules(host: &str, allow: impl Fn(&str) -> bool + Send + 'static) -> Sniffer {
-        Sniffer { host: host.to_ascii_lowercase(), state: State::Head, buf: Vec::new(), seen: Vec::new(), requests: 0, allow: Box::new(allow) }
+        Sniffer { host: host.to_ascii_lowercase(), state: State::Head, buf: Vec::new(), seen: Vec::new(), requests: 0, allow: Box::new(allow), scanner: None, waiting: Default::default(), cleared: 0 }
     }
 
     /// What was asked for, most frequent first.
@@ -293,15 +355,19 @@ impl Sniffer {
                 }
                 State::Body(left) | State::ChunkData(left) => {
                     let take = (left.min(data.len() as u64)) as usize;
-                    pass.extend_from_slice(&data[..take]);
+                    self.emit(&data[..take], true, pass)?;
                     data = &data[take..];
                     let left = left - take as u64;
+                    let ended = matches!((&self.state, left), (State::Body(_), 0));
                     self.state = match (&self.state, left) {
                         (State::Body(_), 0) => State::Head,
                         (State::Body(_), n) => State::Body(n),
                         (_, 0) => State::ChunkEnd,
                         (_, n) => State::ChunkData(n),
                     };
+                    if ended {
+                        self.content_ended(pass)?;
+                    }
                 }
                 State::Head | State::ChunkSize | State::ChunkEnd | State::Trailers => {
                     // Line-shaped parts: held back until the part is complete and checked.
@@ -336,6 +402,10 @@ impl Sniffer {
                 let line = std::str::from_utf8(&part).map_err(|_| Trouble::NotUnderstood("a chunk size that is not text"))?;
                 let hex = line.split(';').next().unwrap_or("").trim();
                 let size = u64::from_str_radix(hex, 16).map_err(|_| Trouble::NotUnderstood("a chunk size that is not a number"))?;
+                if size == 0 {
+                    // The last chunk: the content is complete.
+                    self.content_ended(pass)?;
+                }
                 self.state = if size == 0 { State::Trailers } else { State::ChunkData(size) };
             }
             State::ChunkEnd => {
@@ -352,9 +422,10 @@ impl Sniffer {
             }
             _ => unreachable!("only line-shaped states get here"),
         }
-        // Checked and understood: this part may go.
-        pass.extend_from_slice(&part);
-        pass.extend_from_slice(end);
+        // Checked and understood: this part may go, in its place behind anything still held.
+        let mut framing = part;
+        framing.extend_from_slice(end);
+        self.emit(&framing, false, pass)?;
         Ok(Some(used))
     }
 
@@ -658,6 +729,58 @@ mod tests {
         assert_eq!(rule_path("/A/b/../C//d/./e;x=1?q"), "/a/c/d/e");
         assert_eq!(rule_path("/../../.."), "/");
         assert_eq!(rule_path("/%zz/%4"), "/%zz/%4");
+    }
+
+    fn token() -> String {
+        format!("gh{}_{}", "p", "A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8")
+    }
+
+    fn scanning(allowed: bool) -> Sniffer {
+        Sniffer::new("api.example.com").scanning(crate::secrets::Scanner::new("this-computer", move |_| allowed))
+    }
+
+    #[test]
+    fn a_request_carrying_a_secret_is_stopped_before_the_secret_leaves() {
+        let filler = "x".repeat(1500);
+        let body = format!("{{\"content\":\"{filler} my key is {} thanks {filler}\"}}", token());
+        let plain = format!("POST /v1/messages HTTP/1.1\r\nHost: api.example.com\r\nContent-Length: {}\r\n\r\n{body}", body.len());
+        // The same content sent in chunks, with the secret split across two of them.
+        let cut = body.find("gh").unwrap() + 9;
+        let chunked = format!("POST /v1/messages HTTP/1.1\r\nHost: api.example.com\r\nTransfer-Encoding: chunked\r\n\r\n{:x}\r\n{}\r\n{:x}\r\n{}\r\n0\r\n\r\n", cut, &body[..cut], body.len() - cut, &body[cut..]);
+        for wire in [&plain, &chunked] {
+            for step in [1, 13, 600, 4096] {
+                let (out, trouble) = passed(scanning(false), wire.as_bytes(), step);
+                assert!(matches!(&trouble, Some(Trouble::Secret(f)) if f.kind == "a GitHub token"), "step {step}: {trouble:?}");
+                let sent = String::from_utf8_lossy(&out);
+                assert!(!sent.contains("gh") || !sent.contains(&token()[..12]), "step {step}: part of the secret left");
+                assert!(!sent.contains("thanks"), "step {step}: nothing after it left either");
+            }
+        }
+    }
+
+    #[test]
+    fn with_scanning_on_everything_else_arrives_complete_and_in_order() {
+        let small = b"POST /a HTTP/1.1\r\nHost: api.example.com\r\nContent-Length: 5\r\n\r\nhello";
+        let big_body = "y".repeat(3000);
+        let big = format!("POST /b HTTP/1.1\r\nHost: api.example.com\r\nContent-Length: {}\r\n\r\n{big_body}", big_body.len());
+        let chunked = b"POST /c HTTP/1.1\r\nHost: api.example.com\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nhello\r\n6\r\n world\r\n0\r\nX-T: 1\r\n\r\n";
+        let get = b"GET /d HTTP/1.1\r\nHost: api.example.com\r\n\r\n";
+        let wire = [small.as_slice(), big.as_bytes(), chunked.as_slice(), get.as_slice(), small.as_slice()].concat();
+        for step in [1, 7, 512, 513, 4096, 100_000] {
+            let (out, trouble) = passed(scanning(false), &wire, step);
+            assert_eq!(trouble, None, "step {step}");
+            assert!(out == wire, "step {step}: what arrives is exactly what was sent");
+        }
+        // A secret the user has let through goes like anything else.
+        let body = format!("key {}", token());
+        let with_secret = format!("POST /v1/messages HTTP/1.1\r\nHost: api.example.com\r\nContent-Length: {}\r\n\r\n{body}", body.len());
+        let (out, trouble) = passed(scanning(true), with_secret.as_bytes(), 11);
+        assert_eq!((out.as_slice(), trouble), (with_secret.as_bytes(), None));
+        // Bytes are held back only within a request: a finished request has left completely.
+        let mut s = scanning(false);
+        let mut out = Vec::new();
+        s.feed(small, &mut out).unwrap();
+        assert_eq!(out, small);
     }
 
     #[test]

@@ -82,6 +82,13 @@ pub struct AppConfig {
     /// user switches it on.
     #[serde(default)]
     pub inspect: bool,
+    /// While looking inside: stop requests whose content holds something that looks like a
+    /// secret (see `secrets`). On unless the user switches it off.
+    #[serde(default = "yes")]
+    pub secrets: bool,
+    /// Fingerprints of secrets the user has said this app may send.
+    #[serde(default)]
+    pub allowed_secrets: Vec<String>,
     /// A windowed app. It cannot run as another user, so it runs as you under the launch-time
     /// profile alone: its network is fenced, its access to your files is not. `binary` is the
     /// path of the .app, and `os_user` is a placeholder that is never created or used.
@@ -202,6 +209,8 @@ impl Config {
                         workspace: if p.kind == "agent" { Some(format!("/Users/Shared/SandboxAI/{}", p.id)) } else { None },
                         custom: false,
                         inspect: false,
+                        secrets: true,
+                        allowed_secrets: vec![],
                         windowed: false,
                         projects: vec![],
                         trust: vec![],
@@ -279,6 +288,7 @@ impl Config {
                 // A windowed app decides for itself whom it trusts; it cannot be told about ours.
                 a.inspect = false;
             }
+            a.allowed_secrets.retain(|f| f.len() == 16 && f.chars().all(|c| c.is_ascii_hexdigit()));
             a.inside.retain(|r| hostname::canonical(&r.host).as_deref() == Some(r.host.as_str()) && valid_inside_path(&r.path));
             a.trust.retain(|r| hostname::valid_pattern(&r.host));
             for r in &mut a.trust {
@@ -342,6 +352,8 @@ impl Config {
             workspace: if windowed { None } else { Some(format!("/Users/Shared/SandboxAI/{id}")) },
             custom: true,
             inspect: false,
+            secrets: true,
+            allowed_secrets: vec![],
             windowed,
             projects: vec![],
             trust: vec![],

@@ -147,6 +147,20 @@ inside() {
   check "the rest of the place still works"              "401" "$(code https://api.anthropic.com/v1/models)"
   check "switched off, hidden after an honest request"   "403" "$(R /usr/bin/curl -sS -m 12 -o /dev/null -w '%{http_code} ' https://api.anthropic.com/v1/models --next -sS -m 12 -o /dev/null -w '%{http_code}' https://api.anthropic.com/corpus/off | tail -1 | awk '{print $2}')"
   "$SAI" call remove_inside_rule "{\"appId\":\"$APP\",\"host\":\"api.anthropic.com\",\"path\":\"/corpus/off\"}" >/dev/null
+  echo "Inside: secrets in what is sent"
+  # Made up here, so that no file holds something token-shaped. Not real credentials.
+  tok="gh""p_$(printf 'A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8')"
+  key="-----BEGIN OPENSSH PRIV""ATE KEY-----\\nb3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAtz\\n"
+  pad="$(printf 'x%.0s' $(seq 1 1500))"
+  check "a request with nothing secret in it"            "401" "$(code -d "{\"content\":\"$pad hello\"}" https://api.anthropic.com/v1/messages)"
+  check "an access token in the content"                 "403" "$(code -d "{\"content\":\"$pad my token is $tok\"}" https://api.anthropic.com/v1/messages)"
+  check "a private key in the content"                   "403" "$(code -d "{\"content\":\"$pad $key\"}" https://api.anthropic.com/v1/messages)"
+  check "a token sent in chunks"                         "403" "$(code -H 'Transfer-Encoding: chunked' -d "{\"content\":\"$pad $tok $pad\"}" https://api.anthropic.com/v1/messages)"
+  check "a token as the very last thing"                 "403" "$(code -d "$tok" https://api.anthropic.com/v1/messages)"
+  check "the token never reaches the log"                "0"   "$(grep -c "$tok" "${SAI_DATA_DIR:-$HOME/Library/Application Support/SandboxAI}/ledger.jsonl")"
+  "$SAI" secrets "$APP" off >/dev/null
+  check "with the check switched off it goes"            "401" "$(code -d "{\"content\":\"$tok\"}" https://api.anthropic.com/v1/messages)"
+  "$SAI" secrets "$APP" on >/dev/null
   [ "$was_on" = "True" ] || "$SAI" inspect "$APP" off >/dev/null
 }
 

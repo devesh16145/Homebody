@@ -101,7 +101,7 @@ export function createMock(scenarioName) {
         fence: a.protected ? f : 'not_installed', running: a.running,
         canStart: a.installed && a.protected && f === 'up' && !a.problem, workspace: a.workspace,
         custom: !!a.custom, problem: a.problem || null,
-        inspect: !!a.inspect, canInspect: a.kind === 'agent',
+        inspect: !!a.inspect, canInspect: a.kind === 'agent', secrets: a.secrets !== false,
         today: counters(todays.filter((e) => e.appId === a.id)),
       })),
       pending,
@@ -434,6 +434,11 @@ export function createMock(scenarioName) {
       const i = mockInside.findIndex((x) => x.appId === appId && x.host === host && x.path === path && x.source === 'you');
       if (i >= 0) mockInside.splice(i, 1);
       return local(mockInside);
+    },
+    async app_set_secrets({ appId, on } = {}) { needApp(appId).secrets = !!on; queueStatus(); return status(); },
+    async allow_secret({ appId, fingerprint, allowed } = {}) {
+      s.events.forEach((e) => { if (e.secret && e.appId === appId && e.secret.fingerprint === fingerprint) e.secret.allowed = !!allowed; });
+      return null;
     },
     async app_set_inspect({ appId, on } = {}) {
       const a = needApp(appId);

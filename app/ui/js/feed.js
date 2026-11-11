@@ -151,6 +151,12 @@ function actionsHtml(e) {
     return `<span class="ev-state">Waiting for your answer</span><span data-ask="${esc(ask.id)}" class="row">`
       + btn('once', 'Allow once') + btn('always', 'Always allow') + btn('block', 'Block') + '</span>' + errHtml;
   }
+  if (e.secret) {
+    return e.secret.allowed
+      ? `<span class="ev-state">You have since let this one through for ${esc(e.appName)}.</span>` + btn('secret-stop', 'Stop it again') + errHtml
+      : `<span class="ev-state">Stopped: it held what looks like ${esc(e.secret.kind)}. Nothing of it was sent.</span>`
+        + `<button class="btn sm" data-do="secret-allow" data-key="secret-allow" title="Use this only if you know what it is and mean to send it. Applies to this one secret, for ${esc(e.appName)} only.">Let this one through</button>` + errHtml;
+  }
   if (e.reason === 'around_gate') {
     return '<span class="ev-state">Refused by the fence. Protected apps can only reach the network through the gate.</span>';
   }
@@ -246,6 +252,15 @@ async function act(what, btn) {
   const e = li && byId.get(Number(li.dataset.id));
   if (!e) return;
   rowError.delete(e.id);
+  if (what === 'secret-allow' || what === 'secret-stop') {
+    const allowed = what === 'secret-allow';
+    try {
+      await invoke('allow_secret', { appId: e.appId, fingerprint: e.secret.fingerprint, allowed });
+      for (const other of byId.values()) if (other.secret && other.appId === e.appId && other.secret.fingerprint === e.secret.fingerprint) other.secret.allowed = allowed;
+      ctx.toast(allowed ? `${e.appName} may send that one from now on. Ask it to try again.` : 'It will be stopped again.');
+    } catch (err) { rowError.set(e.id, errText(err)); }
+    return renderList();
+  }
   if (what === 'inside-on' || what === 'inside-off') {
     // A switch for one address inside this place; the place itself stays as it is.
     const path = btn.dataset.path, enabled = what === 'inside-on';
