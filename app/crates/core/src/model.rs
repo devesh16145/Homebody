@@ -150,6 +150,8 @@ pub struct AppStatus {
     pub fence: FenceState,
     pub running: bool,
     pub can_start: bool,
+    /// The command that starts it (for an agent), as an editor or script would run it protected.
+    pub command: String,
     pub workspace: Option<String>,
     pub today: Counters,
     /// Added by the user ("protect your own app"); can be removed.

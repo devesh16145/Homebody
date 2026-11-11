@@ -1,0 +1,29 @@
+<idea-plugin>
+  <id>app.homebody.idea</id>
+  <name>Homebody</name>
+  <vendor url="https://github.com/devesh16145/Homebody">Homebody</vendor>
+  <description><![CDATA[
+    Homebody keeps your AI agents from sending anything anywhere you have not agreed to.
+    This plugin brings the parts you need while working into the editor: a status indicator,
+    Homebody's questions, an agent opened protected on a copy of your project, and a way to
+    block everything at once. It talks only to the Homebody app running on this computer.
+  ]]></description>
+  <depends>com.intellij.modules.platform</depends>
+
+  <extensions defaultExtensionNs="com.intellij">
+    <statusBarWidgetFactory id="HomebodyStatus" implementation="app.homebody.idea.HomebodyWidgetFactory" order="first"/>
+    <notificationGroup id="Homebody" displayType="STICKY_BALLOON"/>
+    <postStartupActivity implementation="app.homebody.idea.HomebodyStartup"/>
+  </extensions>
+
+  <actions>
+    <group id="Homebody.Menu" text="Homebody" popup="true">
+      <add-to-group group-id="ToolsMenu" anchor="last"/>
+      <action id="Homebody.OpenAgent" class="app.homebody.idea.OpenAgentAction" text="Open an Agent Protected, on This Project" description="The agent works on a copy of this project and cannot touch anything else of yours."/>
+      <action id="Homebody.ReviewChanges" class="app.homebody.idea.ReviewChangesAction" text="Review What the Agent Changed" description="See the agent's changes and put them into your project."/>
+      <action id="Homebody.ShowActivity" class="app.homebody.idea.ShowActivityAction" text="Show Recent Activity" description="What your agents reached, and what was stopped."/>
+      <action id="Homebody.BlockEverything" class="app.homebody.idea.BlockEverythingAction" text="Block Everything Now" description="Stops every protected app from sending anything, at once."/>
+      <action id="Homebody.Release" class="app.homebody.idea.ReleaseAction" text="Stop Blocking Everything" description="Back to the usual rules."/>
+    </group>
+  </actions>
+</idea-plugin>

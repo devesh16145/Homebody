@@ -1,0 +1,21 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Places this project asks for",
+  "description": "A project can name the places its tools need, so nobody has to type them. Homebody only ever shows this list to the person at the computer; it never trusts a place because a file says so.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "trust": {
+      "description": "Places on the internet this project's tools need, for example a package registry.",
+      "type": "array",
+      "maxItems": 30,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "description": "A name such as registry.npmjs.org, or *.example.com for everything under example.com. Not an address in numbers, and not everything under a whole ending such as *.com.",
+        "pattern": "^(\\*\\.)?([a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\\.)+[a-zA-Z]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?$",
+        "maxLength": 253
+      }
+    }
+  }
+}

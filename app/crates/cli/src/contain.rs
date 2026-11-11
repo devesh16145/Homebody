@@ -4,9 +4,10 @@
 //! app's folders exist, starts the relay inside the space, starts the program inside the space,
 //! waits for it, and stops the relay.
 //!
-//! `__relay` runs *inside* the space. It listens where the app expects its gate
-//! (127.0.0.1:<port>, which inside an app container reaches only programs in the same
-//! container) and passes every connection through the named pipe to the real gate outside.
+//! `__relay` runs *inside* the space. It listens on a port of its own on 127.0.0.1 (which
+//! inside an app container reaches only programs in the same container), the program is told
+//! that port is its gate, and every connection is passed through the named pipe to the real
+//! gate outside.
 
 use homebody_core::fence_windows::{self as win, Contained, ContainerSid};
 use std::time::Duration;
@@ -50,7 +51,13 @@ pub async fn contain(args: &[String]) -> i32 {
         // allowed to read it.
         let me = std::env::current_exe().map_err(|e| e.to_string())?.to_string_lossy().into_owned();
         win::grant(&me, &sid_text, false)?;
-        let relay = Contained::spawn(&sid, &[me, "__relay".into(), port.to_string(), win::gate_pipe(app)], &win::base_env(home), home)?;
+        // The relay cannot listen on the gate's own port: a container shares this computer's
+        // port numbers, and the real gate already holds that one. It gets a free port of its
+        // own, and the program is pointed at that instead.
+        let relay_port = std::net::TcpListener::bind(("127.0.0.1", 0)).and_then(|l| l.local_addr()).map(|a| a.port()).map_err(|e| format!("No free port for the relay: {e}"))?;
+        let (gate_at, relay_at) = (format!("127.0.0.1:{port}"), format!("127.0.0.1:{relay_port}"));
+        let env: Vec<(String, String)> = env.iter().map(|(k, v)| (k.clone(), if k.to_ascii_uppercase().ends_with("_PROXY") { v.replace(&gate_at, &relay_at) } else { v.clone() })).collect();
+        let relay = Contained::spawn(&sid, &[me, "__relay".into(), relay_port.to_string(), win::gate_pipe(app)], &win::base_env(home), home)?;
         // Give it a moment to start listening; the program's first connection needs it.
         std::thread::sleep(Duration::from_millis(500));
         let program = Contained::spawn(&sid, &command, &env, cwd);

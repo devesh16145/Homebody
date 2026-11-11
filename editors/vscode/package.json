@@ -1,0 +1,43 @@
+{
+  "name": "homebody",
+  "displayName": "Homebody",
+  "description": "See what your AI agents reach, answer Homebody's questions, and open an agent protected, without leaving the editor.",
+  "version": "0.1.0",
+  "publisher": "homebody",
+  "license": "Apache-2.0",
+  "engines": { "vscode": "^1.80.0" },
+  "categories": ["Other"],
+  "keywords": ["ai", "agent", "privacy", "network", "sandbox"],
+  "main": "./extension.js",
+  "activationEvents": ["onStartupFinished"],
+  "contributes": {
+    "commands": [
+      { "command": "homebody.menu", "title": "Homebody: What can I do?" },
+      { "command": "homebody.openAgent", "title": "Homebody: Open an agent protected, in this folder" },
+      { "command": "homebody.reviewChanges", "title": "Homebody: Review what the agent changed" },
+      { "command": "homebody.showActivity", "title": "Homebody: Show recent activity" },
+      { "command": "homebody.trustProjectPlaces", "title": "Homebody: Trust places this project asks for" },
+      { "command": "homebody.blockEverything", "title": "Homebody: Block everything now" },
+      { "command": "homebody.release", "title": "Homebody: Stop blocking everything" }
+    ],
+    "configuration": {
+      "title": "Homebody",
+      "properties": {
+        "homebody.cliPath": {
+          "type": "string",
+          "default": "",
+          "description": "Where the homebody command is. Leave empty to find it by itself (inside the Homebody app, or on your PATH)."
+        },
+        "homebody.askInEditor": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show Homebody's questions here as well as in Homebody's own pop-up."
+        }
+      }
+    },
+    "jsonValidation": [
+      { "fileMatch": ".homebody.json", "url": "./schemas/homebody.schema.json" }
+    ]
+  },
+  "scripts": { "test": "node test/run.js" }
+}

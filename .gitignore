@@ -19,3 +19,4 @@ box_ed25519*
 
 # Icons copied from apps installed on this Mac, for design previews only (not ours to publish)
 app/ui/.local-icons/
+*.vsix

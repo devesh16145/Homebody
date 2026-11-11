@@ -1331,6 +1331,7 @@ impl Engine {
                 fence: state,
                 running: running.contains(&a.id),
                 can_start: installed && a.protected && state == FenceState::Up && problem.is_none(),
+                command: a.binary.clone(),
                 workspace: a.workspace.clone(),
                 today: per_app.get(&a.id).copied().unwrap_or_default(),
                 custom: a.custom,
