@@ -1,0 +1,147 @@
+#cloud-config
+# Homebody Box: what the Linux guest is told on its first start (cloud-init, "NoCloud").
+hostname: box
+manage_etc_hosts: true
+ssh_pwauth: false
+disable_root: false
+
+# The person the agent runs as. Same number as you on the Mac, so the shared folder's files
+# belong to the same person on both sides.
+users:
+  - name: agent
+    uid: "@UID@"
+    shell: /bin/bash
+    lock_passwd: true
+    ssh_authorized_keys:
+      - @SSH_PUBKEY@
+
+write_files:
+  - path: /usr/local/bin/homebody-forward.py
+    permissions: "0755"
+    encoding: b64
+    content: @FORWARD_B64@
+
+  - path: /etc/systemd/system/homebody-forward.service
+    permissions: "0644"
+    content: |
+      [Unit]
+      Description=Homebody: the Box's way out (127.0.0.1:3128 to the gate on the host)
+      After=local-fs.target
+      [Service]
+      ExecStart=/usr/bin/python3 /usr/local/bin/homebody-forward.py
+      Restart=always
+      RestartSec=1
+      [Install]
+      WantedBy=multi-user.target
+
+  # Everything that honours proxy variables goes through the forwarder.
+  - path: /etc/profile.d/homebody-proxy.sh
+    permissions: "0644"
+    content: |
+      export http_proxy=http://127.0.0.1:3128
+      export https_proxy=http://127.0.0.1:3128
+      export HTTP_PROXY=$http_proxy HTTPS_PROXY=$https_proxy ALL_PROXY=$http_proxy
+      export no_proxy=localhost,127.0.0.1 NO_PROXY=localhost,127.0.0.1
+      export NODE_USE_ENV_PROXY=1 HOMEBODY=1 HOMEBODY_BOX=1
+  - path: /etc/environment
+    permissions: "0644"
+    content: |
+      http_proxy=http://127.0.0.1:3128
+      https_proxy=http://127.0.0.1:3128
+      HTTP_PROXY=http://127.0.0.1:3128
+      HTTPS_PROXY=http://127.0.0.1:3128
+      no_proxy=localhost,127.0.0.1
+      NODE_USE_ENV_PROXY=1
+      HOMEBODY=1
+      HOMEBODY_BOX=1
+  - path: /etc/apt/apt.conf.d/99homebody-proxy
+    permissions: "0644"
+    content: |
+      Acquire::http::Proxy "http://127.0.0.1:3128";
+      Acquire::https::Proxy "http://127.0.0.1:3128";
+
+  # The one folder of the Mac that is visible here.
+  - path: /etc/systemd/system/work.mount
+    permissions: "0644"
+    content: |
+      [Unit]
+      Description=Homebody: the shared folder
+      [Mount]
+      What=work
+      Where=/work
+      Type=virtiofs
+      [Install]
+      WantedBy=multi-user.target
+
+  # Commands come in over the virtual socket: this hands them to the SSH server on loopback.
+  - path: /usr/local/bin/homebody-vsock-ssh.py
+    permissions: "0755"
+    content: |
+      #!/usr/bin/env python3
+      import socket, threading
+      def pump(a, b):
+          try:
+              while True:
+                  d = a.recv(65536)
+                  if not d: break
+                  b.sendall(d)
+          except OSError: pass
+          finally:
+              try: b.shutdown(socket.SHUT_WR)
+              except OSError: pass
+      def handle(c):
+          try: up = socket.create_connection(("127.0.0.1", 22), timeout=10)
+          except OSError: c.close(); return
+          t = threading.Thread(target=pump, args=(up, c), daemon=True); t.start()
+          pump(c, up); t.join(); c.close(); up.close()
+      srv = socket.socket(socket.AF_VSOCK, socket.SOCK_STREAM)
+      srv.bind((socket.VMADDR_CID_ANY, 22)); srv.listen(16)
+      while True:
+          c, _ = srv.accept()
+          threading.Thread(target=handle, args=(c,), daemon=True).start()
+  - path: /etc/systemd/system/homebody-vsock-ssh.service
+    permissions: "0644"
+    content: |
+      [Unit]
+      Description=Homebody: commands from the host (virtual socket to the SSH server)
+      After=ssh.service
+      [Service]
+      ExecStart=/usr/bin/python3 /usr/local/bin/homebody-vsock-ssh.py
+      Restart=always
+      RestartSec=1
+      [Install]
+      WantedBy=multi-user.target
+  - path: /root/.ssh/authorized_keys
+    permissions: "0600"
+    content: |
+      @SSH_PUBKEY@
+  - path: /etc/ssh/sshd_config.d/homebody.conf
+    permissions: "0644"
+    content: |
+      ListenAddress 127.0.0.1
+      PasswordAuthentication no
+      AcceptEnv HOMEBODY_*
+  - path: /etc/default/grub.d/90-homebody.cfg
+    permissions: "0644"
+    content: |
+      GRUB_CMDLINE_LINUX_DEFAULT="console=tty0 console=hvc0 consoleblank=0 systemd.mask=systemd-networkd-wait-online.service apparmor=0 arm64.nopauth"
+      GRUB_TERMINAL=console
+      GRUB_TIMEOUT=0
+
+runcmd:
+  # No network interface: do not wait for a network that will never come.
+  - systemctl disable --now systemd-networkd-wait-online.service || true
+  - systemctl mask systemd-networkd-wait-online.service || true
+  - systemctl daemon-reload
+  - systemctl enable --now homebody-forward.service
+  - chmod 700 /root/.ssh
+  - systemctl restart ssh || true
+  - systemctl enable --now homebody-vsock-ssh.service
+  - update-grub || true
+  - mkdir -p /work
+  - systemctl enable work.mount || true
+  # After this first start the guest never needs configuring again.
+  - touch /etc/cloud/cloud-init.disabled
+  - echo "homebody-ready" > /dev/hvc0
+
+final_message: "homebody-ready: the Box was set up in $UPTIME seconds"

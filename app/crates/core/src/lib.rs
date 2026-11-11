@@ -17,10 +17,13 @@
 //! - [`fence`]:    OS-level enforcement: private users, seatbelt profile, packet filter, launchers
 //! - `fence_linux`: the same fence built from Linux's tools: system users, nftables, a systemd service
 //! - [`fleet`]:    belonging to an organisation's fleet: its rules come here, the log goes there
+//! - `boxvm`:      the Box: an agent in a Linux virtual machine with no network interface (macOS)
 //! - [`control`]:  a local socket so the CLI and scripts can drive a running engine
 //! - [`appicons`]: each app's own icon, from its maker's Mac app
 
 pub mod appicons;
+#[cfg(unix)]
+pub mod boxvm;
 pub mod catalog;
 pub mod compliance;
 pub mod config;

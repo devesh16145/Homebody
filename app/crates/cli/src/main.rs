@@ -80,6 +80,11 @@ const HELP: &str = "homebody: the Homebody command line
   homebody verify [file]               check the log (or an exported log file) has not been altered
   homebody export-log                  save the whole signed log to Downloads
   homebody policy [folder]             save the rules as Cedar policies, for formal review
+  homebody box                         the Box: a Linux machine with no network interface (Apple silicon)
+  homebody box setup [--image <disk>]  make its disk (first time: downloads Debian, a few minutes)
+  homebody box start <app> [project]   start it for an agent; it sees only that agent's folder or project
+  homebody box run -- <command...>     run a command inside it
+  homebody box stop                    stop it and throw its disk away
   homebody fleet                       whether this computer is in an organisation's fleet
   homebody fleet join <url> <code> [--ca <file>]   join one: its rules come first, the log is sent to it
   homebody fleet leave | sync          leave it, or talk to it now
@@ -298,6 +303,45 @@ async fn main() {
                 std::process::exit(2);
             }
         }
+        "box" => match a(1) {
+            "setup" => {
+                let image = args.iter().position(|x| x == "--image").and_then(|i| args.get(i + 1)).and_then(|p| std::path::absolute(p).ok()).map(|p| p.to_string_lossy().into_owned());
+                eprintln!("Setting the Box up. The first time this downloads about 350 MB from Debian and takes a few minutes.");
+                let r = call("box_setup", json!({ "image": image })).await;
+                println!("{}", s(&r, "message"));
+            }
+            "start" => {
+                let project = if a(3).is_empty() { Value::Null } else { json!(a(3)) };
+                let st = call("box_start", json!({ "appId": a(2), "project": project })).await;
+                println!("The Box is running for {}. It sees only {}", s(&st, "appId"), s(&st, "share"));
+            }
+            "stop" => {
+                call("box_stop", Value::Null).await;
+                println!("The Box is stopped. Its disk was thrown away; the next start is a fresh copy.");
+            }
+            "run" => {
+                let Some(sep) = args.iter().position(|x| x == "--").filter(|i| args.len() > i + 1) else {
+                    eprintln!("usage: homebody box run -- <command...>");
+                    std::process::exit(1);
+                };
+                use std::io::IsTerminal;
+                let argv = call("box_argv", json!({ "program": args[sep + 1], "args": &args[sep + 2..], "interactive": std::io::stdin().is_terminal() })).await;
+                let argv: Vec<String> = argv.as_array().into_iter().flatten().filter_map(|v| v.as_str().map(str::to_string)).collect();
+                run_in_place(&argv);
+            }
+            _ => {
+                let st = call("box_status", Value::Null).await;
+                if st["supported"].as_bool() != Some(true) {
+                    println!("The Box needs a Mac with Apple silicon.");
+                } else if st["prepared"].as_bool() != Some(true) {
+                    println!("The Box is not set up yet. Run:  homebody box setup");
+                } else if st["running"].as_bool() == Some(true) {
+                    println!("The Box is running for {} since {}. It sees only {}", s(&st, "appId"), s(&st, "since"), s(&st, "share"));
+                } else {
+                    println!("The Box is set up and stopped.");
+                }
+            }
+        },
         "fleet" => {
             let st = match a(1) {
                 "join" => {

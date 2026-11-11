@@ -1897,6 +1897,8 @@ impl Engine {
 
     /// Stop everything we started. Called when the app quits.
     pub async fn shutdown(&self) {
+        #[cfg(unix)]
+        crate::boxvm::stop().await;
         let running: Vec<String> = self.0.running.lock().unwrap().iter().cloned().collect();
         for id in running {
             let _ = self.app_stop(&id).await;
@@ -2148,6 +2150,50 @@ impl Engine {
                 self.append("fleet", fields! { "event" => "left", "org" => org });
                 self.touch();
                 Ok(self.fleet_status())
+            }
+            // The Box: an agent in a Linux virtual machine with no network interface (see `boxvm`).
+            #[cfg(unix)]
+            "box_status" => Ok(crate::boxvm::status()),
+            #[cfg(unix)]
+            "box_setup" => {
+                // The guest's set-up traffic (none is needed for the first start) goes through
+                // this app's gate, so anything it did would be judged and logged like the app's own.
+                let app = self.0.cfg.lock().unwrap().app(&s("appId").unwrap_or_else(|| "claude-code".into())).cloned().ok_or("Unknown app.")?;
+                let message = crate::boxvm::setup(app.proxy_port, s("image").as_deref()).await?;
+                self.append("box", fields! { "event" => "set up" });
+                Ok(json!({ "message": message, "status": crate::boxvm::status() }))
+            }
+            #[cfg(unix)]
+            "box_start" => {
+                let app = self.0.cfg.lock().unwrap().app(&req("appId")?).cloned().ok_or("Unknown app.")?;
+                if !app.protected {
+                    return Err(format!("{} is not protected. Switch protection on for it first.", app.name));
+                }
+                // What the Box sees of this Mac: a project's copy if one is named, else the app's workspace.
+                let share = match s("project") {
+                    Some(name) => {
+                        app.projects.iter().find(|p| p.name == name).ok_or("Unknown project.")?;
+                        projects::copy_dir(&app, &name).filter(|d| d.is_dir()).ok_or("That project's copy is missing.")?.to_string_lossy().into_owned()
+                    }
+                    None => app.workspace.clone().filter(|w| std::path::Path::new(w).is_dir()).ok_or("This app has no folder to share with the Box. Finish setup first.")?,
+                };
+                crate::boxvm::start(&app, &share).await?;
+                self.append("box", fields! { "event" => "started", "app" => app.id.as_str(), "share" => share.as_str() });
+                Ok(crate::boxvm::status())
+            }
+            #[cfg(unix)]
+            "box_stop" => {
+                let was = crate::boxvm::status();
+                crate::boxvm::stop().await;
+                if was["running"].as_bool() == Some(true) {
+                    self.append("box", fields! { "event" => "stopped", "app" => was["appId"].as_str().unwrap_or("") });
+                }
+                Ok(crate::boxvm::status())
+            }
+            #[cfg(unix)]
+            "box_argv" => {
+                let rest: Vec<String> = args.get("args").and_then(Value::as_array).map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect()).unwrap_or_default();
+                ok(&crate::boxvm::argv(&req("program")?, &rest, args.get("interactive").and_then(Value::as_bool).unwrap_or(false))?)
             }
             "get_install" => Ok(self.install_info()),
             // Each protected app's own icon, from its maker's Mac app when installed: { appId: dataUrl }.
