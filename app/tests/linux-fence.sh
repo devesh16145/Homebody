@@ -122,7 +122,19 @@ echo "Staying up"
 sudo nft delete table inet homebody
 sleep 24
 refused "rules removed by hand are back within 20 seconds" "$HB" run "$APP" --cwd / -- /usr/bin/curl -sS --noproxy '*' -m 6 https://1.1.1.1/
-check "refused attempts reach Activity"                  "around_gate"   "$("$HB" call get_feed "{\"appId\":\"$APP\",\"limit\":400}" | grep -o around_gate | head -1) (needs the kernel log to be readable by you)"
+# The kernel writes a refused packet to its log, the engine follows that log: allow it a moment.
+seen=""
+for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
+  seen="$("$HB" call get_feed "{\"appId\":\"$APP\",\"limit\":400}" | grep -o around_gate | head -1)"
+  [ -n "$seen" ] && break
+  sleep 1
+done
+check "refused attempts reach Activity"                  "around_gate"   "$seen (needs the kernel log to be readable by you)"
+if [ -z "$seen" ]; then
+  echo "      kernel log lines about this app: $(sudo journalctl -k --no-pager 2>/dev/null | grep -c "homebody-drop:$APP")"
+  echo "      readable by you: $(journalctl -k --no-pager -n 3 2>&1 | tail -1 | cut -c1-120)"
+  pgrep -fl 'journalctl -k' | head -2
+fi
 
 "$HB" ask on >/dev/null 2>&1
 if [ "${1:-}" = "--remove" ]; then
