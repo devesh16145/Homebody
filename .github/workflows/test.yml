@@ -1,0 +1,45 @@
+# Runs the unit tests when the app's code changes.
+#
+# The tests need macOS (they exercise the packet filter's rule checker, code signing tools and
+# copy-on-write folder copies), so this uses a macOS runner. On a private repository those
+# minutes are counted at a higher rate than Linux ones; on a public repository they are free.
+# The bypass corpus is not run here: it needs the fence set up, which needs an administrator.
+
+name: Tests
+
+on:
+  push:
+    branches: [main]
+    paths: ["app/**", ".github/workflows/test.yml"]
+  pull_request:
+    paths: ["app/**", ".github/workflows/test.yml"]
+  workflow_dispatch:
+
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  unit:
+    runs-on: macos-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: app
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: app
+      - name: Core unit tests
+        run: cargo test -p sai-core
+      - name: The command line tool builds
+        run: cargo build -p sai
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: The screens' scripts parse
+        run: for f in ui/js/*.js; do node --check "$f"; done
+      - name: The bypass corpus script parses
+        run: bash -n tests/bypass-corpus.sh

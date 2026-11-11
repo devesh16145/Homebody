@@ -37,6 +37,12 @@ const HELP: &str = "sai — Sandbox-ai command line
   sai inspect <app> on|off        look inside an app's connections to trusted places
   sai secrets <app> on|off        while looking inside, stop requests that carry a secret
   sai inside [app]                switches for addresses inside trusted places
+  sai ask on|off                  ask about new places, or block them without asking
+  sai limit <app> <place> <MB|off>   megabytes an app may send to a place per hour
+  sai private [add|remove <folder>]  folders whose contents must never be sent
+  sai summary [days]              what each app did lately, and what was stopped
+  sai timestamp                   have a public service vouch for when the log existed
+  sai update                      ask whether a newer version has been published
   sai inside <app> <place> <path> on|off   allow or refuse one address inside a place
   sai found                       AI apps on this computer that are not protected yet
   sai open-protected <app>        open an app protected (what a launcher does)
@@ -212,8 +218,11 @@ async fn main() {
             println!("log key: {}", s(&p, "publicKey"));
         }
         "verify" if !a(1).is_empty() => {
-            // A file exported with "Export": checked here, without the running app.
-            let (c, key) = sai_core::ledger::verify_export(std::path::Path::new(a(1)));
+            // A file exported with "Export": checked here, without the running app. Given the
+            // export folder, the log inside it is the thing to check.
+            let given = std::path::Path::new(a(1));
+            let file = if given.is_dir() { given.join("log.jsonl") } else { given.to_path_buf() };
+            let (c, key) = sai_core::ledger::verify_export(&file);
             if let Some(k) = key {
                 println!("signed with key: {k}");
             }
@@ -303,6 +312,44 @@ async fn main() {
                 }
             }
         }
+        "ask" => print_status(&call("set_ask", json!({ "on": a(1) != "off" })).await),
+        "limit" => {
+            let mb = a(3).parse::<u64>().ok();
+            print_trust(&call("set_limit", json!({ "appId": a(1), "host": a(2), "mb": mb })).await);
+        }
+        "private" => {
+            let r = match a(1) {
+                "add" => call("add_private_folder", json!({ "path": std::fs::canonicalize(a(2)).map(|p| p.to_string_lossy().into_owned()).unwrap_or_else(|_| a(2).to_string()) })).await,
+                "remove" => call("remove_private_folder", json!({ "path": a(2) })).await,
+                _ => call("get_private_folders", Value::Null).await,
+            };
+            for f in r["folders"].as_array().into_iter().flatten() {
+                println!("{}{}", s(f, "path"), if f["exists"].as_bool() == Some(true) { "" } else { "  (missing)" });
+            }
+            println!("{} files, {} lines of text recognised", r["files"], r["lines"]);
+        }
+        "timestamp" => {
+            let r = call("timestamp_log", Value::Null).await;
+            println!("Timestamped {} records at {} by {}\n{}", r["records"], s(&r, "time"), s(&r, "service"), s(&r, "file"));
+        }
+        "update" => println!("{}", s(&call("check_update", Value::Null).await, "message")),
+        "summary" => {
+            let r = call("get_summary", json!({ "days": a(1).parse::<u64>().unwrap_or(7) })).await;
+            println!("The last {} days", r["days"]);
+            for app in r["apps"].as_array().into_iter().flatten() {
+                println!("\n{}: {} allowed, {} blocked, {} sent", s(app, "appName"), app["allowed"], app["blocked"], human_bytes(app["bytesOut"].as_u64().unwrap_or(0)));
+                for p in app["places"].as_array().into_iter().flatten() {
+                    println!("   reached {:<32} {} times, {} sent", s(p, "name"), p["times"], human_bytes(p["bytesOut"].as_u64().unwrap_or(0)));
+                }
+                for p in app["blockedPlaces"].as_array().into_iter().flatten() {
+                    println!("   blocked {:<32} {} times", s(p, "name"), p["times"]);
+                }
+                let (g, sec, ad) = (app["aroundGate"].as_u64().unwrap_or(0), app["secretsStopped"].as_u64().unwrap_or(0), app["addressesRefused"].as_u64().unwrap_or(0));
+                if g + sec + ad > 0 {
+                    println!("   {g} went around the gate, {sec} carried a secret, {ad} were for an address that is switched off");
+                }
+            }
+        }
         "inside" => {
             let list = if a(2).is_empty() {
                 call("get_inside_rules", if a(1).is_empty() { Value::Null } else { json!({ "appId": a(1) }) }).await
@@ -379,6 +426,7 @@ fn print_changes(set: &Value) {
 
 fn print_trust(list: &Value) {
     for t in list.as_array().into_iter().flatten() {
-        println!("{:<12} {:<8} {:<48} {}", s(t, "appId"), if t["enabled"].as_bool() == Some(true) { "trusted" } else { "blocked" }, s(t, "host"), s(t, "purpose"));
+        let limit = t["limitMb"].as_u64().map(|m| format!("  [at most {m} MB an hour, {} sent]", t["sentMb"])).unwrap_or_default();
+        println!("{:<12} {:<8} {:<48} {}{limit}", s(t, "appId"), if t["enabled"].as_bool() == Some(true) { "trusted" } else { "blocked" }, s(t, "host"), s(t, "purpose"));
     }
 }

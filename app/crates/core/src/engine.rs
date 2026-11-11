@@ -74,6 +74,10 @@ struct Inner {
     deny_order: Mutex<()>,
     /// Gate ports this engine is listening on.
     gates: Mutex<HashSet<u16>>,
+    /// What each app has sent to each trusted place lately: (app, rule) -> (when, bytes).
+    sent: Mutex<HashMap<(String, String), std::collections::VecDeque<(Instant, u64)>>>,
+    /// Fingerprints of the lines in the user's private folders, and when they were last read.
+    docs: Mutex<Option<(Instant, Arc<crate::secrets::DocIndex>)>>,
     /// This computer's certificate authority for looking inside, opened on first use.
     inspector: Mutex<Option<Arc<crate::inspect::Inspector>>>,
     /// The program launchers call to reach us: the desktop app's own executable.
@@ -97,6 +101,18 @@ struct Inner {
 
 #[derive(Clone)]
 pub struct Engine(Arc<Inner>);
+
+/// Whether version `a` ("0.2.0") is newer than `b`. Anything that is not three numbers is not.
+fn newer_version(a: &str, b: &str) -> bool {
+    let parse = |v: &str| -> Option<Vec<u64>> {
+        let parts: Vec<u64> = v.split('.').map(|p| p.parse::<u64>().ok()).collect::<Option<Vec<_>>>()?;
+        (parts.len() == 3).then_some(parts)
+    };
+    match (parse(a), parse(b)) {
+        (Some(a), Some(b)) => a > b,
+        _ => false,
+    }
+}
 
 fn key(app: &str, host: &str) -> String {
     format!("{app}|{host}")
@@ -130,6 +146,8 @@ impl Engine {
             pids: Mutex::new(HashMap::new()),
             opener: Mutex::new(None),
             inspector: Mutex::new(None),
+            sent: Mutex::new(HashMap::new()),
+            docs: Mutex::new(None),
             unsaved_repeats: Mutex::new(HashMap::new()),
             stop: watch::channel(false).0,
             health: Mutex::new(HashMap::new()),
@@ -360,6 +378,10 @@ impl Engine {
             Mode::Private => {}
         }
         match rule {
+            Some(r) if r.enabled && self.over_limit(app_id, &host) => {
+                self.record_deny_detail(app_id, &host, port, Reason::NotTrusted, "limit", &r.limit_mb.unwrap_or(0).to_string());
+                return deny(Reason::NotTrusted, Some(host), &format!("Blocked by Sandbox-ai: {} has sent as much to {} this hour as its limit allows.", app.name, label));
+            }
             Some(r) if r.enabled => return allow(Reason::Trusted, None),
             Some(r) => {
                 let reason = if r.source == "you" { Reason::YouBlocked } else { Reason::NotTrusted };
@@ -441,6 +463,108 @@ impl Engine {
         self.append("conn", f).and_then(|r| r.get("seq").and_then(Value::as_u64))
     }
 
+    // Hourly limits
+    // -----------------------------------------------------------------------------------------
+
+    /// The trusted rule this destination falls under for this app, and its hourly limit in bytes.
+    fn limit_for(&self, app_id: &str, host: &str) -> Option<(String, u64)> {
+        let cfg = self.0.cfg.lock().unwrap();
+        let rule = cfg.app(app_id)?.rule_for(host)?;
+        Some((rule.host.clone(), rule.limit_mb? * 1_048_576))
+    }
+
+    fn sent_last_hour(&self, app_id: &str, rule: &str) -> u64 {
+        let mut sent = self.0.sent.lock().unwrap();
+        let Some(q) = sent.get_mut(&(app_id.to_string(), rule.to_string())) else { return 0 };
+        while q.front().map(|(t, _)| t.elapsed() > Duration::from_secs(3600)).unwrap_or(false) {
+            q.pop_front();
+        }
+        q.iter().map(|(_, n)| n).sum()
+    }
+
+    /// Count bytes an app has just sent somewhere. Returns true when that takes it over the
+    /// hourly limit the user set for the place, in which case the connection is to be ended.
+    pub(crate) fn note_sent(&self, app_id: &str, host: &str, bytes: u64) -> bool {
+        let Some((rule, limit)) = self.limit_for(app_id, host) else { return false };
+        self.0.sent.lock().unwrap().entry((app_id.to_string(), rule.clone())).or_default().push_back((Instant::now(), bytes));
+        self.sent_last_hour(app_id, &rule) > limit
+    }
+
+    fn over_limit(&self, app_id: &str, host: &str) -> bool {
+        self.limit_for(app_id, host).map(|(rule, limit)| self.sent_last_hour(app_id, &rule) >= limit).unwrap_or(false)
+    }
+
+    fn set_limit(&self, app_id: &str, pattern: &str, mb: Option<u64>) -> Result<(), String> {
+        if mb.is_some_and(|m| m == 0 || m > 1_000_000) {
+            return Err("Give the limit in megabytes per hour, for example 5.".into());
+        }
+        {
+            let mut cfg = self.0.cfg.lock().unwrap();
+            let rule = cfg.app_mut(app_id).ok_or("Unknown app.")?.trust.iter_mut().find(|r| r.host == pattern).ok_or("That place is not on the list.")?;
+            rule.limit_mb = mb;
+        }
+        self.save_cfg();
+        self.append("trust", fields! { "app" => app_id, "host" => pattern, "limit_mb" => mb, "via" => "limit" });
+        Ok(())
+    }
+
+    // Private folders
+    // -----------------------------------------------------------------------------------------
+
+    /// Fingerprints of the text in the user's private folders, read again when they are stale.
+    fn private_docs(&self) -> Option<Arc<crate::secrets::DocIndex>> {
+        let folders = self.0.cfg.lock().unwrap().private_folders.clone();
+        if folders.is_empty() {
+            return None;
+        }
+        let current = self.0.docs.lock().unwrap().clone();
+        let fresh = current.as_ref().map(|(at, _)| at.elapsed() < Duration::from_secs(300)).unwrap_or(false);
+        if !fresh {
+            // Read in the background; this request is judged against what we have.
+            let e = self.clone();
+            tokio::task::spawn_blocking(move || e.read_private_folders());
+        }
+        current.map(|(_, index)| index)
+    }
+
+    fn read_private_folders(&self) -> Arc<crate::secrets::DocIndex> {
+        let folders = self.0.cfg.lock().unwrap().private_folders.clone();
+        let salt = self.0.ledger.lock().unwrap().public_key_b64();
+        let index = Arc::new(crate::secrets::DocIndex::build(&salt, &folders));
+        *self.0.docs.lock().unwrap() = Some((Instant::now(), index.clone()));
+        index
+    }
+
+    fn private_folders(&self) -> Value {
+        let folders = self.0.cfg.lock().unwrap().private_folders.clone();
+        let index = self.0.docs.lock().unwrap().as_ref().map(|(_, i)| (i.files, i.len()));
+        json!({ "folders": folders.iter().map(|f| json!({ "path": f, "exists": std::path::Path::new(f).is_dir() })).collect::<Vec<_>>(), "files": index.map(|i| i.0), "lines": index.map(|i| i.1) })
+    }
+
+    fn set_private_folder(&self, raw: &str, add: bool) -> Result<(), String> {
+        if add {
+            let path = std::fs::canonicalize(raw).map_err(|_| "That folder could not be found.".to_string())?;
+            let home = dirs::home_dir().ok_or("Your home folder could not be found.")?;
+            if !path.is_dir() || path == home || !path.starts_with(&home) {
+                return Err("Choose a folder inside your home folder, not the home folder itself.".into());
+            }
+            let path = path.to_string_lossy().into_owned();
+            let mut cfg = self.0.cfg.lock().unwrap();
+            if cfg.private_folders.len() >= 20 {
+                return Err("That is a lot of folders. Remove one first, or choose a folder that contains several.".into());
+            }
+            if !cfg.private_folders.contains(&path) {
+                cfg.private_folders.push(path);
+            }
+        } else {
+            self.0.cfg.lock().unwrap().private_folders.retain(|f| f != raw);
+        }
+        self.save_cfg();
+        self.append("private", fields! { "action" => if add { "added" } else { "removed" } });
+        self.read_private_folders();
+        Ok(())
+    }
+
     /// The certificate authority for looking inside, made on first use.
     fn inspector(&self) -> Result<Arc<crate::inspect::Inspector>, String> {
         let mut slot = self.0.inspector.lock().unwrap();
@@ -494,14 +618,23 @@ impl Engine {
     }
 
     /// The recogniser for secrets in this app's requests, if that is switched on for it.
-    pub(crate) fn secret_scanner(&self, app_id: &str) -> Option<crate::secrets::Scanner> {
+    pub(crate) fn secret_scanner(&self, app_id: &str, host: &str) -> Option<crate::secrets::Scanner> {
         if !self.0.cfg.lock().unwrap().app(app_id).map(|a| a.secrets).unwrap_or(false) {
+            return None;
+        }
+        // Signing in means sending a login token to the place that issued it. That is not a
+        // leak, and stopping it would stop the app signing in.
+        if catalog::describe(host).1.starts_with("Signing in") {
             return None;
         }
         // Fingerprints are particular to this computer: salted with its own log key.
         let salt = self.0.ledger.lock().unwrap().public_key_b64();
         let (engine, app_id) = (self.clone(), app_id.to_string());
-        Some(crate::secrets::Scanner::new(&salt, move |fp| engine.0.cfg.lock().unwrap().app(&app_id).map(|a| a.allowed_secrets.iter().any(|f| f == fp)).unwrap_or(false)))
+        let scanner = crate::secrets::Scanner::new(&salt, move |fp| engine.0.cfg.lock().unwrap().app(&app_id).map(|a| a.allowed_secrets.iter().any(|f| f == fp)).unwrap_or(false));
+        Some(match self.private_docs() {
+            Some(docs) => scanner.with_docs(docs),
+            None => scanner,
+        })
     }
 
     /// Let one particular secret through for an app from now on, or stop doing so.
@@ -524,8 +657,8 @@ impl Engine {
     }
 
     /// Whether a request for this address inside a trusted place may go (the user's switches).
-    pub(crate) fn inside_allowed(&self, app_id: &str, host: &str, path: &str) -> bool {
-        self.0.cfg.lock().unwrap().app(app_id).map(|a| a.inside_allows(host, path)).unwrap_or(false)
+    pub(crate) fn inside_allowed(&self, app_id: &str, host: &str, method: &str, path: &str) -> bool {
+        self.0.cfg.lock().unwrap().app(app_id).map(|a| a.inside_allows(host, method, path)).unwrap_or(false)
     }
 
     pub fn inside_list(&self, app_id: Option<&str>) -> Vec<InsideEntry> {
@@ -534,23 +667,27 @@ impl Engine {
         for a in cfg.apps.iter().filter(|a| app_id.map(|id| id == a.id).unwrap_or(true)) {
             for r in &a.inside {
                 let (label, purpose) = catalog::describe_inside(&r.host, &r.path);
-                out.push(InsideEntry { app_id: a.id.clone(), host: r.host.clone(), host_label: catalog::describe(&r.host).0, path: r.path.clone(), label, purpose, enabled: r.enabled, source: r.source.clone() });
+                out.push(InsideEntry { app_id: a.id.clone(), host: r.host.clone(), host_label: catalog::describe(&r.host).0, path: r.path.clone(), method: r.method.clone(), label, purpose, enabled: r.enabled, source: r.source.clone() });
             }
         }
         out
     }
 
-    fn set_inside(&self, app_id: &str, host: &str, path: &str, enabled: Option<bool>) -> Result<(), String> {
+    fn set_inside(&self, app_id: &str, host: &str, path: &str, method: Option<String>, enabled: Option<bool>) -> Result<(), String> {
         let host = hostname::canonical(host).ok_or("That is not a place name.")?;
         if !crate::config::valid_inside_path(path) {
             return Err("That is not an address inside a place. It should look like /v1/messages.".into());
         }
+        let method = method.map(|m| m.to_ascii_uppercase());
+        if method.as_deref().map(|m| !crate::config::valid_method(m)).unwrap_or(false) {
+            return Err("That is not a kind of request. It should be a word like GET or POST.".into());
+        }
         {
             let mut cfg = self.0.cfg.lock().unwrap();
             let app = cfg.app_mut(app_id).ok_or("Unknown app.")?;
-            match (app.inside.iter().position(|r| r.host == host && r.path == path), enabled) {
+            match (app.inside.iter().position(|r| r.host == host && r.path == path && r.method == method), enabled) {
                 (Some(i), Some(on)) => app.inside[i].enabled = on,
-                (None, Some(on)) => app.inside.push(crate::config::InsideRule { host: host.clone(), path: path.to_string(), enabled: on, source: "you".into() }),
+                (None, Some(on)) => app.inside.push(crate::config::InsideRule { host: host.clone(), path: path.to_string(), enabled: on, source: "you".into(), method: method.clone() }),
                 (Some(i), None) if app.inside[i].source == "you" => {
                     app.inside.remove(i);
                 }
@@ -559,7 +696,7 @@ impl Engine {
             }
         }
         self.save_cfg();
-        self.append("trust", fields! { "app" => app_id, "host" => host.as_str(), "path" => path, "enabled" => enabled, "via" => "inside" });
+        self.append("trust", fields! { "app" => app_id, "host" => host.as_str(), "path" => path, "method" => method, "enabled" => enabled, "via" => "inside" });
         Ok(())
     }
 
@@ -736,7 +873,7 @@ impl Engine {
                     true
                 }
                 None => {
-                    app.trust.push(TrustRule { host: pattern.clone(), enabled, source: "you".into(), recommended: false });
+                    app.trust.push(TrustRule { host: pattern.clone(), enabled, source: "you".into(), recommended: false, limit_mb: None });
                     true
                 }
             }
@@ -761,7 +898,8 @@ impl Engine {
         for a in cfg.apps.iter().filter(|a| app_id.map(|id| id == a.id).unwrap_or(true)) {
             for r in &a.trust {
                 let (label, purpose) = catalog::describe_pattern(&r.host);
-                out.push(TrustEntry { app_id: a.id.clone(), host: r.host.clone(), label, purpose, enabled: r.enabled, source: r.source.clone(), recommended: r.recommended });
+                let sent_mb = r.limit_mb.map(|_| (self.sent_last_hour(&a.id, &r.host) as f64 / 1_048_576.0 * 10.0).round() / 10.0);
+                out.push(TrustEntry { app_id: a.id.clone(), host: r.host.clone(), label, purpose, enabled: r.enabled, source: r.source.clone(), recommended: r.recommended, limit_mb: r.limit_mb, sent_mb });
             }
         }
         out
@@ -936,9 +1074,11 @@ impl Engine {
         }
         let mut s = match row.reason {
             Reason::Trusted => format!("{label} is on {app_name}'s trusted list."),
+            Reason::YouAllowedOnce if row.detail == "self" => "Sandbox-ai itself contacted this place because you asked it to. It sent a fingerprint of the log, or asked whether there is a newer version; nothing from your apps.".into(),
             Reason::YouAllowedOnce => "You allowed this once.".into(),
             Reason::YouAlwaysAllow => "You chose to always allow this.".into(),
             Reason::YouBlocked => "You blocked this.".into(),
+            Reason::NotTrusted if row.detail == "limit" => format!("{app_name} has sent as much to {label} this hour as the limit you set allows{}, so this was stopped. It can go on once the hour has moved on.", if row.other.is_empty() { String::new() } else { format!(" ({} MB)", row.other) }),
             Reason::NotTrusted if row.detail == "secret" => {
                 let kind = row.other.split('|').next().unwrap_or("a secret");
                 format!("{app_name} was about to send what looks like {kind} to {label}. Sandbox-ai stopped the request before it left.")
@@ -1034,7 +1174,7 @@ impl Engine {
                 r.iter()
                     .map(|(what, times)| {
                         let path = what.split_once(' ').map(|(_, p)| p).filter(|p| p.starts_with('/')).unwrap_or("").to_string();
-                        RequestKind { what: what.clone(), times: *times, label: catalog::describe_inside(&row.host, &path).0, allowed: app.map(|a| a.inside_allows(&row.host, &path)).unwrap_or(true), path }
+                        RequestKind { what: what.clone(), times: *times, label: catalog::describe_inside(&row.host, &path).0, allowed: app.map(|a| a.inside_allows(&row.host, what.split(' ').next().unwrap_or(""), &path)).unwrap_or(true), path }
                     })
                     .collect()
             }),
@@ -1205,6 +1345,8 @@ impl Engine {
             today,
             apps,
             pending,
+            ask: cfg.ask,
+            preset_notes: catalog::PRESET_NOTES.iter().filter(|(v, _)| *v > cfg.presets_seen).map(|(_, text)| text.to_string()).collect(),
             local_servers: fence::own_servers(),
             watch,
             watch_review,
@@ -1315,11 +1457,188 @@ impl Engine {
     /// The whole log, exactly as written, with one signed line in front saying what it is.
     /// `sai verify <file>` (or anyone's own code) can check it without this computer.
     fn export_log(&self) -> Result<String, String> {
-        let name = format!("Sandbox-ai log {}.jsonl", chrono::Local::now().format("%Y-%m-%d %H.%M"));
-        let path = paths::downloads_dir().join(name);
-        let out = self.0.ledger.lock().unwrap().export().map_err(|e| format!("The log could not be read: {e}"))?;
-        std::fs::write(&path, out).map_err(|e| format!("The log could not be saved: {e}"))?;
-        Ok(path.to_string_lossy().into_owned())
+        let dir = paths::downloads_dir().join(format!("Sandbox-ai export {}", chrono::Local::now().format("%Y-%m-%d %H.%M")));
+        let fail = |what: &str, e: std::io::Error| format!("The {what} could not be saved: {e}");
+        std::fs::create_dir_all(&dir).map_err(|e| fail("export", e))?;
+        // 1. The whole log, exactly as written, with a signed first line. This is the evidence.
+        let log = self.0.ledger.lock().unwrap().export().map_err(|e| format!("The log could not be read: {e}"))?;
+        std::fs::write(dir.join("log.jsonl"), log).map_err(|e| fail("log", e))?;
+        // 2. The same events as a table, for reading in a spreadsheet. A convenience, not evidence.
+        std::fs::write(dir.join("activity.csv"), self.feed_csv()).map_err(|e| fail("table", e))?;
+        // 3. The rules that were in force when this was made.
+        let rules = serde_json::to_vec_pretty(&*self.0.cfg.lock().unwrap()).unwrap_or_default();
+        std::fs::write(dir.join("rules.json"), rules).map_err(|e| fail("rules", e))?;
+        // 4. Independent timestamps, if any were asked for.
+        let stamps = paths::data_dir().join("timestamps");
+        if let Ok(entries) = std::fs::read_dir(&stamps) {
+            let out = dir.join("timestamps");
+            for e in entries.flatten() {
+                let _ = std::fs::create_dir_all(&out);
+                let _ = std::fs::copy(e.path(), out.join(e.file_name()));
+            }
+        }
+        let readme = "Sandbox-ai export\n=================\n\nlog.jsonl      Every decision, exactly as it was written. The first line says what the file is and\n               carries the key to check it with; each following line is one record, linked to the one\n               before and signed. Check it on any computer with:  sai verify log.jsonl\n               Compare the key it prints with the one on the Proof screen to know whose log it is.\nactivity.csv   The same events as a table for a spreadsheet. Convenient to read; it is not signed.\nrules.json     The rules in force when this export was made.\ntimestamps/    Present if independent timestamps were asked for. Each .tsr is a statement by a public\n               time-stamping service that a log ending in a given record existed at that time. Check\n               one with:  openssl ts -reply -in <file>.tsr -text\n";
+        std::fs::write(dir.join("README.txt"), readme).map_err(|e| fail("export", e))?;
+        Ok(dir.to_string_lossy().into_owned())
+    }
+
+    /// The Feed as a table. Fields that begin like a formula are made harmless for spreadsheets.
+    fn feed_csv(&self) -> String {
+        let field = |v: &str| {
+            let v = if v.starts_with(['=', '+', '-', '@']) { format!("'{v}") } else { v.to_string() };
+            if v.contains([',', '"', '\n', '\r']) { format!("\"{}\"", v.replace('"', "\"\"")) } else { v }
+        };
+        let mut out = String::from("time,app,result,place,name,port,reason,bytes_sent,bytes_received,milliseconds,requests_inside,explanation\n");
+        let cfg = self.0.cfg.lock().unwrap().clone();
+        let feed = self.0.feed.lock().unwrap();
+        for row in feed.rows() {
+            let e = Self::to_event(row, &cfg);
+            let inside = e.requests.as_ref().map(|r| r.iter().map(|k| format!("{} x{}", k.what, k.times)).collect::<Vec<_>>().join("; ")).unwrap_or_default();
+            let n = |v: Option<u64>| v.map(|x| x.to_string()).unwrap_or_default();
+            let cols = [e.ts.clone(), e.app_name.clone(), format!("{:?}", e.verb).to_lowercase(), e.host.clone(), e.label.clone(), e.port.to_string(), e.reason.as_str().to_string(), n(e.bytes_out), n(e.bytes_in), n(e.duration_ms), inside, e.explanation.clone()];
+            out.push_str(&cols.iter().map(|c| field(c)).collect::<Vec<_>>().join(","));
+            out.push('\n');
+        }
+        out
+    }
+
+    /// Ask a public time-stamping service to vouch that the log, as it stands, existed now.
+    /// Only a fingerprint of the last record is sent: nothing from the log itself. The answer
+    /// is kept and goes into exports. This is Sandbox-ai itself contacting a server, so it
+    /// happens only when asked for, and it is written into the log like any other contact.
+    async fn timestamp_log(&self) -> Result<Value, String> {
+        const SERVICE: &str = "http://timestamp.digicert.com";
+        let (count, head) = self.0.ledger.lock().unwrap().head();
+        if count == 0 || head.len() != 64 || !head.chars().all(|c| c.is_ascii_hexdigit()) {
+            return Err("There is nothing in the log to timestamp yet.".into());
+        }
+        let dir = paths::data_dir().join("timestamps");
+        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        let stem = format!("record-{count}-{}", &head[..12]);
+        let (query, reply) = (dir.join(format!("{stem}.tsq")), dir.join(format!("{stem}.tsr")));
+        let run = |args: Vec<String>| async move {
+            tokio::time::timeout(Duration::from_secs(30), tokio::process::Command::new(&args[0]).args(&args[1..]).output()).await.ok().and_then(|r| r.ok())
+        };
+        let made = run(vec!["/usr/bin/openssl".into(), "ts".into(), "-query".into(), "-digest".into(), head.clone(), "-sha256".into(), "-cert".into(), "-out".into(), query.to_string_lossy().into_owned()]).await;
+        if !made.map(|o| o.status.success()).unwrap_or(false) {
+            return Err("The timestamp request could not be prepared.".into());
+        }
+        let sent = run(vec!["/usr/bin/curl".into(), "-sS".into(), "--max-time".into(), "20".into(), "-H".into(), "Content-Type: application/timestamp-query".into(), "--data-binary".into(), format!("@{}", query.to_string_lossy()), "-o".into(), reply.to_string_lossy().into_owned(), SERVICE.into()]).await;
+        self.append("conn", fields! { "app" => "sandbox-ai", "host" => "timestamp.digicert.com", "port" => 80, "decision" => "allow", "reason" => "you_allowed_once", "detail" => "self" });
+        if !sent.map(|o| o.status.success()).unwrap_or(false) {
+            let _ = std::fs::remove_file(&reply);
+            return Err("The time-stamping service could not be reached.".into());
+        }
+        let shown = run(vec!["/usr/bin/openssl".into(), "ts".into(), "-reply".into(), "-in".into(), reply.to_string_lossy().into_owned(), "-text".into()]).await.map(|o| String::from_utf8_lossy(&o.stdout).into_owned()).unwrap_or_default();
+        let granted = shown.contains("Status: Granted");
+        // The answer must be about our fingerprint, not somebody else's.
+        let about_ours = shown.lines().skip_while(|l| !l.contains("Message data")).skip(1).take(4).flat_map(|l| l.split_whitespace().skip(2).take_while(|w| !w.contains('|')).map(str::to_string).collect::<Vec<_>>()).collect::<String>().replace('-', "").to_lowercase().starts_with(&head[..32]);
+        if !granted || !about_ours {
+            let _ = std::fs::remove_file(&reply);
+            return Err("The time-stamping service did not give a usable answer.".into());
+        }
+        let time = shown.lines().find_map(|l| l.trim().strip_prefix("Time stamp: ")).unwrap_or("").to_string();
+        self.append("timestamp", fields! { "records" => count, "head" => head.as_str(), "service" => SERVICE, "time" => time.as_str() });
+        Ok(json!({ "records": count, "time": time, "service": SERVICE, "file": reply.to_string_lossy() }))
+    }
+
+    /// Ask where the project is published whether there is a newer version. Only when the user
+    /// asks: it is Sandbox-ai itself contacting a server, and it is written into the log.
+    async fn check_update(&self) -> Result<Value, String> {
+        const HOME: &str = "devesh16145/Sandbox-ai";
+        let out = tokio::time::timeout(
+            Duration::from_secs(15),
+            tokio::process::Command::new("/usr/bin/curl").args(["-sS", "--max-time", "10", "-H", "Accept: application/vnd.github+json", "-H", "User-Agent: sandbox-ai-update-check"]).arg(format!("https://api.github.com/repos/{HOME}/releases/latest")).output(),
+        )
+        .await
+        .ok()
+        .and_then(|r| r.ok());
+        self.append("conn", fields! { "app" => "sandbox-ai", "host" => "api.github.com", "port" => 443, "decision" => "allow", "reason" => "you_allowed_once", "detail" => "self" });
+        let Some(out) = out.filter(|o| o.status.success()) else { return Err("The place where Sandbox-ai is published could not be reached.".into()) };
+        let reply: Value = serde_json::from_slice(&out.stdout).unwrap_or(Value::Null);
+        let latest = reply.get("tag_name").and_then(Value::as_str).map(|t| t.trim_start_matches('v').to_string());
+        let newer = latest.as_deref().map(|l| newer_version(l, crate::VERSION)).unwrap_or(false);
+        Ok(json!({
+            "current": crate::VERSION,
+            "latest": latest,
+            "newer": newer,
+            "url": reply.get("html_url").and_then(Value::as_str),
+            "message": match (&latest, newer) {
+                (None, _) => "No version has been published yet.".to_string(),
+                (Some(l), true) => format!("Version {l} is available. You have {}.", crate::VERSION),
+                (Some(_), false) => format!("You have the newest version ({}).", crate::VERSION),
+            },
+        }))
+    }
+
+    /// The last so many days in a few numbers: what each app did, and what was stopped.
+    fn summary(&self, days: u64) -> Value {
+        let cfg = self.0.cfg.lock().unwrap().clone();
+        let since = (chrono::Utc::now() - chrono::Duration::days(days.clamp(1, 90) as i64)).to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+        #[derive(Default)]
+        struct Sum {
+            allowed: u64,
+            blocked: u64,
+            bytes_out: u64,
+            around: u64,
+            secrets: u64,
+            addresses: u64,
+            places: HashMap<String, (u64, u64)>,
+            blocked_places: HashMap<String, u64>,
+        }
+        let mut per: Vec<(String, Sum)> = Vec::new();
+        let feed = self.0.feed.lock().unwrap();
+        for row in feed.rows().iter().rev().take_while(|r| r.ts >= since) {
+            let at = match per.iter().position(|(id, _)| *id == row.app) {
+                Some(i) => i,
+                None => {
+                    per.push((row.app.clone(), Sum::default()));
+                    per.len() - 1
+                }
+            };
+            let s = &mut per[at].1;
+            let label = if row.host.is_empty() { String::new() } else { catalog::describe(&row.host).0 };
+            match row.verb {
+                Verb::Allowed | Verb::Seen => {
+                    s.allowed += 1;
+                    s.bytes_out += row.bytes_out.unwrap_or(0);
+                    let p = s.places.entry(label).or_default();
+                    p.0 += 1;
+                    p.1 += row.bytes_out.unwrap_or(0);
+                }
+                Verb::Blocked => {
+                    s.blocked += 1;
+                    match (row.reason, row.detail.as_str()) {
+                        (Reason::AroundGate, _) => s.around += 1,
+                        (_, "secret") => s.secrets += 1,
+                        (_, "path") => s.addresses += 1,
+                        _ => *s.blocked_places.entry(label).or_default() += 1,
+                    }
+                }
+                Verb::Asked => {}
+            }
+        }
+        let top = |m: &HashMap<String, u64>| {
+            let mut v: Vec<(&String, &u64)> = m.iter().filter(|(k, _)| !k.is_empty()).collect();
+            v.sort_by(|a, b| b.1.cmp(a.1).then(a.0.cmp(b.0)));
+            v.into_iter().take(5).map(|(k, n)| json!({ "name": k, "times": n })).collect::<Vec<_>>()
+        };
+        let apps: Vec<Value> = per
+            .iter()
+            .map(|(id, s)| {
+                let mut places: Vec<(&String, &(u64, u64))> = s.places.iter().collect();
+                places.sort_by(|a, b| b.1 .1.cmp(&a.1 .1).then(b.1 .0.cmp(&a.1 .0)));
+                json!({
+                    "appId": id,
+                    "appName": cfg.app(id).map(|a| a.name.clone()).unwrap_or_else(|| id.clone()),
+                    "allowed": s.allowed, "blocked": s.blocked, "bytesOut": s.bytes_out,
+                    "aroundGate": s.around, "secretsStopped": s.secrets, "addressesRefused": s.addresses,
+                    "places": places.into_iter().take(5).map(|(k, (n, b))| json!({ "name": k, "times": n, "bytesOut": b })).collect::<Vec<_>>(),
+                    "blockedPlaces": top(&s.blocked_places),
+                })
+            })
+            .collect();
+        json!({ "days": days.clamp(1, 90), "since": since, "apps": apps })
     }
 
     // -----------------------------------------------------------------------------------------
@@ -1617,13 +1936,41 @@ impl Engine {
                 self.check_fence().await;
                 ok(&self.status())
             }
+            "set_limit" => {
+                self.set_limit(&req("appId")?, &req("host")?, args.get("mb").and_then(Value::as_u64))?;
+                ok(&self.trust_list(None))
+            }
+            "ack_presets" => {
+                self.0.cfg.lock().unwrap().presets_seen = catalog::presets_version();
+                self.save_cfg();
+                ok(&self.status())
+            }
+            "set_ask" => {
+                let on = b("on")?;
+                self.0.cfg.lock().unwrap().ask = on;
+                self.save_cfg();
+                self.append("mode", fields! { "ask" => on, "why" => "you" });
+                if !on {
+                    self.cancel_asks();
+                }
+                ok(&self.status())
+            }
+            "check_update" => self.check_update().await,
+            "timestamp_log" => self.timestamp_log().await,
+            "get_summary" => Ok(self.summary(args.get("days").and_then(Value::as_u64).unwrap_or(7))),
+            "get_private_folders" => Ok(self.private_folders()),
+            "add_private_folder" | "remove_private_folder" => {
+                let (e, path, add) = (self.clone(), req("path")?, cmd == "add_private_folder");
+                tokio::task::spawn_blocking(move || e.set_private_folder(&path, add)).await.map_err(|e| e.to_string())??;
+                Ok(self.private_folders())
+            }
             "get_inside_rules" => ok(&self.inside_list(s("appId").as_deref())),
             "set_inside_rule" => {
-                self.set_inside(&req("appId")?, &req("host")?, &req("path")?, Some(b("enabled")?))?;
+                self.set_inside(&req("appId")?, &req("host")?, &req("path")?, s("method"), Some(b("enabled")?))?;
                 ok(&self.inside_list(None))
             }
             "remove_inside_rule" => {
-                self.set_inside(&req("appId")?, &req("host")?, &req("path")?, None)?;
+                self.set_inside(&req("appId")?, &req("host")?, &req("path")?, s("method"), None)?;
                 ok(&self.inside_list(None))
             }
             "app_set_secrets" => {
@@ -1703,7 +2050,19 @@ impl Engine {
                 self.append("project", fields! { "app" => app.id, "action" => "brought_in", "name" => project.name, "source" => project.source });
                 let cfg = self.0.cfg.lock().unwrap();
                 let app = cfg.app(&app.id).ok_or("Unknown app.")?;
-                ok(&projects::info(app, &project))
+                let mut out = ok(&projects::info(app, &project))?;
+                // Places the project's own file asks for and that are not decided yet. Read
+                // from the user's folder only; shown, never applied by themselves.
+                let suggested: Vec<Value> = projects::suggested_places(&source)
+                    .into_iter()
+                    .filter(|h| !app.trust.iter().any(|r| &r.host == h))
+                    .map(|h| {
+                        let (label, purpose) = catalog::describe_pattern(&h);
+                        json!({ "host": h, "label": label, "purpose": purpose })
+                    })
+                    .collect();
+                out["suggested"] = json!(suggested);
+                Ok(out)
             }
             "project_changes" | "project_apply" | "project_remove" => {
                 let app = self.0.cfg.lock().unwrap().app(&req("appId")?).cloned().ok_or("Unknown app.")?;

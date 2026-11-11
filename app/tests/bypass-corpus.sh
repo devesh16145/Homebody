@@ -147,6 +147,14 @@ inside() {
   check "the rest of the place still works"              "401" "$(code https://api.anthropic.com/v1/models)"
   check "switched off, hidden after an honest request"   "403" "$(R /usr/bin/curl -sS -m 12 -o /dev/null -w '%{http_code} ' https://api.anthropic.com/v1/models --next -sS -m 12 -o /dev/null -w '%{http_code}' https://api.anthropic.com/corpus/off | tail -1 | awk '{print $2}')"
   "$SAI" call remove_inside_rule "{\"appId\":\"$APP\",\"host\":\"api.anthropic.com\",\"path\":\"/corpus/off\"}" >/dev/null
+  "$SAI" call set_inside_rule "{\"appId\":\"$APP\",\"host\":\"api.anthropic.com\",\"path\":\"/corpus/send\",\"method\":\"POST\",\"enabled\":false}" >/dev/null
+  check "sending is off, fetching the same address works" "404" "$(code https://api.anthropic.com/corpus/send/x)"
+  check "sending is off: sending is refused"             "403" "$(code -d 'x=1' https://api.anthropic.com/corpus/send)"
+  check "sending is off: in small letters too"           "403" "$(code -X post -d 'x=1' https://api.anthropic.com/corpus/send)"
+  "$SAI" call remove_inside_rule "{\"appId\":\"$APP\",\"host\":\"api.anthropic.com\",\"path\":\"/corpus/send\",\"method\":\"POST\"}" >/dev/null
+  check "a fake switch to a web socket hides nothing"    "000" "$(R /usr/bin/curl -sS -m 12 -o /dev/null -w '%{http_code} ' -H 'Upgrade: websocket' -H 'Connection: Upgrade' https://api.anthropic.com/v1/models --next -sS -m 12 -o /dev/null -w '%{http_code}' -H 'Host: attacker.example.net' https://api.anthropic.com/upload | tail -1 | awk '{print $2}')"
+  check "a switch to something that is not a web socket" "000" "$(code -H 'Upgrade: h2c' -H 'Connection: Upgrade' https://api.anthropic.com/v1/models)"
+
   echo "Inside: secrets in what is sent"
   # Made up here, so that no file holds something token-shaped. Not real credentials.
   tok="gh""p_$(printf 'A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8')"

@@ -305,7 +305,10 @@ async fn handle(engine: Engine, app_id: String, mut client: TcpStream) -> std::i
         upstream.write_all(&first).await?;
         out.fetch_add(first.len() as u64, Ordering::Relaxed);
     }
-    relay(&engine, client, upstream, out.clone(), inn.clone()).await;
+    let over = relay(&engine, &app_id, &host, client, upstream, out.clone(), inn.clone()).await;
+    if over {
+        engine.record_refusal(&app_id, &host, req.port, Reason::NotTrusted, "limit", "");
+    }
     if let Some(conn) = conn {
         engine.record_end(conn, out.load(Ordering::Relaxed), inn.load(Ordering::Relaxed), started.elapsed().as_millis() as u64, false);
     }
@@ -374,10 +377,10 @@ async fn inspected(engine: &Engine, app_id: &str, host: &str, decision: &Decisio
     let (out, inn) = (AtomicU64::new(0), AtomicU64::new(0));
     let rules = {
         let (engine, app_id, host) = (engine.clone(), app_id.to_string(), host.to_string());
-        move |path: &str| engine.inside_allowed(&app_id, &host, path)
+        move |method: &str, path: &str| engine.inside_allowed(&app_id, &host, method, path)
     };
     let mut reader = crate::inspect::Sniffer::with_rules(host, rules);
-    if let Some(scanner) = engine.secret_scanner(app_id) {
+    if let Some(scanner) = engine.secret_scanner(app_id, host) {
         reader = reader.scanning(scanner);
     }
     let sniffer = std::sync::Mutex::new(reader);
@@ -386,23 +389,40 @@ async fn inspected(engine: &Engine, app_id: &str, host: &str, decision: &Decisio
     let (mut ur, mut uw) = tokio::io::split(upstream);
     // Both directions may need to write to the app: the server's answers, and our own "no".
     let cw = tokio::sync::Mutex::new(cw);
+    // Set by the answers' side when the server has answered a request to switch to a web
+    // socket: Some(true) if it switched. The requests' side then deals with what it held back.
+    let answered: std::sync::Mutex<Option<bool>> = std::sync::Mutex::new(None);
+    let answer = tokio::sync::Notify::new();
     let up = async {
         let mut buf = vec![0u8; 32 * 1024];
         let mut pass = Vec::with_capacity(32 * 1024);
         loop {
-            match cr.read(&mut buf).await {
-                Ok(0) | Err(_) => break,
-                Ok(n) => {
+            let n = tokio::select! {
+                r = cr.read(&mut buf) => match r { Ok(0) | Err(_) => break, Ok(n) => Some(n) },
+                _ = answer.notified() => None,
+            };
+            match n {
+                n => {
                     // Read before anything is passed on. Only what the reader releases leaves:
                     // each request is held until it has been checked, and what cannot be
                     // vouched for, or is switched off, never goes.
                     pass.clear();
-                    let verdict = sniffer.lock().unwrap().feed(&buf[..n], &mut pass);
+                    let verdict = match n {
+                        Some(n) => sniffer.lock().unwrap().feed(&buf[..n], &mut pass),
+                        None => match answered.lock().unwrap().take() {
+                            Some(switched) => sniffer.lock().unwrap().server_answered(switched, &mut pass),
+                            None => Ok(()),
+                        },
+                    };
                     if !pass.is_empty() {
                         if uw.write_all(&pass).await.is_err() {
                             break;
                         }
                         out.fetch_add(pass.len() as u64, Ordering::Relaxed);
+                        if engine.note_sent(app_id, host, pass.len() as u64) {
+                            *trouble.lock().unwrap() = Some(crate::inspect::Trouble::NotUnderstood("over its hourly limit"));
+                            return true;
+                        }
                     }
                     if let Err(t) = verdict {
                         let said = match &t {
@@ -428,10 +448,23 @@ async fn inspected(engine: &Engine, app_id: &str, host: &str, decision: &Decisio
     };
     let down = async {
         let mut buf = vec![0u8; 32 * 1024];
+        // The first line of the server's first answer, to see whether it agreed to a switch.
+        let mut first: Vec<u8> = Vec::new();
+        let mut judged = false;
         loop {
             match ur.read(&mut buf).await {
                 Ok(0) | Err(_) => break,
                 Ok(n) => {
+                    if !judged {
+                        first.extend_from_slice(&buf[..n.min(16)]);
+                        if first.len() >= 12 {
+                            judged = true;
+                            if sniffer.lock().unwrap().awaiting_upgrade() {
+                                *answered.lock().unwrap() = Some(first.starts_with(b"HTTP/1.1 101"));
+                                answer.notify_one();
+                            }
+                        }
+                    }
                     if cw.lock().await.write_all(&buf[..n]).await.is_err() {
                         break;
                     }
@@ -455,6 +488,7 @@ async fn inspected(engine: &Engine, app_id: &str, host: &str, decision: &Decisio
     let found = trouble.lock().unwrap().take();
     match found {
         Some(crate::inspect::Trouble::OtherSite(other)) => engine.record_refusal(app_id, host, 443, Reason::Malformed, "other_site", &other),
+        Some(crate::inspect::Trouble::NotUnderstood("over its hourly limit")) => engine.record_refusal(app_id, host, 443, Reason::NotTrusted, "limit", ""),
         Some(crate::inspect::Trouble::NotUnderstood(what)) => engine.record_refusal(app_id, host, 443, Reason::Malformed, "not_followed", what),
         Some(crate::inspect::Trouble::Refused(path)) => engine.record_refusal(app_id, host, 443, Reason::NotTrusted, "path", &path),
         Some(crate::inspect::Trouble::Secret(found)) => engine.record_refusal(app_id, host, 443, Reason::NotTrusted, "secret", &format!("{}|{}", found.kind, found.fingerprint)),
@@ -486,7 +520,10 @@ async fn read_hello(client: &mut TcpStream, buf: &mut Vec<u8>) -> Result<Option<
     }
 }
 
-async fn relay(engine: &Engine, client: TcpStream, upstream: TcpStream, out: Arc<AtomicU64>, inn: Arc<AtomicU64>) {
+/// Pass bytes both ways until either side is done. Returns true if it was ended because the app
+/// went over the hourly limit set for this place.
+async fn relay(engine: &Engine, app_id: &str, host: &str, client: TcpStream, upstream: TcpStream, out: Arc<AtomicU64>, inn: Arc<AtomicU64>) -> bool {
+    let over = std::sync::atomic::AtomicBool::new(false);
     let (mut cr, mut cw) = client.into_split();
     let (mut ur, mut uw) = upstream.into_split();
     let up = async {
@@ -499,6 +536,10 @@ async fn relay(engine: &Engine, client: TcpStream, upstream: TcpStream, out: Arc
                         break;
                     }
                     out.fetch_add(n as u64, Ordering::Relaxed);
+                    if engine.note_sent(app_id, host, n as u64) {
+                        over.store(true, Ordering::Relaxed);
+                        break;
+                    }
                 }
             }
         }
@@ -528,6 +569,7 @@ async fn relay(engine: &Engine, client: TcpStream, upstream: TcpStream, out: Arc
         _ = &mut down => { let _ = tokio::time::timeout(Duration::from_secs(2), &mut up).await; }
         _ = cut.changed() => {}
     }
+    over.load(Ordering::Relaxed)
 }
 
 #[cfg(test)]

@@ -19,6 +19,7 @@ const trusted = {
     try { this.entries = await invoke('get_trust', {}); this.error = ''; }
     catch (e) { this.error = errText(e); }
     try { this.inside = await invoke('get_inside_rules', {}); } catch (e) { this.inside = []; }
+    try { this.priv = await invoke('get_private_folders'); } catch (e) { this.priv = null; }
     if (visible && pane === 'trusted') this.render();
   },
 
@@ -52,6 +53,7 @@ const trusted = {
       body.__html = null;
       body.innerHTML = `<div class="tr"><h2>Trusted</h2>
         <p class="lead">Each switch lets one app reach one place. Everything else is blocked or asks you first.</p>
+        <div class="tr-top"></div>
         ${apps.map((a) => `<section class="tr-app" data-app="${esc(a.id)}">
           <h3>${appTile(a.icon, a.name)}${esc(a.name)}</h3>
           <ul class="tr-list"></ul>
@@ -59,9 +61,56 @@ const trusted = {
             <input type="text" class="field sel" name="host" placeholder="Add a destination, like example.com" aria-label="Add a destination for ${esc(a.name)}" spellcheck="false" autocomplete="off" autocapitalize="off">
             <button class="btn" type="submit">Add</button>
             <span class="tr-msg" role="alert"></span>
-          </form></section>`).join('') || '<p class="muted">No AI apps were found on this computer yet.</p>'}</div>`;
+          </form></section>`).join('') || '<p class="muted">No AI apps were found on this computer yet.</p>'}
+        <section class="tr-private"></section></div>`;
     }
     $$('.tr-app', body).forEach((sec) => patch($('.tr-list', sec), this.listHtml(sec.dataset.app)));
+    patch($('.tr-top', body), this.topHtml());
+    patch($('.tr-private', body), this.privateHtml());
+  },
+
+  topHtml() {
+    const st = ctx.status(), notes = st.presetNotes || [];
+    return `<label class="tr-ask"><span class="grow"><b>Ask me about new places</b><br><span class="muted">${st.ask !== false
+        ? 'When an app wants to reach somewhere that is neither trusted nor blocked, you are asked.'
+        : 'Off. Anywhere that is not trusted is blocked without asking, and shown in the Feed.'}</span></span>
+        <span class="switch green"><input type="checkbox" role="switch" data-ask data-key="tr-ask" aria-label="Ask me about new places"${st.ask !== false ? ' checked' : ''}><i></i></span></label>
+      ${notes.length ? `<div class="notice tr-notes" role="status">${icon('info')}<div class="grow"><b>The built-in rules changed with this version.</b><ul>${notes.map((n) => `<li>${esc(n)}</li>`).join('')}</ul></div>
+        <button class="btn sm" data-do="tr-ack" data-key="tr-ack">Got it</button></div>` : ''}`;
+  },
+
+  privateHtml() {
+    const p = this.priv;
+    if (!p) return '';
+    const rows = p.folders.map((f) => `<li class="tr-row"><span class="pj-ic">${icon('folder')}</span>
+        <div class="grow"><div class="tr-label ellipsis mono sel">${esc(f.path)}</div>${f.exists ? '' : '<div class="tr-sub">This folder is no longer there.</div>'}</div>
+        <button class="iconbtn" data-do="tr-private-remove" data-path="${esc(f.path)}" aria-label="Stop treating ${esc(f.path)} as private" title="Remove">${icon('x')}</button></li>`).join('');
+    return `<h3>${icon('lock')}Private folders</h3>
+      <p class="muted tr-private-lead">What is in these folders is never sent. If a request repeats several lines from a file in one of them, it is stopped before it leaves. Works for apps with Look inside on, and for text sent as it stands in the file.</p>
+      <ul class="tr-list">${rows || '<li class="tr-none">No private folders yet.</li>'}</ul>
+      <div class="row tr-private-add"><button class="btn" data-do="tr-private-add" data-key="tr-private-add"${this.privBusy ? ' disabled' : ''}>${icon('plus')}${this.privBusy ? 'Reading the folder…' : 'Add a folder…'}</button>
+        ${p.folders.length && p.lines != null ? `<span class="muted num">${p.files} files read, ${p.lines} lines recognised</span>` : ''}
+        ${this.privError ? `<span class="tr-msg" role="alert">${esc(this.privError)}</span>` : ''}</div>`;
+  },
+
+  async privateAct(what, path) {
+    this.privError = '';
+    try {
+      if (what === 'add') {
+        const picked = await invoke('pick_folder');
+        if (!picked) return;
+        this.privBusy = true; this.render();
+        this.priv = await invoke('add_private_folder', { path: picked });
+      } else this.priv = await invoke('remove_private_folder', { path });
+    } catch (e) { this.privError = errText(e); }
+    this.privBusy = false;
+    if (visible && pane === 'trusted') this.render();
+  },
+
+  async setLimit(appId, host, value) {
+    try { this.take(await invoke('set_limit', { appId, host, mb: value ? Number(value) : null }), appId); }
+    catch (e) { ctx.toast(errText(e)); }
+    this.render();
   },
 
   listHtml(appId) {
@@ -77,6 +126,8 @@ const trusted = {
         <span class="switch sm green"><input type="checkbox" role="switch" data-trust="${esc(t.host)}" data-key="t-${esc(t.host)}" aria-label="${esc((named ? t.label : t.host) + ' for ' + appName)}"${t.enabled ? ' checked' : ''}><i></i></span>
         <div class="grow"><div class="tr-label ellipsis">${esc(named ? t.label : t.host)}${t.recommended ? ' <span class="tag">Recommended</span>' : ''}</div>
           <div class="tr-sub ellipsis">${esc(t.purpose || (t.source === 'you' ? 'Added by you' : ''))}</div></div>
+        ${t.enabled ? `<select class="tr-limit" data-limit="${esc(t.host)}" data-key="l-${esc(t.host)}" aria-label="How much ${esc(appName)} may send to ${esc(named ? t.label : t.host)} per hour" title="A limit on what may be sent here per hour. Downloads only suits a place an app should fetch from but not send to.">
+          ${[['', 'No limit'], ['2', 'Downloads only'], ['20', '20 MB an hour'], ['200', '200 MB an hour']].concat([2, 20, 200].includes(t.limitMb) || !t.limitMb ? [] : [[String(t.limitMb), `${t.limitMb} MB an hour`]]).map(([v, l]) => `<option value="${v}"${String(t.limitMb || '') === v ? ' selected' : ''}>${l}</option>`).join('')}</select>` : ''}
         <span class="tr-host mono sel">${esc(t.host)}</span>
         ${t.source === 'you' ? `<button class="iconbtn" data-do="tr-remove" data-host="${esc(t.host)}" data-key="rm-${esc(t.host)}" aria-label="Remove ${esc(t.host)}" title="Remove">${icon('x')}</button>` : '<span class="tr-gap"></span>'}</li>${this.insideHtml(appId, t.host)}`;
     }).join('');
@@ -303,6 +354,9 @@ export function init(el, context) {
   on(root, 'change', 'input[data-protect]', (ev, i) => apps.run(i.closest('.ap-card').dataset.app, 'app_set_protected', { protected: i.checked }));
   on(root, 'submit', '.tr-add', (ev, form) => { ev.preventDefault(); trusted.add(form); });
   on(root, 'change', 'input[data-login]', (ev, i) => advanced.setLogin(i.checked));
+  on(root, 'change', 'input[data-suggest]', (ev, i) => projects.toggleSuggestion(i.closest('.ap-card').dataset.app, i.closest('.pj-item').dataset.project, Number(i.dataset.suggest), i.checked));
+  on(root, 'change', 'select[data-limit]', (ev, sel) => trusted.setLimit(sel.closest('.tr-app').dataset.app, sel.dataset.limit, sel.value));
+  on(root, 'change', 'input[data-ask]', async (ev, i) => { try { ctx.setStatus(await invoke('set_ask', { on: i.checked })); } catch (e) { i.checked = !i.checked; ctx.toast(errText(e)); } });
   on(root, 'change', 'input[data-inside-rule]', (ev, i) => trusted.setInside(i.closest('.tr-app').dataset.app, i.dataset.host, i.dataset.path, i.checked));
   on(root, 'change', 'input[data-inside]', (ev, i) => apps.run(i.closest('.ap-card').dataset.app, 'app_set_inspect', { on: i.checked }));
   on(root, 'change', 'input[data-secrets]', (ev, i) => apps.run(i.closest('.ap-card').dataset.app, 'app_set_secrets', { on: i.checked }));
@@ -312,6 +366,9 @@ export function init(el, context) {
     const what = b.dataset.do, card = b.closest('.ap-card[data-app]'), appId = card && card.dataset.app;
     if (what === 'tr-reload') trusted.load();
     else if (what === 'tr-remove') trusted.remove(b.closest('.tr-app').dataset.app, b.dataset.host);
+    else if (what === 'tr-ack') invoke('ack_presets').then((st) => ctx.setStatus(st)).catch((e) => ctx.toast(errText(e)));
+    else if (what === 'tr-private-add') trusted.privateAct('add');
+    else if (what === 'tr-private-remove') trusted.privateAct('remove', b.dataset.path);
     else if (what === 'tr-inside-remove') trusted.setInside(b.closest('.tr-app').dataset.app, b.dataset.host, b.dataset.path, false, true);
     else if (what === 'app-start') apps.run(appId, 'app_start', {}, true);
     else if (what === 'app-stop') apps.run(appId, 'app_stop', {}, true);

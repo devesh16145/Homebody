@@ -10,6 +10,7 @@ const sets = new Map();     // appId|name -> ChangeSet
 const notes = new Map();    // appId|name -> string (result of the last apply)
 const errors = new Map();   // appId -> string
 const busy = new Map();     // appId|name or appId -> string (what is in progress)
+const asks = new Map();     // appId|name -> [{host, label, purpose, on}] places the project suggests
 let open = null;            // appId|name currently under review
 let confirm = null;         // appId|name awaiting "remove the copy?" confirmation
 let rerender = () => {};
@@ -20,6 +21,12 @@ const tidy = (path) => String(path || '').replace(/^\/Users\/[^/]+\//, '~/');
 const KIND = { added: 'Added', modified: 'Changed', deleted: 'Deleted' };
 
 export function init(render) { rerender = render; }
+
+/** A tick box in a project's list of suggested places was changed. */
+export function toggleSuggestion(appId, name, index, on) {
+  const list = asks.get(key(appId, name));
+  if (list && list[index]) list[index].on = on;
+}
 
 export async function load(appId) {
   try {
@@ -82,6 +89,9 @@ function item(a, p) {
     </div>
     ${asking ? `<div class="pj-confirm" role="alertdialog"><span><b>Remove this copy?</b> Changes you have not applied are lost. Your own folder is not touched.</span>
       <span class="row"><button class="btn sm" data-do="proj-remove-no" data-key="pn-${esc(k)}">Cancel</button><button class="btn sm danger solid" data-do="proj-remove-yes" data-key="py-${esc(k)}"${doing ? ' disabled' : ''}>${doing === 'remove' ? 'Removing…' : 'Remove copy'}</button></span></div>` : ''}
+    ${asks.has(k) ? `<div class="pj-asks"><b>This project asks to reach ${plural(asks.get(k).length, 'place', 'places')}.</b> It says so in a file in your folder; nothing is trusted unless you agree.
+      <ul>${asks.get(k).map((x, i) => `<li><label><input type="checkbox" data-suggest="${i}" data-key="sg-${esc(k)}-${i}"${x.on ? ' checked' : ''}> ${esc(x.label || x.host)} <span class="mono">${esc(x.host)}</span>${x.purpose ? ` <span class="muted">${esc(x.purpose)}</span>` : ''}</label></li>`).join('')}</ul>
+      <span class="row"><button class="btn sm primary" data-do="proj-trust" data-key="pst-${esc(k)}">Trust for ${esc(a.name)}</button><button class="btn sm" data-do="proj-trust-no" data-key="psn-${esc(k)}">Not now</button></span></div>` : ''}
     ${note ? `<div class="notice ok" role="status">${icon('check')}<span>${esc(note)}</span></div>` : ''}
     ${open === k ? review(a, p, set) : ''}
   </div>`;
@@ -107,9 +117,18 @@ export async function act(what, appId, name) {
       const path = await invoke('pick_folder');
       if (!path) return;
       busy.set(appId, 'add'); rerender();
-      await invoke('project_import', { appId, path });
+      const made = await invoke('project_import', { appId, path });
       busy.delete(appId);
+      if (made && made.suggested && made.suggested.length) asks.set(key(appId, made.name), made.suggested.map((x) => ({ ...x, on: true })));
       return load(appId);
+    }
+    if (what === 'proj-trust-no') { asks.delete(k); return rerender(); }
+    if (what === 'proj-trust') {
+      const chosen = (asks.get(k) || []).filter((x) => x.on);
+      for (const x of chosen) await invoke('set_trust', { appId, host: x.host, enabled: true });
+      asks.delete(k);
+      notes.set(k, `${plural(chosen.length, 'place', 'places')} added to Trusted.`);
+      return rerender();
     }
     if (what === 'proj-term') return void (await invoke('app_open_terminal', { appId, project: name }));
     if (what === 'proj-review') { open = open === k ? null : k; notes.delete(k); rerender(); if (open) count(appId, name); return; }

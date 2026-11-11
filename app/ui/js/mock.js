@@ -106,6 +106,8 @@ export function createMock(scenarioName) {
       })),
       pending,
       localServers: !!s.localServers,
+      ask: s.ask !== false,
+      presetNotes: s.presetsSeen ? [] : ['llama.cpp, Cursor CLI and OpenClaw are recognised. Nothing is trusted for them until you say so.'],
       watch: s.mode === 'watch' ? { since: s.modeSince, until: s.watchUntil || null, places: watchItems(s.modeSince).length } : null,
       watchReview: s.mode !== 'watch' && s.watchReview && watchItems(s.watchReview.since, s.watchReview.until).length
         ? { since: s.watchReview.since, until: s.watchReview.until, places: watchItems(s.watchReview.since, s.watchReview.until).length } : null,
@@ -346,7 +348,7 @@ export function createMock(scenarioName) {
     async project_import({ path }) {
       const name = String(path).split('/').filter(Boolean).pop() || 'project';
       const p = { name, source: path, copy: '/Users/Shared/SandboxAI/claude-code/' + name, importedAt: new Date().toISOString(), sourceExists: true, copyExists: true };
-      mockProjects.push(p); return local(p);
+      mockProjects.push(p); return { ...local(p), suggested: [{ host: 'registry.npmjs.org', label: 'npm registry', purpose: 'Package downloads' }, { host: 'pypi.org', label: 'Python Package Index', purpose: 'Package downloads' }] };
     },
     async project_changes({ name }) {
       const applied = mockApplied.has(name);
@@ -435,6 +437,21 @@ export function createMock(scenarioName) {
       if (i >= 0) mockInside.splice(i, 1);
       return local(mockInside);
     },
+    async set_ask({ on } = {}) { s.ask = !!on; queueStatus(); return status(); },
+    async ack_presets() { s.presetsSeen = true; queueStatus(); return status(); },
+    async set_limit({ appId, host, mb } = {}) { const t = s.trust.find((x) => x.appId === appId && x.host === host); if (t) { t.limitMb = mb || null; t.sentMb = mb ? 0.4 : null; } return trustList(); },
+    async get_private_folders() { return { folders: (s.privateFolders || []).map((path) => ({ path, exists: true })), files: (s.privateFolders || []).length ? 212 : null, lines: (s.privateFolders || []).length ? 5310 : null }; },
+    async add_private_folder({ path } = {}) { await wait(700); s.privateFolders = (s.privateFolders || []).concat(path.replace('recipe-site', 'Taxes')); return this.get_private_folders(); },
+    async remove_private_folder({ path } = {}) { s.privateFolders = (s.privateFolders || []).filter((f) => f !== path); return this.get_private_folders(); },
+    async get_summary() {
+      return { days: 7, since: iso(Date.now() - 7 * 864e5), apps: [
+        { appId: 'claude-code', appName: 'Claude Code', allowed: 41, blocked: 12, bytesOut: 2140000, aroundGate: 2, secretsStopped: 1, addressesRefused: 6,
+          places: [{ name: 'Anthropic API', times: 38, bytesOut: 2100000 }, { name: 'GitHub', times: 3, bytesOut: 40000 }], blockedPlaces: [{ name: 'Statsig', times: 7 }, { name: 'Sentry', times: 3 }] },
+        { appId: 'ollama', appName: 'Ollama', allowed: 2, blocked: 5, bytesOut: 8200, aroundGate: 0, secretsStopped: 0, addressesRefused: 0,
+          places: [{ name: 'Ollama model library', times: 2, bytesOut: 8200 }], blockedPlaces: [{ name: 'Ollama website', times: 5 }] }] };
+    },
+    async timestamp_log() { await wait(900); return { records: s.seq || 1240, time: 'Nov 11 09:14:02 2026 GMT', service: 'http://timestamp.digicert.com', file: '~/Library/…/record-1240.tsr' }; },
+    async check_update() { await wait(700); host('note', { text: 'Asked where Sandbox-ai is published' }); return { current: '0.1.0', latest: null, newer: false, url: null, message: 'No version has been published yet.' }; },
     async app_set_secrets({ appId, on } = {}) { needApp(appId).secrets = !!on; queueStatus(); return status(); },
     async allow_secret({ appId, fingerprint, allowed } = {}) {
       s.events.forEach((e) => { if (e.secret && e.appId === appId && e.secret.fingerprint === fingerprint) e.secret.allowed = !!allowed; });

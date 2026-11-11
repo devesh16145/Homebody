@@ -166,3 +166,16 @@ div.log-lines { padding: 8px 14px; }
 .tr-inside-h { display: flex; align-items: center; gap: 8px; font-size: var(--fs-cap); font-weight: 600; color: var(--text-3); margin-bottom: 2px; }
 .tr-row.sub { display: flex; align-items: center; gap: 10px; padding: 4px 0; }
 .ap-inside.sub { margin-top: 4px; margin-left: 16px; }
+
+/* Trusted: asking, what changed, limits, private folders */
+.tr-ask { display: flex; align-items: center; gap: 16px; margin: 0 0 14px; padding: 10px 12px; border-radius: var(--r-lg); background: var(--fill-1); box-shadow: inset 0 0 0 .5px var(--hairline); }
+.tr-ask b { font-weight: 500; } .tr-ask .muted { font-size: var(--fs-small); }
+.tr-notes { align-items: flex-start; margin: 0 0 14px; }
+.tr-notes ul { margin: 4px 0 0; padding-left: 18px; font-size: var(--fs-small); }
+.tr-limit { flex: none; max-width: 150px; font: inherit; font-size: var(--fs-cap); color: var(--text-2); background: transparent; border: 1px solid var(--hairline); border-radius: 6px; padding: 1px 4px; }
+.tr-private { margin-top: 26px; }
+.tr-private h3 .ic { width: 15px; height: 15px; color: var(--text-3); }
+.tr-private-lead { max-width: 66ch; margin: 2px 0 8px; font-size: var(--fs-small); }
+.tr-private-add { align-items: center; gap: 12px; margin-top: 8px; }
+.pj-asks { margin-top: 8px; padding: 10px 12px; border-radius: var(--r-md); background: var(--blue-bg); font-size: var(--fs-small); }
+.pj-asks b { font-weight: 600; } .pj-asks ul { list-style: none; margin: 6px 0 8px; padding: 0; } .pj-asks li { padding: 1px 0; } .pj-asks .mono { color: var(--text-3); }

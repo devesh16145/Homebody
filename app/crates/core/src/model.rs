@@ -74,6 +74,10 @@ pub struct Status {
     pub today: Counters,
     pub apps: Vec<AppStatus>,
     pub pending: Vec<Ask>,
+    /// Ask about places that are neither trusted nor blocked. Off: block them without asking.
+    pub ask: bool,
+    /// What changed in the built-in rules since the user was last told. Empty when nothing did.
+    pub preset_notes: Vec<String>,
     /// Agents may reach servers they started themselves on this computer (and only those).
     /// Switched on by setup once it has tested that the packet filter can enforce it here.
     pub local_servers: bool,
@@ -279,6 +283,8 @@ pub struct InsideEntry {
     pub host: String,
     pub host_label: String,
     pub path: String,
+    /// Set when the switch is for one kind of request only ("POST").
+    pub method: Option<String>,
     pub label: String,
     pub purpose: String,
     pub enabled: bool,
@@ -313,6 +319,10 @@ pub struct TrustEntry {
     pub enabled: bool,
     pub source: String,
     pub recommended: bool,
+    /// Megabytes that may be sent here per hour, if a limit is set.
+    pub limit_mb: Option<u64>,
+    /// Megabytes sent here in the last hour (one decimal), when a limit is set.
+    pub sent_mb: Option<f64>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]

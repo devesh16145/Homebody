@@ -15,9 +15,11 @@ This is a volunteer project with no paid support and no bounty. You will get an 
 - A protected app reaches any network destination that is not trusted, or that you were not asked about.
 - A protected app reads or writes files in your home folder, or in another protected app's space.
 - A protected app answers its own prompt, changes its own rules, or reaches the control socket.
+- A protected app sends more to a trusted place in an hour than the limit set for it, beyond the one piece that was being passed on when the limit was reached (a few kilobytes; up to 4 MB for an app with looking inside on and private folders in use, because a request is then held and passed whole).
+- A file in a project (`.sandbox-ai.json`) gets a place trusted without the user ticking it.
 - The signed log can be changed, cut or reordered and still pass `sai verify`.
 - Anything in settings, an app name or a project that ends up running as administrator during setup.
-- With looking inside on: a request that reaches a site other than the approved one, a request the gate passed on without being able to follow it, anything after "?" or any content ending up in the log, the local certificate authority's key being readable by a protected app, any spelling of an address that is switched off reaching the real server, or a secret of a recognised shape, sent as it is in the content of a request, reaching the real server whole or in part.
+- With looking inside on: a request that reaches a site other than the approved one, a request the gate passed on without being able to follow it, anything after "?" or any content ending up in the log, the local certificate authority's key being readable by a protected app, any spelling of an address that is switched off reaching the real server, a secret of a recognised shape, sent as it is in the content of a request or of a web socket message, reaching the real server whole or in part, or anything at all reaching the real server on a connection the gate has stopped following.
 - Applying a project's changes writes outside the folder it was brought in from.
 
 ## What is already known and stated
@@ -29,9 +31,16 @@ These are limits of the current design, listed in the README, not new findings:
 - Local programs running as you, outside the fence, are trusted. They can change settings or talk to a gate.
 - Windowed apps run as you behind one layer (the launch-time profile). They can read your files, and a windowed app that deliberately tries to break out has routes a separate user would close, such as writing into a folder another program syncs or runs. A way for a windowed app to reach the **network** directly, or to answer its own prompt, is still a finding.
 - An agent's access to its own local servers rests on the packet filter alone, with a list refreshed twice a second. A way for an agent to reach a local server that is not its own is a finding.
-- Secrets are recognised by shape only. One that has been encoded, compressed, interleaved with other text, or sent over a web socket is not recognised. That is a known limit, not a finding.
+- Secrets are recognised by shape only. One that has been encoded, compressed or interleaved with other text is not recognised. That is a known limit, not a finding.
+- Private folders are matched by exact lines of 40 characters or more, three in one request. Reworded, encoded, shortened or split text is not recognised. That is a known limit; three exact lines from an indexed file reaching the real server is a finding.
+- An hourly limit on a trusted place bounds what is sent there; it does not stop sending below the limit, and it does not count what is received.
+- What a server sends back over a web socket is not read.
 - The build is not signed or notarized yet.
 - Whether the packet filter rules come back after a restart has not been verified on a real restart. The app refuses to start protected apps when they are missing.
+
+## When something is fixed
+
+Every way around that is fixed is written up in [docs/advisories](docs/advisories/README.md): what it was, which versions had it, and the test that now covers it. Fixes are never made quietly. Reports are acknowledged within a week, and details are published once a fix is available or after 90 days, whichever comes first, unless you ask for longer.
 
 ## Supported versions
 

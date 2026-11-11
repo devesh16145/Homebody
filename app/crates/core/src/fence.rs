@@ -1213,7 +1213,9 @@ mod tests {
         // The watchdog script writes the same two rules, and is told which users to do it for.
         assert!(WATCHDOG.contains("pass out quick on lo0 proto tcp from any to any port { %s } user %s") && WATCHDOG.contains("user != %s"));
         let script = setup_script(&cfg, "tester");
-        assert!(script.contains("OWN_USERS=\"_saiagent _saicodex _saigemini _saiaider _saiopencode\"") && !script.contains("@OWN@"));
+        let agents: Vec<&str> = cfg.apps.iter().filter(|a| a.kind == "agent").map(|a| a.os_user.as_str()).collect();
+        assert!(agents.len() >= 5 && !agents.contains(&"_saiollama"));
+        assert!(script.contains(&format!("OWN_USERS=\"{}\"", agents.join(" "))) && !script.contains("@OWN@"));
         // The launch-time profile follows the same switch, and never opens another app's gate.
         let p = seatbelt_profile_for(claude, true);
         let all = p.find("(allow network-outbound (remote ip \"localhost:*\"))").unwrap();

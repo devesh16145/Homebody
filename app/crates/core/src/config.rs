@@ -17,6 +17,10 @@ pub struct TrustRule {
     pub source: String,
     #[serde(default)]
     pub recommended: bool,
+    /// At most this many megabytes may be sent here per hour. None: no limit. A small limit on a
+    /// place an app only downloads from keeps it from being used to send much out.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limit_mb: Option<u64>,
 }
 
 /// A switch for an address inside a trusted place. Acts only while the app's connections are
@@ -31,6 +35,13 @@ pub struct InsideRule {
     pub enabled: bool,
     /// "preset" or "you".
     pub source: String,
+    /// When set, the switch is only for requests of this kind ("POST": sending, "GET": fetching).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub method: Option<String>,
+}
+
+pub fn valid_method(m: &str) -> bool {
+    !m.is_empty() && m.len() <= 12 && m.chars().all(|c| c.is_ascii_uppercase())
 }
 
 /// What a path rule may look like: starts with "/", plain visible characters, not too long.
@@ -104,11 +115,17 @@ pub struct AppConfig {
 impl AppConfig {
     /// Whether a request for `path` at `host` may go. The most specific switch decides; with no
     /// switch for it, everything inside a trusted place is allowed.
-    pub fn inside_allows(&self, host: &str, path: &str) -> bool {
+    pub fn inside_allows(&self, host: &str, method: &str, path: &str) -> bool {
         // Compared without regard to capitals: some servers do not care about them, and a
         // switch that is off must not be dodged by changing them.
         let path = path.to_lowercase();
-        self.inside.iter().filter(|r| r.host == host && catalog::path_under(&path, &r.path.to_lowercase())).max_by_key(|r| r.path.len()).map(|r| r.enabled).unwrap_or(true)
+        self.inside
+            .iter()
+            .filter(|r| r.host == host && catalog::path_under(&path, &r.path.to_lowercase()) && r.method.as_deref().map(|m| m.eq_ignore_ascii_case(method)).unwrap_or(true))
+            // The longest path decides; between two for the same path, the one that names a method.
+            .max_by_key(|r| (r.path.len(), r.method.is_some()))
+            .map(|r| r.enabled)
+            .unwrap_or(true)
     }
 
     /// The rule that decides this destination, if any. Exact rules win over wildcards, and among
@@ -171,7 +188,18 @@ pub struct Config {
     /// The last finished Watch whose results have not been reviewed yet.
     #[serde(default)]
     pub watch_review: Option<WatchWindow>,
+    /// The version of the built-in rules the user has been told about (see `catalog::PRESET_NOTES`).
+    #[serde(default = "before_notes")]
+    pub presets_seen: u32,
+    /// Folders whose contents must never be sent (see `secrets::DocIndex`).
+    #[serde(default)]
+    pub private_folders: Vec<String>,
     pub apps: Vec<AppConfig>,
+}
+
+/// Settings written before the built-in rules were versioned had the rules up to version 3.
+fn before_notes() -> u32 {
+    3
 }
 
 fn yes() -> bool {
@@ -181,7 +209,7 @@ fn yes() -> bool {
 impl Config {
     pub fn fresh() -> Config {
         let now = crate::now_iso();
-        let mut c = Config { version: 1, mode: Mode::Private, mode_since: now.clone(), private_since: Some(now), lockdown: false, ask: true, watch_until: None, watch_review: None, apps: vec![] };
+        let mut c = Config { version: 1, mode: Mode::Private, mode_since: now.clone(), private_since: Some(now), lockdown: false, ask: true, watch_until: None, watch_review: None, presets_seen: catalog::presets_version(), private_folders: vec![], apps: vec![] };
         c.merge_presets();
         c
     }
@@ -232,13 +260,13 @@ impl Config {
             }
             for t in p.trust {
                 if !app.trust.iter().any(|r| r.host == t.host) {
-                    app.trust.push(TrustRule { host: t.host.into(), enabled: t.enabled, source: "preset".into(), recommended: t.recommended });
+                    app.trust.push(TrustRule { host: t.host.into(), enabled: t.enabled, source: "preset".into(), recommended: t.recommended, limit_mb: None });
                     changed = true;
                 }
             }
             for i in p.inside {
                 if !app.inside.iter().any(|r| r.host == i.host && r.path == i.path) {
-                    app.inside.push(InsideRule { host: i.host.into(), path: i.path.into(), enabled: i.enabled, source: "preset".into() });
+                    app.inside.push(InsideRule { host: i.host.into(), path: i.path.into(), enabled: i.enabled, source: "preset".into(), method: None });
                     changed = true;
                 }
             }
@@ -289,7 +317,7 @@ impl Config {
                 a.inspect = false;
             }
             a.allowed_secrets.retain(|f| f.len() == 16 && f.chars().all(|c| c.is_ascii_hexdigit()));
-            a.inside.retain(|r| hostname::canonical(&r.host).as_deref() == Some(r.host.as_str()) && valid_inside_path(&r.path));
+            a.inside.retain(|r| hostname::canonical(&r.host).as_deref() == Some(r.host.as_str()) && valid_inside_path(&r.path) && r.method.as_deref().map(valid_method).unwrap_or(true));
             a.trust.retain(|r| hostname::valid_pattern(&r.host));
             for r in &mut a.trust {
                 r.host = hostname::normalize_pattern(&r.host);
@@ -400,7 +428,7 @@ mod tests {
     fn app_with(rules: &[(&str, bool)]) -> AppConfig {
         let mut c = Config::fresh();
         let mut a = c.apps.remove(0);
-        a.trust = rules.iter().map(|(h, e)| TrustRule { host: h.to_string(), enabled: *e, source: "you".into(), recommended: false }).collect();
+        a.trust = rules.iter().map(|(h, e)| TrustRule { host: h.to_string(), enabled: *e, source: "you".into(), recommended: false, limit_mb: None }).collect();
         a
     }
 
@@ -517,17 +545,22 @@ mod tests {
         let mut c = Config::fresh();
         let a = c.app_mut("claude-code").unwrap();
         // Out of the box: event logging is off, the conversation and everything else is on.
-        assert!(!a.inside_allows("api.anthropic.com", "/api/event_logging/v2/batch"));
-        assert!(a.inside_allows("api.anthropic.com", "/v1/messages"));
-        assert!(a.inside_allows("api.anthropic.com", "/api/event_logging_other"));
-        assert!(a.inside_allows("claude.ai", "/api/event_logging/v2/batch"), "a switch belongs to one place");
+        assert!(!a.inside_allows("api.anthropic.com", "POST", "/api/event_logging/v2/batch"));
+        assert!(a.inside_allows("api.anthropic.com", "POST", "/v1/messages"));
+        assert!(a.inside_allows("api.anthropic.com", "POST", "/api/event_logging_other"));
+        assert!(a.inside_allows("claude.ai", "POST", "/api/event_logging/v2/batch"), "a switch belongs to one place");
         // A more specific switch wins over a broader one, in either direction.
-        a.inside.push(InsideRule { host: "api.anthropic.com".into(), path: "/api/event_logging/v2/health".into(), enabled: true, source: "you".into() });
-        a.inside.push(InsideRule { host: "api.anthropic.com".into(), path: "/".into(), enabled: false, source: "you".into() });
-        assert!(a.inside_allows("api.anthropic.com", "/api/event_logging/v2/health"));
-        assert!(!a.inside_allows("api.anthropic.com", "/api/event_logging/v2/batch"));
-        assert!(!a.inside_allows("api.anthropic.com", "/v1/messages"), "everything else under the broad switch");
-        assert!(!a.inside_allows("api.anthropic.com", "/API/Event_Logging/v2/batch"), "capitals do not get around a switch");
+        a.inside.push(InsideRule { host: "api.anthropic.com".into(), path: "/api/event_logging/v2/health".into(), enabled: true, source: "you".into(), method: None });
+        a.inside.push(InsideRule { host: "api.anthropic.com".into(), path: "/".into(), enabled: false, source: "you".into(), method: None });
+        assert!(a.inside_allows("api.anthropic.com", "GET", "/api/event_logging/v2/health"));
+        assert!(!a.inside_allows("api.anthropic.com", "POST", "/api/event_logging/v2/batch"));
+        assert!(!a.inside_allows("api.anthropic.com", "POST", "/v1/messages"), "everything else under the broad switch");
+        assert!(!a.inside_allows("api.anthropic.com", "POST", "/API/Event_Logging/v2/batch"), "capitals do not get around a switch");
+        // A switch for one kind of request: fetching files stays, sending them is refused.
+        a.inside.push(InsideRule { host: "claude.ai".into(), path: "/v1/files".into(), enabled: false, source: "you".into(), method: Some("POST".into()) });
+        assert!(!a.inside_allows("claude.ai", "POST", "/v1/files") && !a.inside_allows("claude.ai", "post", "/v1/files/x"));
+        assert!(a.inside_allows("claude.ai", "GET", "/v1/files/x"));
+        assert!(valid_method("POST") && !valid_method("post") && !valid_method("P O") && !valid_method(""));
         assert!(valid_inside_path("/v1/messages") && !valid_inside_path("v1") && !valid_inside_path("/a b") && !valid_inside_path("/a?b"));
     }
 
@@ -536,9 +569,9 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let p = dir.path().join("settings.json");
         let mut c = Config::fresh();
-        c.apps[0].trust.push(TrustRule { host: "*".into(), enabled: true, source: "you".into(), recommended: false });
-        c.apps[0].trust.push(TrustRule { host: "127.0.0.1".into(), enabled: true, source: "you".into(), recommended: false });
-        c.apps[0].trust.push(TrustRule { host: "*.com".into(), enabled: true, source: "you".into(), recommended: false });
+        c.apps[0].trust.push(TrustRule { host: "*".into(), enabled: true, source: "you".into(), recommended: false, limit_mb: None });
+        c.apps[0].trust.push(TrustRule { host: "127.0.0.1".into(), enabled: true, source: "you".into(), recommended: false, limit_mb: None });
+        c.apps[0].trust.push(TrustRule { host: "*.com".into(), enabled: true, source: "you".into(), recommended: false, limit_mb: None });
         c.save(&p).unwrap();
         let loaded = Config::load(&p);
         assert!(loaded.apps[0].trust.iter().all(|r| hostname::valid_pattern(&r.host)));

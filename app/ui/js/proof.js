@@ -7,6 +7,8 @@ let root, ctx, el = null;
 let visible = false, data = null, loadError = '';
 let verify = { state: 'idle', error: '' };   // idle | running | failed
 let share = { state: 'idle', path: '', error: '' }; // idle | saving | saved | failed
+let week = null;                               // the last seven days in numbers
+let stamp = { state: 'idle', text: '', error: '' };   // idle | running | done | failed
 let poll = 0, soon = 0;
 
 export function init(node, context) {
@@ -18,8 +20,8 @@ function build() {
   if (el && root.contains(el.hero)) return;
   root.__html = null;
   root.innerHTML = `<div class="proof scroll"><div class="proof-in">
-    <div id="pf-hero"></div><div id="pf-stats"></div><div id="pf-chain"></div><div id="pf-honest"></div></div></div>`;
-  el = { inner: $('.proof-in', root), hero: $('#pf-hero', root), stats: $('#pf-stats', root), chain: $('#pf-chain', root), honest: $('#pf-honest', root) };
+    <div id="pf-hero"></div><div id="pf-stats"></div><div id="pf-chain"></div><div id="pf-week"></div><div id="pf-honest"></div></div></div>`;
+  el = { inner: $('.proof-in', root), hero: $('#pf-hero', root), stats: $('#pf-stats', root), chain: $('#pf-chain', root), week: $('#pf-week', root), honest: $('#pf-honest', root) };
 }
 
 export function show() {
@@ -43,6 +45,7 @@ function loadSoon(ms) {
 async function load() {
   try { data = await invoke('get_proof'); loadError = ''; }
   catch (e) { if (!data) loadError = errText(e); }
+  try { week = await invoke('get_summary', { days: 7 }); } catch (e) { /* the rest of Proof still stands */ }
   if (visible) render();
 }
 
@@ -60,6 +63,7 @@ function render() {
   patch(el.hero, priv ? heroHtml() : idleHtml());
   patch(el.stats, statsHtml());
   patch(el.chain, chainHtml());
+  patch(el.week, weekHtml());
   patch(el.honest, `<div class="honest">
     <div><h3>What this proof covers</h3><p class="sel">${esc(data.covers)}</p></div>
     <div><h3>What it cannot see</h3><p class="sel">${esc(data.cannotSee)}</p></div></div>
@@ -94,6 +98,18 @@ function statsHtml() {
     <div class="stat" title="${esc(data.appNames.join(', '))}"><b class="num">${fmtCount(n)}</b><span>${n === 1 ? 'app' : 'apps'} protected</span></div></div>`;
 }
 
+function weekHtml() {
+  if (!week || !week.apps.length) return '';
+  const plural = (n, one, many) => `${fmtCount(n)} ${n === 1 ? one : many}`;
+  return `<div class="week"><h3>The last seven days</h3>${week.apps.map((a) => {
+    const stopped = [a.aroundGate ? `${plural(a.aroundGate, 'attempt', 'attempts')} to go around the gate` : '', a.secretsStopped ? `${plural(a.secretsStopped, 'request', 'requests')} carrying a secret` : '', a.addressesRefused ? `${plural(a.addressesRefused, 'request', 'requests')} to an address that is switched off` : ''].filter(Boolean);
+    return `<div class="week-app"><div class="week-h"><b>${esc(a.appName)}</b><span class="num">${plural(a.allowed, 'connection', 'connections')} allowed · ${fmtCount(a.blocked)} blocked · ${esc(fmtBytes(a.bytesOut))} sent</span></div>
+      ${a.places.length ? `<div class="week-l"><span>Reached</span><span class="sel">${a.places.map((p) => `${esc(p.name)} <i class="num">${esc(fmtBytes(p.bytesOut))}</i>`).join(', ')}</span></div>` : ''}
+      ${a.blockedPlaces.length ? `<div class="week-l"><span>Blocked</span><span class="sel">${a.blockedPlaces.map((p) => `${esc(p.name)} <i class="num">${fmtCount(p.times)}×</i>`).join(', ')}</span></div>` : ''}
+      ${stopped.length ? `<div class="week-l"><span>Stopped</span><span>${stopped.join(', ')}</span></div>` : ''}</div>`;
+  }).join('')}</div>`;
+}
+
 function chainHtml() {
   const c = data.chain;
   let cls = '', glyph = 'receipt', title = 'The record has not been checked yet', sub = 'Verify confirms nothing in it was changed or removed.';
@@ -110,7 +126,9 @@ function chainHtml() {
       <div class="grow"><div class="chain-t num" role="status">${title}</div><div class="chain-s">${sub}</div></div>
       <button class="btn" data-do="verify" data-key="verify"${busy ? ' disabled' : ''}>${busy ? 'Verifying…' : 'Verify'}</button>
       <button class="btn primary" data-do="share" data-key="share"${saving ? ' disabled' : ''}>${icon('share')}${saving ? 'Saving…' : 'Share proof'}</button>
-    </div>${note}`;
+    </div>${note}
+    <div class="stamp"><span class="grow"><b>Independent timestamp.</b> A public time-stamping service can vouch for when this record existed. Only a fingerprint of the record is sent to it, nothing from the record itself.${stamp.state === 'done' ? ` <span class="ok">${esc(stamp.text)}</span>` : ''}${stamp.state === 'failed' ? ` <span class="bad">${esc(stamp.error)}</span>` : ''}</span>
+      <button class="btn" data-do="stamp" data-key="stamp"${stamp.state === 'running' ? ' disabled' : ''}>${stamp.state === 'running' ? 'Asking…' : 'Add a timestamp'}</button></div>`;
 }
 
 // ---------- actions ----------
@@ -126,6 +144,13 @@ const actions = {
     render();
     try { data.chain = await invoke('verify_chain'); verify = { state: 'idle', error: '' }; }
     catch (e) { verify = { state: 'failed', error: errText(e) }; }
+    if (visible) render();
+  },
+  async stamp() {
+    stamp = { state: 'running', text: '', error: '' };
+    render();
+    try { const r = await invoke('timestamp_log'); stamp = { state: 'done', text: `Vouched for: ${fmtCount(r.records)} records, ${r.time}.`, error: '' }; }
+    catch (e) { stamp = { state: 'failed', text: '', error: errText(e) }; }
     if (visible) render();
   },
   async share() {

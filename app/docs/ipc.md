@@ -37,6 +37,8 @@ interface Status {
   today: Counters;
   apps: AppStatus[];
   pending: Ask[];               // unanswered prompts, oldest first
+  ask: boolean;                 // false: places that are neither trusted nor blocked are refused without a prompt
+  presetNotes: string[];        // what changed in the built-in rules since the user last said "Got it"; empty when nothing did
   localServers: boolean;            // agents may reach servers they started themselves (setup tested it here)
   watch: WatchStatus | null;        // present while Watch is on
   watchReview: WatchStatus | null;  // a finished Watch has places waiting to be reviewed
@@ -94,13 +96,14 @@ interface FeedEvent {
   bytesIn: number | null;
   durationMs: number | null;
   trusted: boolean;             // is this destination currently Trusted for this app
-  requests?: { what: string; times: number; path: string; label: string; allowed: boolean   secret?: { kind: string; fingerprint: string; allowed: boolean } | null;
-                                // present when this row is a request stopped for carrying a secret. `kind` reads
-                                // "a GitHub token"; the secret itself is never stored, only this fingerprint
-}[] | null;
+  requests?: { what: string; times: number; path: string; label: string; allowed: boolean }[] | null;
                                 // present when the connection was looked inside: "POST /v1/messages" and how often,
                                 // most frequent first; `label` in plain words when known ("Conversation");
                                 // `allowed` is the current switch for that path. Never anything after "?"
+  secret?: { kind: string; fingerprint: string; allowed: boolean } | null;
+                                // present when this row is a request stopped for what its content carried. `kind` reads
+                                // "a GitHub token" or "text from a folder you marked private"; the content itself is never stored,
+                                // only this fingerprint
 }
 
 interface Ask {
@@ -122,6 +125,8 @@ interface TrustEntry {
   enabled: boolean;
   source: "preset" | "you";
   recommended: boolean;         // preset marks it as needed for the app to work
+  limitMb: number | null;       // megabytes this app may send here per hour; null: no limit
+  sentMb: number | null;        // megabytes sent here in the last hour (one decimal), when a limit is set
 }
 
 interface ChainCheck { ok: boolean; count: number; checkedAt: string; error: string | null; }
@@ -177,6 +182,25 @@ interface Proof {
 }
 
 interface SetupResult { ok: boolean; message: string; }
+
+// What each app did over the last days, counted from the log (Proof → "The last seven days").
+interface Summary {
+  days: number; since: string;
+  apps: {
+    appId: string; appName: string;
+    allowed: number; blocked: number; bytesOut: number;
+    aroundGate: number;          // attempts that did not go through the gate
+    secretsStopped: number;      // requests stopped for carrying a secret or private text
+    addressesRefused: number;    // requests to an address that is switched off
+    places: { name: string; times: number; bytesOut: number }[];   // most used, at most five
+    blockedPlaces: { name: string; times: number }[];              // most often blocked, at most five
+  }[];
+}
+
+interface PrivateFolders {
+  folders: { path: string; exists: boolean }[];
+  files: number | null; lines: number | null;   // what the index holds; null until it has been built
+}
 ```
 
 ## Commands (`invoke(name, args)`)
@@ -193,10 +217,18 @@ interface SetupResult { ok: boolean; message: string; }
 | `get_trust` | `{ appId?: string }` | `TrustEntry[]` | |
 | `set_trust` | `{ appId, host, enabled }` | `TrustEntry[]` | creates the entry if missing (source "you") |
 | `remove_trust` | `{ appId, host }` | `TrustEntry[]` | only entries with source "you" |
+| `set_limit` | `{ appId, host, mb?: number }` | `TrustEntry[]` | megabytes the app may send to this trusted place per hour; leave `mb` out to remove the limit. Counted by the gate for every app, with or without looking inside. Over the limit, new connections are refused and an open one is cut, until the hour has moved on |
+| `set_ask` | `{ on }` | `Status` | off: unknown places are refused without a prompt, and prompts that are waiting end as if unanswered (blocked) |
+| `ack_presets` | — | `Status` | the user has read `Status.presetNotes` |
+| `get_private_folders` | — | `PrivateFolders` | |
+| `add_private_folder` / `remove_private_folder` | `{ path }` | `PrivateFolders` | a folder whose text must never be sent. While an app's connections are looked inside, a request that repeats three or more long lines from a file in one of these folders is stopped. Must be a folder inside the user's home folder (not the home folder itself); at most 20 |
+| `check_update` | — | `{ current, latest, newer, url, message }` | asks where Sandbox-ai is published whether a newer version exists. Only ever runs when the user asks; nothing is downloaded. `message` is a sentence for the user |
 | `get_proof` | — | `Proof` | |
 | `verify_chain` | — | `ChainCheck` | may take a moment on a large log |
 | `export_proof` | — | `{ path: string }` | writes a signed proof file to Downloads and reveals it |
-| `export_log` | `{ reveal?: boolean }` | `{ path: string }` | writes the whole log to Downloads: one signed header line, then every record as written. `sai verify <file>` checks it without the app |
+| `export_log` | `{ reveal?: boolean }` | `{ path: string }` | writes a folder to Downloads: `log.jsonl` (one signed header line, then every record as written), `activity.csv` (the Feed as a table), `rules.json` (the settings in force), `timestamps/` (any independent timestamps) and `README.txt`. `sai verify <folder or log.jsonl>` checks it without the app |
+| `timestamp_log` | — | `{ records, time, service, file }` | asks a public time-stamping service to vouch for the log as it stands. Only a fingerprint (a hash) of the log is sent, over the user's own connection, and the request is written to the log. The answer is kept beside the log and included in exports |
+| `get_summary` | `{ days?: number }` | `Summary` | default 7, at most 90 |
 | `get_receipts` | `{ limit?: number }` | `string[]` | raw log lines, newest last (Studio → Logs) |
 | `get_policy_text` | — | `string` | raw settings as pretty JSON (Studio → Advanced, read-only) |
 | `run_setup` | — | `SetupResult` | one-time setup; the OS asks for the admin password |
@@ -212,9 +244,9 @@ interface SetupResult { ok: boolean; message: string; }
 | `install_app` | — | `{ path }` | copies the app into Applications, replacing an older copy |
 | `install_and_restart` | — | `null` | shell only: `install_app`, then stop cleanly and reopen from Applications |
 | `get_login_item` / `set_login_item` | — / `{ on }` | `{ on: boolean }` | shell only: open the app at login (a per-user launch entry) |
-| `get_inside_rules` | `{ appId?: string }` | `InsideEntry[]` | switches for addresses inside trusted places. `InsideEntry = { appId, host, hostLabel, path, label, purpose, enabled, source }`; `path` is the start of a path, matched by whole segments |
-| `set_inside_rule` | `{ appId, host, path, enabled }` | `InsideEntry[]` | allow or refuse one address inside a place; creates the switch if missing (source "you"). Acts only while the app's connections are looked inside |
-| `remove_inside_rule` | `{ appId, host, path }` | `InsideEntry[]` | only switches with source "you" |
+| `get_inside_rules` | `{ appId?: string }` | `InsideEntry[]` | switches for addresses inside trusted places. `InsideEntry = { appId, host, hostLabel, path, method, label, purpose, enabled, source }`; `path` is the start of a path, matched by whole segments; `method` is null for every kind of request, or one kind ("POST") |
+| `set_inside_rule` | `{ appId, host, path, method?, enabled }` | `InsideEntry[]` | allow or refuse one address inside a place; creates the switch if missing (source "you"). Acts only while the app's connections are looked inside |
+| `remove_inside_rule` | `{ appId, host, path, method? }` | `InsideEntry[]` | only switches with source "you" |
 | `app_set_secrets` | `{ appId, on }` | `Status` | while looking inside, stop requests whose content holds something that looks like a private key or access token. On by default |
 | `allow_secret` | `{ appId, fingerprint, allowed }` | `null` | let one particular secret through for this app from now on, or stop doing so. `fingerprint` comes from `FeedEvent.secret` |
 | `app_set_inspect` | `{ appId, on }` | `Status` | look inside this app's connections to trusted places (see "Looking inside" in the README). Switching on creates this computer's certificate authority if needed and puts its certificate where protected apps can read it. Rejects apps that cannot support it with a sentence for the user |
@@ -223,7 +255,7 @@ interface SetupResult { ok: boolean; message: string; }
 | `app_stop` | `{ appId }` | `Status` | |
 | `app_open_terminal` | `{ appId, project?: string }` | `null` | agents: open a protected terminal in the workspace, or in a project's copy |
 | `get_projects` | `{ appId }` | `ProjectInfo[]` | |
-| `project_import` | `{ appId, path }` | `ProjectInfo` | copies the folder into the workspace (instant, copy-on-write) and keeps a private baseline to compare against |
+| `project_import` | `{ appId, path }` | `ProjectInfo & { suggested }` | copies the folder into the workspace (instant, copy-on-write) and keeps a private baseline to compare against. `suggested: { host, label, purpose }[]` lists the places the folder's `.sandbox-ai.json` asks for that are not trusted yet; nothing is trusted until the user agrees (`set_trust`) |
 | `project_changes` | `{ appId, name }` | `ChangeSet` | what differs between the agent's copy and the baseline; `.git` is never compared |
 | `project_apply` | `{ appId, name, overwrite?: boolean }` | `ApplyResult` | writes the changes into the original folder as the user. Conflicts are skipped unless `overwrite` |
 | `project_remove` | `{ appId, name }` | `null` | deletes the copy and baseline; the original is not touched |
@@ -232,6 +264,7 @@ interface SetupResult { ok: boolean; message: string; }
 | `open_main` | `{ tab?: "feed" \| "proof" \| "studio" }` | `null` | show and focus the main window |
 | `hide_window` | — | `null` | hides the calling window (Glance, prompt) |
 | `quit` | — | `null` | |
+| `fenced_argv` | `{ appId, program, args?: string[], cwd?: string }` | `string[]` | the full command line that runs a program inside this app's fence; what `sai run` uses |
 | `get_setup_script` | — | `string` | exactly what the administrator approves in `run_setup`, for showing to the user first |
 | `show` | `{ window: "main" \| "glance" \| "prompt", tab? }` | `null` | for the CLI and scripts: bring a window of the running app forward |
 

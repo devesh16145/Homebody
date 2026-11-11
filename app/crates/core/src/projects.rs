@@ -21,7 +21,9 @@ use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 /// Folder names that are never compared or copied back, at any depth.
-const SKIPPED: &[&str] = &[".git"];
+/// Never compared and never copied back: version history, and the file in which a project
+/// suggests places to trust (an agent must not be able to write itself a suggestion).
+const SKIPPED: &[&str] = &[".git", SUGGESTIONS_FILE];
 /// `O_NOFOLLOW` on macOS and the BSDs.
 const O_NOFOLLOW: i32 = 0x0100;
 /// How many changes are listed for display. Counts are always complete.
@@ -64,6 +66,32 @@ pub struct ProjectInfo {
     pub imported_at: String,
     pub source_exists: bool,
     pub copy_exists: bool,
+}
+
+/// A project may carry a small file naming places it needs, so they need not be typed in:
+/// `.sandbox-ai.json` with `{"trust": ["registry.npmjs.org", "pypi.org"]}`.
+///
+/// It is only ever read from YOUR folder, never from the agent's copy, and nothing in it is
+/// applied by itself: the places are shown to the user, who decides. Otherwise an agent could
+/// write itself a list of places to reach.
+pub const SUGGESTIONS_FILE: &str = ".sandbox-ai.json";
+
+pub fn suggested_places(source: &Path) -> Vec<String> {
+    let Ok(text) = std::fs::read_to_string(source.join(SUGGESTIONS_FILE)) else { return vec![] };
+    if text.len() > 64 * 1024 {
+        return vec![];
+    }
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) else { return vec![] };
+    let mut out: Vec<String> = Vec::new();
+    for h in v.get("trust").and_then(|t| t.as_array()).into_iter().flatten().filter_map(|h| h.as_str()) {
+        if crate::hostname::valid_pattern(h) {
+            let h = crate::hostname::normalize_pattern(h);
+            if !out.contains(&h) && out.len() < 30 {
+                out.push(h);
+            }
+        }
+    }
+    out
 }
 
 pub fn copy_dir(app: &AppConfig, name: &str) -> Option<PathBuf> {
@@ -340,6 +368,16 @@ pub fn apply(copy: &Path, base: &Path, source: &Path, overwrite: bool) -> Result
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_project_can_suggest_places_and_only_valid_ones_are_kept() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(suggested_places(dir.path()).is_empty());
+        std::fs::write(dir.path().join(SUGGESTIONS_FILE), r#"{"trust": ["Registry.NPMJS.org", "pypi.org", "pypi.org", "*", "10.0.0.1", "*.com", 42, "*.example.com"]}"#).unwrap();
+        assert_eq!(suggested_places(dir.path()), vec!["registry.npmjs.org", "pypi.org", "*.example.com"]);
+        std::fs::write(dir.path().join(SUGGESTIONS_FILE), "not json").unwrap();
+        assert!(suggested_places(dir.path()).is_empty());
+    }
 
     struct World {
         _dir: tempfile::TempDir,

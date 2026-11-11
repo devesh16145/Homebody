@@ -247,8 +247,15 @@ enum State {
     ChunkData(u64),
     ChunkEnd,
     Trailers,
-    /// After an upgrade (a web socket, say) the bytes are no longer requests.
-    Opaque,
+    /// The app asked to switch to a web socket. Nothing more from it goes until the server has
+    /// answered: if the server does not switch, what follows are ordinary requests and must be
+    /// read as such.
+    AwaitUpgrade,
+    /// A web socket, between frames.
+    WsHeader,
+    /// Inside one frame: bytes left, the mask the app applied, how far in we are, whether this
+    /// frame is content to be examined, and whether it ends a message.
+    WsPayload { left: u64, mask: [u8; 4], at: usize, content: bool, last: bool },
 }
 
 /// Follows the requests an app sends on one connection, without keeping any of their content.
@@ -265,7 +272,9 @@ pub struct Sniffer {
     pub requests: u64,
     /// Whether a request for this path (no query) may go. The user's switches for addresses
     /// inside a trusted place.
-    allow: Box<dyn Fn(&str) -> bool + Send>,
+    allow: Box<dyn Fn(&str, &str) -> bool + Send>,
+    /// What the app sent while the server had not yet answered a request to switch.
+    held: Vec<u8>,
     /// Looks at the content of requests for secrets, when that is switched on.
     scanner: Option<crate::secrets::Scanner>,
     /// Bytes waiting to be passed on, in order, while the scanner still holds back the content
@@ -284,12 +293,18 @@ impl Sniffer {
 
     /// Pass these bytes on, or queue them behind content the scanner is still holding back.
     fn emit(&mut self, bytes: &[u8], content: bool, pass: &mut Vec<u8>) -> Result<(), Trouble> {
+        self.emit_as(bytes, content.then_some(bytes), pass)
+    }
+
+    /// The same, for content that is sent in a disguised form (web socket frames are masked):
+    /// `bytes` is what goes on the wire, `readable` is what it says.
+    fn emit_as(&mut self, bytes: &[u8], readable: Option<&[u8]>, pass: &mut Vec<u8>) -> Result<(), Trouble> {
         let Some(scanner) = self.scanner.as_mut() else {
             pass.extend_from_slice(bytes);
             return Ok(());
         };
-        if content {
-            self.cleared += scanner.push(bytes).map_err(Trouble::Secret)?;
+        if let Some(readable) = readable {
+            self.cleared += scanner.push(readable).map_err(Trouble::Secret)?;
             self.waiting.push_back((bytes.to_vec(), true));
         } else if self.waiting.is_empty() {
             pass.extend_from_slice(bytes);
@@ -330,11 +345,28 @@ impl Sniffer {
     }
 
     pub fn new(host: &str) -> Sniffer {
-        Sniffer::with_rules(host, |_| true)
+        Sniffer::with_rules(host, |_, _| true)
     }
 
-    pub fn with_rules(host: &str, allow: impl Fn(&str) -> bool + Send + 'static) -> Sniffer {
-        Sniffer { host: host.to_ascii_lowercase(), state: State::Head, buf: Vec::new(), seen: Vec::new(), requests: 0, allow: Box::new(allow), scanner: None, waiting: Default::default(), cleared: 0 }
+    /// `allow(method, path)`: the user's switches for addresses inside this place.
+    pub fn with_rules(host: &str, allow: impl Fn(&str, &str) -> bool + Send + 'static) -> Sniffer {
+        Sniffer { host: host.to_ascii_lowercase(), state: State::Head, buf: Vec::new(), seen: Vec::new(), requests: 0, allow: Box::new(allow), held: Vec::new(), scanner: None, waiting: Default::default(), cleared: 0 }
+    }
+
+    /// Whether the app has asked to switch to a web socket and the server has not answered yet.
+    pub fn awaiting_upgrade(&self) -> bool {
+        matches!(self.state, State::AwaitUpgrade)
+    }
+
+    /// The server has answered the request to switch. Whatever the app sent in the meantime is
+    /// now read as what it is: web socket frames if the server switched, requests if it did not.
+    pub fn server_answered(&mut self, switched: bool, pass: &mut Vec<u8>) -> Result<(), Trouble> {
+        if !self.awaiting_upgrade() {
+            return Ok(());
+        }
+        self.state = if switched { State::WsHeader } else { State::Head };
+        let held = std::mem::take(&mut self.held);
+        self.feed(&held, pass)
     }
 
     /// What was asked for, most frequent first.
@@ -349,9 +381,75 @@ impl Sniffer {
     pub fn feed(&mut self, mut data: &[u8], pass: &mut Vec<u8>) -> Result<(), Trouble> {
         while !data.is_empty() {
             match self.state {
-                State::Opaque => {
-                    pass.extend_from_slice(data);
+                State::AwaitUpgrade => {
+                    // Not passed on until the server has answered (see `server_answered`).
+                    self.held.extend_from_slice(data);
+                    if self.held.len() > HEAD_LIMIT {
+                        return Err(Trouble::NotUnderstood("a great deal sent before the server agreed to switch"));
+                    }
                     return Ok(());
+                }
+                State::WsHeader => {
+                    // 2 bytes, then 0, 2 or 8 of length, then the 4-byte mask.
+                    let need = |b: &[u8]| -> Option<usize> {
+                        let short = *b.get(1)? & 0x7f;
+                        Some(2 + match short { 126 => 2, 127 => 8, _ => 0 } + 4)
+                    };
+                    let want = need(&self.buf).unwrap_or(2);
+                    let take = (want - self.buf.len()).min(data.len());
+                    self.buf.extend_from_slice(&data[..take]);
+                    data = &data[take..];
+                    let Some(total) = need(&self.buf) else { continue };
+                    if self.buf.len() < total {
+                        continue;
+                    }
+                    let head = std::mem::take(&mut self.buf);
+                    if head[1] & 0x80 == 0 {
+                        return Err(Trouble::NotUnderstood("a web socket frame that is not in the proper form"));
+                    }
+                    if head[0] & 0x70 != 0 {
+                        // Compressed or extended frames cannot be read, so they are not agreed to
+                        // (the request for them is removed) and not let through.
+                        return Err(Trouble::NotUnderstood("a compressed web socket frame"));
+                    }
+                    let opcode = head[0] & 0x0f;
+                    let left = match head[1] & 0x7f {
+                        126 => u16::from_be_bytes([head[2], head[3]]) as u64,
+                        127 => u64::from_be_bytes(head[2..10].try_into().unwrap()),
+                        n => n as u64,
+                    };
+                    let mask: [u8; 4] = head[total - 4..].try_into().unwrap();
+                    // Text, binary and their continuations are content; pings and the like are not.
+                    let (content, last) = (opcode <= 2, head[0] & 0x80 != 0);
+                    self.emit(&head, false, pass)?;
+                    if left == 0 {
+                        if content && last {
+                            self.content_ended(pass)?;
+                        }
+                    } else {
+                        self.state = State::WsPayload { left, mask, at: 0, content, last };
+                    }
+                }
+                State::WsPayload { left, mask, at, content, last } => {
+                    let take = (left.min(data.len() as u64)) as usize;
+                    let wire = &data[..take];
+                    if content {
+                        let readable: Vec<u8> = wire.iter().enumerate().map(|(i, b)| b ^ mask[(at + i) % 4]).collect();
+                        self.emit_as(wire, Some(&readable), pass)?;
+                    } else {
+                        self.emit(wire, false, pass)?;
+                    }
+                    data = &data[take..];
+                    let left = left - take as u64;
+                    if left == 0 {
+                        self.state = State::WsHeader;
+                        if content && last {
+                            // The end of a message: what was held back is judged and let go.
+                            self.content_ended(pass)?;
+                        }
+                    } else {
+                        self.state = State::WsPayload { left, mask, at: (at + take) % 4, content, last };
+                    }
                 }
                 State::Body(left) | State::ChunkData(left) => {
                     let take = (left.min(data.len() as u64)) as usize;
@@ -393,11 +491,21 @@ impl Sniffer {
             }
             return Ok(None);
         };
-        let part: Vec<u8> = self.buf[..at].to_vec();
+        let mut part: Vec<u8> = self.buf[..at].to_vec();
         let used = at + end.len() - before;
         self.buf.clear();
         match self.state {
-            State::Head => self.on_head(&part)?,
+            State::Head => {
+                self.on_head(&part)?;
+                if self.awaiting_upgrade() {
+                    // Do not agree to compressed frames: they could not be read.
+                    // (Lines end in CR LF; the last one has no ending here, so they are taken
+                    // apart and put together on the pair, never on one of the two characters.)
+                    let text = String::from_utf8_lossy(&part).into_owned();
+                    let kept: Vec<&str> = text.split("\r\n").filter(|line| !line.to_ascii_lowercase().starts_with("sec-websocket-extensions:")).collect();
+                    part = kept.join("\r\n").into_bytes();
+                }
+            }
             State::ChunkSize => {
                 let line = std::str::from_utf8(&part).map_err(|_| Trouble::NotUnderstood("a chunk size that is not text"))?;
                 let hex = line.split(';').next().unwrap_or("").trim();
@@ -443,7 +551,7 @@ impl Sniffer {
         if method.is_empty() || method.eq_ignore_ascii_case("CONNECT") {
             return Err(Trouble::NotUnderstood("a tunnel inside the connection"));
         }
-        let (mut host, mut length, mut chunked, mut upgrade) = (None::<String>, None::<u64>, false, false);
+        let (mut host, mut length, mut chunked, mut upgrade) = (None::<String>, None::<u64>, false, None::<String>);
         for h in req.headers.iter() {
             let value = std::str::from_utf8(h.value).map_err(|_| Trouble::NotUnderstood("a header that is not text"))?.trim();
             if h.name.eq_ignore_ascii_case("host") {
@@ -463,7 +571,7 @@ impl Sniffer {
                 }
                 chunked = true;
             } else if h.name.eq_ignore_ascii_case("upgrade") {
-                upgrade = true;
+                upgrade = Some(value.to_ascii_lowercase());
             }
         }
         // The site named inside must be the site that was approved. This is what stops a
@@ -486,12 +594,23 @@ impl Sniffer {
         let path = clean_path(target);
         // Judged as written and as a server would most generously read it, so that another
         // spelling of a switched-off address is refused too.
-        if !(self.allow)(&path) || !(self.allow)(&rule_path(target)) {
+        let method_upper = method.to_ascii_uppercase();
+        if !(self.allow)(&method_upper, &path) || !(self.allow)(&method_upper, &rule_path(target)) {
             return Err(Trouble::Refused(path));
         }
+        if let Some(to) = &upgrade {
+            // Only a web socket, and only as the first thing on a connection, so that the
+            // server's first answer is the answer to this.
+            if to != "websocket" {
+                return Err(Trouble::NotUnderstood("a switch to something other than a web socket"));
+            }
+            if self.requests > 0 || length.unwrap_or(0) > 0 || chunked {
+                return Err(Trouble::NotUnderstood("a switch to a web socket after other requests"));
+            }
+        }
         self.note(&method, &path);
-        self.state = if upgrade {
-            State::Opaque
+        self.state = if upgrade.is_some() {
+            State::AwaitUpgrade
         } else if chunked {
             State::ChunkSize
         } else {
@@ -666,7 +785,7 @@ mod tests {
         let logging = b"POST /api/event_logging/v2/batch?x=1 HTTP/1.1\r\nHost: api.example.com\r\nAuthorization: Bearer SECRET\r\nContent-Length: 9\r\n\r\ntelemetry";
         let wire = [good.as_slice(), logging.as_slice(), good.as_slice()].concat();
         for step in [1, 3, 8, 50, 4096] {
-            let s = Sniffer::with_rules("api.example.com", |path| !path.starts_with("/api/event_logging"));
+            let s = Sniffer::with_rules("api.example.com", |_, path| !path.starts_with("/api/event_logging"));
             let (out, trouble) = passed(s, &wire, step);
             assert_eq!(trouble, Some(Trouble::Refused("/api/event_logging/v2/batch".into())), "step {step}");
             assert_eq!(out, good, "step {step}: the request before it went, and not one byte of the refused one");
@@ -692,7 +811,7 @@ mod tests {
 
     #[test]
     fn another_spelling_of_a_switched_off_address_is_refused_too() {
-        let off = |path: &str| !crate::catalog::path_under(path, "/api/event_logging");
+        let off = |_: &str, path: &str| !crate::catalog::path_under(path, "/api/event_logging");
         let padding = "a/".repeat(100);
         let spellings = [
             "/api/event_logging/v2/batch".to_string(),
@@ -840,11 +959,116 @@ GET /v1/models HTTP/1.1\r\nHost: api.example.com\r\n\r\n";
         assert!(matches!(feed_all("api.example.com", &endless, 4096), Err(Trouble::NotUnderstood(_))));
     }
 
+    /// One web socket frame as an app sends it: masked, with the given opcode.
+    fn frame(opcode: u8, last: bool, payload: &[u8]) -> Vec<u8> {
+        let mask = [0x37u8, 0xfa, 0x21, 0x3d];
+        let mut f = vec![opcode | if last { 0x80 } else { 0 }];
+        match payload.len() {
+            n if n < 126 => f.push(0x80 | n as u8),
+            n if n < 65536 => {
+                f.push(0x80 | 126);
+                f.extend_from_slice(&(n as u16).to_be_bytes());
+            }
+            n => {
+                f.push(0x80 | 127);
+                f.extend_from_slice(&(n as u64).to_be_bytes());
+            }
+        }
+        f.extend_from_slice(&mask);
+        f.extend(payload.iter().enumerate().map(|(i, b)| b ^ mask[i % 4]));
+        f
+    }
+
+    const UPGRADE: &[u8] = b"GET /v1/responses HTTP/1.1\r\nHost: api.example.com\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Extensions: permessage-deflate\r\nSec-WebSocket-Key: x\r\n\r\n";
+
     #[test]
-    fn after_an_upgrade_the_rest_is_left_alone_and_many_kinds_are_capped() {
-        let ws = b"GET /v1/responses HTTP/1.1\r\nHost: api.example.com\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n\x81\x05hello this is not a request line\r\n\r\n";
-        let s = feed_all("api.example.com", ws, 11).unwrap();
-        assert_eq!((s.requests, s.summary()), (1, vec![("GET /v1/responses".to_string(), 1)]));
+    fn nothing_more_goes_until_the_server_has_agreed_to_switch() {
+        // The request to switch goes (without its request for compression); what follows waits.
+        let mut s = Sniffer::new("api.example.com");
+        let mut out = Vec::new();
+        s.feed(UPGRADE, &mut out).unwrap();
+        let sent = String::from_utf8_lossy(&out).to_string();
+        assert!(sent.starts_with("GET /v1/responses") && sent.ends_with("\r\n\r\n") && !sent.to_lowercase().contains("extensions"));
+        // Wherever that header stands, first, in the middle or last, what is left is well formed:
+        // every line ends in CR LF and there is no stray CR.
+        for wire in [
+            "GET / HTTP/1.1\r\nSec-WebSocket-Extensions: permessage-deflate\r\nHost: api.example.com\r\nUpgrade: websocket\r\n\r\n",
+            "GET / HTTP/1.1\r\nHost: api.example.com\r\nUpgrade: websocket\r\nSEC-WEBSOCKET-EXTENSIONS: x\r\n\r\n",
+            "GET / HTTP/1.1\r\nHost: api.example.com\r\nUpgrade: websocket\r\n\r\n",
+        ] {
+            let mut out = Vec::new();
+            Sniffer::new("api.example.com").feed(wire.as_bytes(), &mut out).unwrap();
+            let sent = String::from_utf8(out).unwrap();
+            assert_eq!(sent, "GET / HTTP/1.1\r\nHost: api.example.com\r\nUpgrade: websocket\r\n\r\n", "{wire:?}");
+        }
+        assert!(s.awaiting_upgrade());
+        // The server did NOT switch. What the app sent next is a request for another site,
+        // which used to slip through unread. It is read, and refused.
+        let sneaked = b"POST /upload HTTP/1.1\r\nHost: attacker.example.net\r\nContent-Length: 4\r\n\r\ndata";
+        out.clear();
+        s.feed(sneaked, &mut out).unwrap();
+        assert!(out.is_empty(), "held until the server has answered");
+        assert_eq!(s.server_answered(false, &mut out), Err(Trouble::OtherSite("attacker.example.net".into())));
+        assert!(out.is_empty());
+        // An honest follow-up after a refused switch is an ordinary request.
+        let mut s = Sniffer::new("api.example.com");
+        let mut out = Vec::new();
+        s.feed(UPGRADE, &mut out).unwrap();
+        out.clear();
+        s.server_answered(false, &mut out).unwrap();
+        s.feed(b"GET /v1/models HTTP/1.1\r\nHost: api.example.com\r\n\r\n", &mut out).unwrap();
+        assert!(out.starts_with(b"GET /v1/models"));
+        assert_eq!(s.requests, 2);
+        // Asking to switch after other requests, or to something else, is not followed.
+        let later = [b"GET / HTTP/1.1\r\nHost: api.example.com\r\n\r\n".as_slice(), UPGRADE].concat();
+        assert!(matches!(passed(Sniffer::new("api.example.com"), &later, 50).1, Some(Trouble::NotUnderstood(_))));
+        let other = b"GET / HTTP/1.1\r\nHost: api.example.com\r\nUpgrade: h2c\r\n\r\n";
+        assert!(matches!(passed(Sniffer::new("api.example.com"), other, 50).1, Some(Trouble::NotUnderstood(_))));
+    }
+
+    /// Start a web socket on a reader and return it once the server has switched.
+    fn switched(mut s: Sniffer) -> Sniffer {
+        let mut out = Vec::new();
+        s.feed(UPGRADE, &mut out).unwrap();
+        s.server_answered(true, &mut out).unwrap();
+        s
+    }
+
+    #[test]
+    fn web_socket_messages_are_read_and_a_secret_in_one_is_stopped() {
+        let hello = frame(1, true, b"{\"type\":\"hello\"}");
+        let ping = frame(9, true, b"hi");
+        let big = frame(2, true, &vec![b'z'; 70_000]);
+        let wire = [hello.clone(), ping.clone(), big.clone(), frame(1, false, b"first half "), frame(0, true, b"second half")].concat();
+        for step in [1, 5, 127, 4096, 100_000] {
+            let (out, trouble) = passed(switched(scanning(false)), &wire, step);
+            assert_eq!(trouble, None, "step {step}");
+            assert!(out == wire, "step {step}: frames arrive exactly as sent");
+        }
+        // A message carrying a token, whole or split across two frames or many reads.
+        let secret = format!("{} deploy with {} now {}", "x".repeat(900), token(), "x".repeat(900));
+        let cut = secret.find("gh").unwrap() + 11;
+        let whole = frame(1, true, secret.as_bytes());
+        let split = [frame(1, false, secret[..cut].as_bytes()), frame(0, true, secret[cut..].as_bytes())].concat();
+        for wire in [&whole, &split] {
+            for step in [1, 9, 4096] {
+                let (out, trouble) = passed(switched(scanning(false)), &[hello.clone(), wire.clone()].concat(), step);
+                assert!(matches!(&trouble, Some(Trouble::Secret(f)) if f.kind == "a GitHub token"), "step {step}: {trouble:?}");
+                assert!(out.len() < hello.len() + 14 + cut, "step {step}: the token did not get out");
+                assert!(out.starts_with(&hello), "step {step}: what came before it did");
+            }
+        }
+        // Frames that cannot be read are not let through: unmasked, or compressed.
+        let mut unmasked = frame(1, true, b"hello");
+        unmasked[1] &= 0x7f;
+        assert!(matches!(passed(switched(scanning(false)), &unmasked, 3).1, Some(Trouble::NotUnderstood(_))));
+        let mut compressed = frame(1, true, b"hello");
+        compressed[0] |= 0x40;
+        assert!(matches!(passed(switched(scanning(false)), &compressed, 3).1, Some(Trouble::NotUnderstood(_))));
+    }
+
+    #[test]
+    fn many_kinds_of_request_are_capped_in_the_summary() {
         let mut many = Vec::new();
         for n in 0..40 {
             many.extend_from_slice(format!("GET /item/{n} HTTP/1.1\r\nHost: api.example.com\r\n\r\n").as_bytes());
@@ -853,5 +1077,14 @@ GET /v1/models HTTP/1.1\r\nHost: api.example.com\r\n\r\n";
         assert_eq!(s.requests, 40);
         assert_eq!(s.summary().len(), MAX_KINDS + 1);
         assert_eq!(s.summary()[0], ("other requests".to_string(), 40 - MAX_KINDS as u64));
+    }
+
+    #[test]
+    fn a_switch_can_be_for_one_method_only() {
+        let uploads_off = |method: &str, path: &str| !(method == "POST" && path.starts_with("/v1/files"));
+        let get = b"GET /v1/files/abc HTTP/1.1\r\nHost: api.example.com\r\n\r\n";
+        let post = b"post /v1/files HTTP/1.1\r\nHost: api.example.com\r\nContent-Length: 4\r\n\r\ndata";
+        assert_eq!(passed(Sniffer::with_rules("api.example.com", uploads_off), get, 9).1, None);
+        assert!(matches!(passed(Sniffer::with_rules("api.example.com", uploads_off), post, 9).1, Some(Trouble::Refused(_))));
     }
 }

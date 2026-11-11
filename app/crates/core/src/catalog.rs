@@ -298,7 +298,26 @@ pub const APPS: &[AppPreset] = &[
         trust: &[],
         inside: &[],
     },
+    // Recognised by name only. Nothing is trusted for them out of the box: whatever they
+    // contact asks first. None has been run on the computer this was written on.
+    AppPreset { id: "llama-cpp", name: "llama.cpp", kind: "agent", icon: "generic", binary: "llama-server", os_user: "_saillama", proxy_port: 47116, local_ports: LOCAL_MODEL_PORTS, serves_port: None, loopback_all: false, trust: &[], inside: &[] },
+    AppPreset { id: "cursor-agent", name: "Cursor CLI", kind: "agent", icon: "generic", binary: "cursor-agent", os_user: "_saicursor", proxy_port: 47117, local_ports: LOCAL_MODEL_PORTS, serves_port: None, loopback_all: false, trust: &[], inside: &[] },
+    AppPreset { id: "openclaw", name: "OpenClaw", kind: "agent", icon: "generic", binary: "openclaw", os_user: "_saiopenclaw", proxy_port: 47118, local_ports: LOCAL_MODEL_PORTS, serves_port: None, loopback_all: false, trust: &[], inside: &[] },
 ];
+
+/// The built-in rules have a version, and every change to them a line here, newest last, so
+/// that after an update the app can say what changed instead of changing rules silently.
+/// The rules ship inside the app, so they are covered by whatever vouches for the app itself.
+pub const PRESET_NOTES: &[(u32, &str)] = &[
+    (1, "Claude Code and Ollama: the AI provider and sign-in are trusted; usage statistics and crash reports are switched off."),
+    (2, "Codex CLI, Gemini CLI, Aider and opencode are recognised. For each, only its AI provider and sign-in are trusted."),
+    (3, "Claude Code: event logging inside Anthropic's address is switched off. It acts while Look inside is on."),
+    (4, "llama.cpp, Cursor CLI and OpenClaw are recognised. Nothing is trusted for them until you say so."),
+];
+
+pub fn presets_version() -> u32 {
+    PRESET_NOTES.last().map(|(v, _)| *v).unwrap_or(0)
+}
 
 /// Windowed AI apps worth pointing out when they are installed, by the name of the .app.
 /// Only a hint for "found on this computer": anything else can still be added by hand.

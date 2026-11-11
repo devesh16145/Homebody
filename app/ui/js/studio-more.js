@@ -136,7 +136,9 @@ export const advanced = {
         <pre class="code ad-code sel scroll" tabindex="0" aria-label="Setup script, read-only">${esc(this.setupText)}</pre></section>` : ''}
       <section><h3>Remove</h3>
         <p class="muted ad-note">Undoes everything the one-time setup created. You can set it up again at any time.</p>${removal}</section>
-      <p class="ad-version faint num">Version ${esc(s.version || '')}</p></div>`);
+      <section><h3>Version</h3>
+        <div class="ad-switch"><span class="grow"><b>Version ${esc(s.version || '')}</b><br><span class="muted">${esc(this.updateText || 'Sandbox-ai never checks for updates by itself. Checking contacts the place where it is published, once, and is shown in the Feed.')}</span></span>
+          <button class="btn" data-do="ad-update" data-key="ad-update"${this.updating ? ' disabled' : ''}>${this.updating ? 'Checking…' : 'Check for a newer version'}</button></div></section></div>`);
   },
 
   async setLogin(on) {
@@ -146,6 +148,13 @@ export const advanced = {
   },
 
   async act(what) {
+    if (what === 'ad-update') {
+      this.updating = true; this.render();
+      try { this.updateText = (await invoke('check_update')).message; } catch (e) { this.updateText = errText(e); }
+      this.updating = false;
+      if (this.env.isShown('advanced')) this.render();
+      return;
+    }
     if (what === 'ad-local') {
       this.localBusy = true; this.localNote = null; this.render();
       try {

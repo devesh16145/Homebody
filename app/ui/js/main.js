@@ -15,7 +15,7 @@ const el = { setup: $('#setup'), pill: $('#pill'), banner: $('#banner'), toast: 
 let status = null;
 let tab = TABS[params.get('tab')] ? params.get('tab') : 'feed';
 let shown = null;                       // tab whose module is currently active
-let setup = { state: 'idle', error: '' };
+let setup = { state: 'idle', error: '', step: 1 };   // step 1 what, 2 approve, 3 how to start
 let toastTimer = 0;
 
 const ctx = {
@@ -40,7 +40,7 @@ function go(next, sub) {
 }
 
 function syncTabs() {
-  const needsSetup = !!(status && status.setupNeeded);
+  const needsSetup = !!(status && (status.setupNeeded || setup.step === 3));
   document.documentElement.classList.toggle('needs-setup', needsSetup);
   el.setup.hidden = !needsSetup;
   $$('#tabs [role=tab]').forEach((b) => {
@@ -82,7 +82,7 @@ function applyStatus() {
     ? `<div class="lockbar" role="alert">${icon('lock')}<span><b>Everything is blocked.</b> Nothing can leave until you release it.</span>
        <button class="btn sm" data-act="release">Release</button></div>` : status.setupNeeded ? '' : (watch.barHtml(status) || installBar()));
   watch.onStatus(status);
-  if (status.setupNeeded) renderSetup();
+  if (status.setupNeeded || setup.step === 3) renderSetup();
   syncTabs();
   Object.values(TABS).forEach((m) => m.onStatus(status));
 }
@@ -116,45 +116,75 @@ function renderSetup() {
   const reason = status.setupReasons[0];
   const found = status.apps.filter((a) => a.installed);
   const waiting = setup.state === 'waiting';
-  const apps = found.length ? found.map((a) => `<label class="found">${appTile(a.icon, a.name, 28)}
-      <span class="grow"><span class="name">${esc(a.name)}</span><br><span class="kind">${KIND[a.kind] || ''}</span></span>
-      <span class="check"><input type="checkbox" data-protect="${esc(a.id)}" data-key="protect-${esc(a.id)}" aria-label="Protect ${esc(a.name)}"${a.protected ? ' checked' : ''}${waiting ? ' disabled' : ''}><i>${icon('check')}</i></span></label>`).join('')
-    : '<p class="muted">No AI apps were found yet. You can still turn on protection, and add apps later in Studio.</p>';
-  patch(el.setup, `<div class="setup-in">
-    ${mark(48)}
-    <h1>Keep your AI on your computer.</h1>
-    <p class="lead">Your AI apps keep working, but they can only reach the places you trust. Everything else stays here, and you get a record that proves it.</p>
-    ${reason ? `<div class="notice warn" role="status">${icon('alert')}<span>${esc(reason)} Turn protection back on to continue.</span></div>` : ''}
-    <div class="setup-cols">
-      <div class="setup-card"><h2>Found on this computer</h2>${apps}</div>
-      <div class="setup-card"><h2>What the one-time setup does</h2><ul class="does">
-        <li>${icon('check')}<span>Creates a private space for each protected app</span></li>
+  // Coming back to repair or update protection is one screen, not a tour.
+  const step = setup.step === 3 ? 3 : reason ? 2 : setup.step;
+  const dots = reason ? '' : `<div class="setup-steps" aria-label="Step ${step} of 3">${[1, 2, 3].map((n) => `<i${n === step ? ' class="on"' : ''}></i>`).join('')}</div>`;
+  let body;
+  if (step === 1) {
+    const apps = found.length ? found.map((a) => `<label class="found">${appTile(a.icon, a.name, 28)}
+        <span class="grow"><span class="name">${esc(a.name)}</span><br><span class="kind">${KIND[a.kind] || ''}</span></span>
+        <span class="check"><input type="checkbox" data-protect="${esc(a.id)}" data-key="protect-${esc(a.id)}" aria-label="Protect ${esc(a.name)}"${a.protected ? ' checked' : ''}><i>${icon('check')}</i></span></label>`).join('')
+      : '<p class="muted">No AI apps were found yet. You can still turn on protection, and add apps later in Studio.</p>';
+    body = `<h1>Keep your AI on your computer.</h1>
+      <p class="lead">Your AI apps keep working, but they can only reach the places you trust. Everything else stays here, and you get a record that proves it.</p>
+      <div class="setup-card one"><h2>Found on this computer</h2>${apps}</div>
+      <div class="setup-go"><button class="btn primary lg" data-act="setup-next" data-key="setup-next">Continue</button>
+        <p class="cap">Untick anything you would rather leave as it is. You can change this later.</p></div>`;
+  } else if (step === 2) {
+    body = `<h1>${reason ? 'Protection needs your approval' : 'One approval, and it is on.'}</h1>
+      <p class="lead">${reason ? 'Nothing is unprotected: protected apps simply cannot be started until this is done.' : 'To fence an app, your Mac has to agree. It asks for your password once; Sandbox-ai never sees it.'}</p>
+      ${reason ? `<div class="notice warn" role="status">${icon('alert')}<span>${esc(reason)}</span></div>` : ''}
+      <div class="setup-card one"><h2>What it does</h2><ul class="does">
+        <li>${icon('check')}<span>Creates a private space for each protected app, away from your files</span></li>
         <li>${icon('check')}<span>Makes sure they can only reach what you trust</span></li>
-        <li>${icon('check')}<span>Keeps it that way after restarts</span></li></ul></div>
-    </div>
-    <div class="setup-go">
-      <button class="btn primary lg${waiting ? ' waiting' : ''}" data-act="run-setup" data-key="run-setup"${waiting ? ' disabled' : ''}>${waiting ? 'Waiting for your approval…' : 'Turn on protection'}</button>
-      ${setup.state === 'error'
-        ? `<div class="notice error" role="alert">${icon('alert')}<span>${esc(setup.error)} You can try again whenever you are ready.</span></div>`
-        : `<p class="cap">${waiting ? 'Your Mac is asking for your password in its own window.' : 'Your Mac will ask for your password once. Nothing else is needed.'}</p>`}
-    </div></div>`);
+        <li>${icon('check')}<span>Keeps it that way after restarts</span></li></ul>
+        <p class="cap">Studio → Advanced shows exactly what is run, and can undo all of it.</p></div>
+      <div class="setup-go">
+        <button class="btn primary lg${waiting ? ' waiting' : ''}" data-act="run-setup" data-key="run-setup"${waiting ? ' disabled' : ''}>${waiting ? 'Waiting for your approval…' : 'Turn on protection'}</button>
+        ${setup.state === 'error'
+          ? `<div class="notice error" role="alert">${icon('alert')}<span>${esc(setup.error)} You can try again whenever you are ready.</span></div>`
+          : `<p class="cap">${waiting ? 'Your Mac is asking for your password in its own window.' : 'Your Mac will ask for your password once. Nothing else is needed.'}</p>`}
+        ${reason || waiting ? '' : '<button class="link" data-act="setup-back" data-key="setup-back">Back</button>'}
+      </div>`;
+  } else {
+    body = `<h1>Protection is on. How do you want to start?</h1>
+      <p class="lead">You can switch between these at any time from the menu bar.</p>
+      <div class="setup-cols">
+        <button class="setup-card choice" data-act="start-private" data-key="start-private"><h2>Private <span class="tag">Recommended</span></h2>
+          <p>Only places you trust can be reached. The first time an app wants anything else, you are asked in plain words.</p></button>
+        <button class="setup-card choice" data-act="start-watch" data-key="start-watch"><h2>Watch for an hour</h2>
+          <p>Everything is allowed and written down. After an hour Private comes on, and you see what your AI contacted and choose what to trust.</p></button>
+      </div>`;
+  }
+  patch(el.setup, `<div class="setup-in">${mark(48)}${body}${dots}</div>`);
 }
 
 async function runSetup() {
-  setup = { state: 'waiting', error: '' };
+  const firstTime = !status.setupReasons[0];
+  setup = { ...setup, state: 'waiting', error: '' };
   renderSetup();
   try {
     const res = await invoke('run_setup');
     if (!res || !res.ok) throw (res && res.message) || 'Setup did not finish.';
-    setup = { state: 'idle', error: '' };
+    setup = { state: 'idle', error: '', step: firstTime ? 3 : 1 };
     tab = 'feed';
     ctx.setStatus(await invoke('get_status'));
   } catch (e) {
-    setup = { state: 'error', error: errText(e) };
+    setup = { ...setup, state: 'error', error: errText(e) };
     if (status.setupNeeded) renderSetup();
   }
 }
 
+async function startWith(mode) {
+  try { ctx.setStatus(await invoke('set_mode', mode === 'watch' ? { mode, minutes: 60 } : { mode })); } catch (e) { ctx.toast(errText(e)); }
+  setup = { state: 'idle', error: '', step: 1 };
+  applyStatus();
+}
+
+on(el.setup, 'click', '[data-act="setup-next"]', () => { setup.step = 2; renderSetup(); });
+on(el.setup, 'click', '[data-act="setup-back"]', () => { setup.step = 1; renderSetup(); });
+on(el.setup, 'click', '[data-act="start-private"]', () => startWith('private'));
+on(el.setup, 'click', '[data-act="start-watch"]', () => startWith('watch'));
 on(el.setup, 'click', '[data-act="run-setup"]', runSetup);
 on(el.setup, 'change', 'input[data-protect]', async (ev, input) => {
   try { ctx.setStatus(await invoke('app_set_protected', { appId: input.dataset.protect, protected: input.checked })); }
