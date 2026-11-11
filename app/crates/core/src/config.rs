@@ -59,6 +59,10 @@ pub struct AppConfig {
     /// Added by the user rather than known to this build.
     #[serde(default)]
     pub custom: bool,
+    /// Look inside this app's connections to trusted places (see `inspect`). Off unless the
+    /// user switches it on.
+    #[serde(default)]
+    pub inspect: bool,
     /// A windowed app. It cannot run as another user, so it runs as you under the launch-time
     /// profile alone: its network is fenced, its access to your files is not. `binary` is the
     /// path of the .app, and `os_user` is a placeholder that is never created or used.
@@ -167,6 +171,7 @@ impl Config {
                         protected: true,
                         workspace: if p.kind == "agent" { Some(format!("/Users/Shared/SandboxAI/{}", p.id)) } else { None },
                         custom: false,
+                        inspect: false,
                         windowed: false,
                         projects: vec![],
                         trust: vec![],
@@ -233,6 +238,10 @@ impl Config {
             } else {
                 a.windowed = false;
             }
+            if a.windowed {
+                // A windowed app decides for itself whom it trusts; it cannot be told about ours.
+                a.inspect = false;
+            }
             a.trust.retain(|r| hostname::valid_pattern(&r.host));
             for r in &mut a.trust {
                 r.host = hostname::normalize_pattern(&r.host);
@@ -294,6 +303,7 @@ impl Config {
             protected: true,
             workspace: if windowed { None } else { Some(format!("/Users/Shared/SandboxAI/{id}")) },
             custom: true,
+            inspect: false,
             windowed,
             projects: vec![],
             trust: vec![],

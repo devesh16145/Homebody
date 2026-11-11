@@ -154,6 +154,9 @@ function actionsHtml(e) {
   if (e.reason === 'around_gate') {
     return '<span class="ev-state">Refused by the fence. Protected apps can only reach the network through the gate.</span>';
   }
+  if (e.reason === 'malformed' && !/^\d|:/.test(e.host || '') && e.label !== e.host) {
+    return '<span class="ev-state">Stopped by Sandbox-ai. The place itself is still trusted.</span>';
+  }
   if (e.reason === 'malformed' || e.reason === 'local_address') {
     return '<span class="ev-state">This kind of address is always blocked.</span>';
   }
@@ -170,7 +173,10 @@ function detailHtml(e) {
   const where = e.host ? `${e.host}:${e.port}` : e.port ? `port ${e.port}, address not reported by macOS` : '';
   const meta = [where ? `<span class="mono sel">${esc(where)}</span>` : '', `<span>${esc(fullTime(e.ts))}</span>`];
   if (e.bytesOut != null) meta.push(`<span class="num">Sent ${esc(fmtBytes(e.bytesOut))}${e.bytesIn != null ? ' · received ' + esc(fmtBytes(e.bytesIn)) : ''}${e.durationMs != null ? ' · ' + esc(fmtDuration(e.durationMs)) : ''}</span>`);
-  return `<div class="ev-detail"><p class="sel">${esc(e.explanation)}</p>
+  const inside = e.requests && e.requests.length
+    ? `<div class="ev-inside"><span class="ev-inside-h">Inside this connection</span><ul>${e.requests.map((r) => `<li><span class="mono sel">${esc(r.what)}</span>${r.times > 1 ? `<span class="num">${esc(String(r.times))} times</span>` : ''}</li>`).join('')}</ul></div>`
+    : e.requests ? '<div class="ev-inside"><span class="ev-inside-h">Looked inside: no requests were made in this connection</span></div>' : '';
+  return `<div class="ev-detail"><p class="sel">${esc(e.explanation)}</p>${inside}
     <div class="ev-meta">${meta.join('')}</div>
     <div class="ev-actions">${actionsHtml(e)}</div></div>`;
 }

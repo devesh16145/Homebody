@@ -226,6 +226,7 @@ pub fn own_servers() -> bool {
 
 /// The packet filter anchor holding the ports this agent is serving on right now. The watchdog
 /// keeps it current (see `WATCHDOG`).
+#[cfg(test)]
 fn own_anchor(os_user: &str) -> String {
     format!("own_{}", os_user.trim_start_matches("_sai"))
 }
@@ -233,6 +234,18 @@ fn own_anchor(os_user: &str) -> String {
 /// An app that should reach its own local servers and nobody else's: every command-line agent.
 fn wants_own_servers(app: &AppConfig) -> bool {
     !app.windowed && !app.loopback_all
+}
+
+/// The certificate authorities this computer trusts out of the box, as text. Programs that take
+/// one file of trusted authorities get these plus ours (see `inspect::publish`).
+pub fn system_roots_pem() -> String {
+    std::process::Command::new("/usr/bin/security")
+        .args(["find-certificate", "-a", "-p", "/System/Library/Keychains/SystemRootCertificates.keychain"])
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+        .unwrap_or_default()
 }
 
 /// Where the desktop app would live once installed.
@@ -532,6 +545,10 @@ pub fn fenced_env(app: &AppConfig) -> Vec<(String, String)> {
         ("NODE_USE_ENV_PROXY".into(), "1".into()),
         ("SANDBOX_AI".into(), "1".into()),
     ];
+    if app.inspect && !app.windowed && app.kind != "model" {
+        // Tell the app about the local certificate, or it would refuse every inspected connection.
+        env.extend(crate::inspect::env());
+    }
     match app.id.as_str() {
         "ollama" => {
             env.push(("OLLAMA_HOST".into(), format!("127.0.0.1:{}", app.serves_port.unwrap_or(11434))));

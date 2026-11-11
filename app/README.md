@@ -34,6 +34,7 @@ Status: 11 Nov 2026. Everything in the table runs end to end on this Mac in the 
 | Own local servers: an agent may connect to servers it started itself on this computer and to nobody else's. The watchdog lists, twice a second while an agent runs, the ports that agent is listening on and opens exactly those to it; for those ports, arrivals at anyone else's socket are refused, so a port that changes hands is not reachable in between. Setup tests this on the computer (own server reachable, someone else's refused) and falls back to the stricter rules if it does not hold | Working, tested live: own server reached on the first try; your server, another agent's server and a port that changed hands all refused. Two things to know. With it on, the launch-time profile allows any local port except other gates, so this one property rests on the packet filter alone. And a refused local connection now times out instead of failing at once |
 | Opening the app shows its window (also when it is already running in the menu bar); a start at login or through a launcher stays quiet | Built, not yet seen by a person |
 | Every run of setup keeps a record of what it did as administrator (`logs/setup.sh.last.log`) | Working; it is what explained the failed first design |
+| Looking inside (off by default, per app): the gate ends the app's encrypted connection with a certificate from an authority that exists only on this computer, opens its own to the real server and checks that server's certificate the ordinary way, and reads the request lines in between. The Feed shows which paths were asked for and how often. The site named inside a request must be the approved one, which stops a trusted name being used as cover for another site; requests that cannot be followed (two lengths, unusual encodings, a tunnel inside) are not let through. Only method and path are recorded, never what follows "?", headers or content. Nothing is added to the Mac's trusted certificates: only protected apps are told, through their environment | Working, tested live with Claude Code, Codex, Gemini, Aider and opencode (each accepted it), seven bypass cases. Not available for Ollama or windowed apps: they take trusted certificates from the Mac itself. HTTP/1.1 only is offered while looking inside |
 | A program installed inside your home folder is detected and explained instead of failing silently | Working |
 | Open at login (Studio → Advanced) | Built; not yet tried across a real login |
 
@@ -77,6 +78,7 @@ app/
     ledger.rs        hash-chained signed log, verification
     feed.rs          ledger records folded into Feed rows (same code live and at startup)
     proxy.rs         the gate: request parsing, TLS greeting check, relay with byte counts
+    inspect.rs       looking inside: the local certificate authority, reading request lines
     engine.rs        decisions, ask flow, status, proof, the command surface
     fence.rs         OS users, seatbelt profile, packet filter rules, setup script, launchers
     projects.rs      bring a folder in for an agent, compare, apply back
@@ -90,7 +92,7 @@ app/
 
 The UI calls one command, `sai`, with `{cmd, args}`; the core's `dispatch` serves the app, the CLI and scripts alike. Opened in a plain browser, the UI runs against an in-page mock of the same contract (`ui/dev.html` is a review harness with scenarios).
 
-Sizes in this build: 69 unit tests, 49 bypass cases, a 5.4 MB app including the command-line tool, a 3 MB disk image.
+Sizes in this build: 75 unit tests, 56 bypass cases, a 7.2 MB app including the command-line tool (the encryption libraries for looking inside added about 2 MB), a 4 MB disk image.
 
 ## Verify it yourself
 
@@ -128,13 +130,25 @@ opencode exposed a gap that affected every agent: one that starts a preview serv
 
 What this shows and does not show: the apps run, their start-up traffic is visible and under your control, and what goes around the gate is refused. It does not show that each app is fully usable once you trust its places: in every Electron app one helper still tries to connect directly, so some feature of each is cut off, and we have not found which.
 
+## What looking inside showed on the first run
+
+Claude Code, started once with a made-up key, sent these to `api.anthropic.com`, the one name on its trusted list:
+
+| Request | Sent |
+|---|---|
+| `POST /api/event_logging/v2/batch` | 225 KB |
+| `POST /v1/messages` (the conversation itself) | 49 KB |
+| `POST /api/eval/sdk-…`, `GET /api/claude_cli/bootstrap`, `GET /mcp-registry/v0/servers`, a few more | a few hundred bytes each |
+
+So the "219 KB to Anthropic at start-up" noted in the first build was event logging riding on the trusted name, not the conversation. Sandbox-ai still cannot refuse one path and allow another; it can now show you the difference.
+
 ## What it does not do yet, stated plainly
 
 - **Agents work on a copy of your project, not on the folder itself.** This is deliberate: nothing an agent does can damage your work until you apply it. The costs: changes are not live in your editor until applied, the agent's own commits stay in the copy (its changes arrive in your folder as ordinary edits), and files you edit after bringing a project in do not reach the copy. Sharing a folder in place is possible but was left out for now, because granting an agent a path into your home also exposes neighbouring files to it by file permissions alone.
 - **A link an agent creates is applied as a link.** The review shows where every new link points; read that line before applying.
-- **It cannot see inside encrypted traffic to a trusted destination.** Observed on this Mac: Claude Code, not signed in, sent 219 KB to `api.anthropic.com` in one connection at startup. The Feed shows the size and destination; what was in it is not visible without inspection, which is a later feature.
+- **Looking inside is all or nothing per place.** With it on you see which paths an app asks for at a trusted place, but you cannot yet allow one path and refuse another, and content is not examined. With it off (the default) the Feed shows only the place and the size.
 - **Attempts that go around the gate are shown without the address.** macOS reports the program and the port, not where it was trying to go. Attempts to read your files are stopped by ordinary file permissions before the fence sees them, so those are not shown at all. The Network Extension version will show both.
-- **A trusted name can still front for another site on the same hosting provider** inside encrypted traffic. The greeting check stops the simple version; the full fix is inspection.
+- **A trusted name can front for another site only where looking inside is off.** The greeting check stops the simple version everywhere; the full check (the site named inside each request) needs looking inside, which Ollama and windowed apps cannot use.
 - **Shared kernel.** A kernel exploit from inside a protected app is not contained. The virtual-machine tier (see `../spike/box`) is the answer and is planned.
 - **The setup script runs from a file in your account** for the moments between writing it and approving it. A signed privileged helper replaces this once the project has an Apple Developer identity.
 - **Windowed apps get one layer.** They run as you under the launch-time profile, with no private user and no packet filter behind it. They can read your files; only the copy opened from Sandbox-ai is protected; their inner sandbox is switched off (macOS refuses a sandbox inside a sandbox); links they try to open in your browser are refused and shown. Apps in Apple's App Sandbox cannot be wrapped. An app deliberately trying to break out has routes left. The Network Extension is the full answer.

@@ -17,13 +17,14 @@ This is a volunteer project with no paid support and no bounty. You will get an 
 - A protected app answers its own prompt, changes its own rules, or reaches the control socket.
 - The signed log can be changed, cut or reordered and still pass `sai verify`.
 - Anything in settings, an app name or a project that ends up running as administrator during setup.
+- With looking inside on: a request that reaches a site other than the approved one, a request the gate passed on without being able to follow it, anything after "?" or any content ending up in the log, or the local certificate authority's key being readable by a protected app.
 - Applying a project's changes writes outside the folder it was brought in from.
 
 ## What is already known and stated
 
 These are limits of the current design, listed in the README, not new findings:
 
-- Traffic to a destination you trust is not inspected. Data can leave inside it, and a trusted name can front for another site at the same provider.
+- Traffic to a destination you trust is not examined for content. With looking inside off (the default), a trusted name can also front for another site at the same provider.
 - A kernel exploit from inside a protected app is not contained (no virtual machine yet).
 - Local programs running as you, outside the fence, are trusted. They can change settings or talk to a gate.
 - Windowed apps run as you behind one layer (the launch-time profile). They can read your files, and a windowed app that deliberately tries to break out has routes a separate user would close, such as writing into a folder another program syncs or runs. A way for a windowed app to reach the **network** directly, or to answer its own prompt, is still a finding.

@@ -292,6 +292,13 @@ async fn handle(engine: Engine, app_id: String, mut client: TcpStream) -> std::i
         first.extend_from_slice(&leftover);
     }
 
+    if req.connect && req.port == 443 {
+        if let Some(inspector) = engine.inspector_for(&app_id) {
+            inspected(&engine, &app_id, &host, &decision, inspector, client, first, upstream, addr, started).await;
+            return Ok(());
+        }
+    }
+
     let conn = engine.record_conn(&app_id, &host, &addr.ip().to_string(), req.port, &decision);
     let (out, inn) = (Arc::new(AtomicU64::new(0)), Arc::new(AtomicU64::new(0)));
     if !first.is_empty() {
@@ -303,6 +310,125 @@ async fn handle(engine: Engine, app_id: String, mut client: TcpStream) -> std::i
         engine.record_end(conn, out.load(Ordering::Relaxed), inn.load(Ordering::Relaxed), started.elapsed().as_millis() as u64, false);
     }
     Ok(())
+}
+
+/// A stream that first gives back bytes already read from it. The app's first message was read
+/// to check the name it greets the server with; the encryption layer needs to see it again.
+struct Rewound {
+    first: Vec<u8>,
+    at: usize,
+    inner: TcpStream,
+}
+
+impl tokio::io::AsyncRead for Rewound {
+    fn poll_read(mut self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>, buf: &mut tokio::io::ReadBuf<'_>) -> std::task::Poll<std::io::Result<()>> {
+        if self.at < self.first.len() {
+            let n = (self.first.len() - self.at).min(buf.remaining());
+            let (from, to) = (self.at, self.at + n);
+            buf.put_slice(&self.first[from..to]);
+            self.at = to;
+            return std::task::Poll::Ready(Ok(()));
+        }
+        std::pin::Pin::new(&mut self.inner).poll_read(cx, buf)
+    }
+}
+
+impl tokio::io::AsyncWrite for Rewound {
+    fn poll_write(mut self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>, buf: &[u8]) -> std::task::Poll<std::io::Result<usize>> {
+        std::pin::Pin::new(&mut self.inner).poll_write(cx, buf)
+    }
+    fn poll_flush(mut self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<std::io::Result<()>> {
+        std::pin::Pin::new(&mut self.inner).poll_flush(cx)
+    }
+    fn poll_shutdown(mut self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<std::io::Result<()>> {
+        std::pin::Pin::new(&mut self.inner).poll_shutdown(cx)
+    }
+}
+
+/// One connection, looked inside. The app's encryption ends here with a certificate from the
+/// local authority; ours to the real server starts here and is checked the ordinary way; and
+/// in between the request lines are read (see `inspect::Sniffer`). Anything that cannot be
+/// followed, or that names another site, ends the connection.
+#[allow(clippy::too_many_arguments)]
+async fn inspected(engine: &Engine, app_id: &str, host: &str, decision: &Decision, inspector: Arc<crate::inspect::Inspector>, client: TcpStream, first: Vec<u8>, upstream: TcpStream, addr: SocketAddr, started: Instant) {
+    let Ok(server_config) = inspector.server_config(host) else { return };
+    let Ok(name) = rustls::pki_types::ServerName::try_from(host.to_string()) else { return };
+    // Our own connection first: if the real server's certificate does not check out, the app
+    // must not be told everything is fine.
+    let upstream = match tokio::time::timeout(HELLO_TIMEOUT, tokio_rustls::TlsConnector::from(inspector.client_config()).connect(name, upstream)).await {
+        Ok(Ok(s)) => s,
+        _ => {
+            engine.record_refusal(app_id, host, 443, Reason::Malformed, "real_certificate", "");
+            return;
+        }
+    };
+    let client = match tokio::time::timeout(HELLO_TIMEOUT, tokio_rustls::TlsAcceptor::from(server_config).accept(Rewound { first, at: 0, inner: client })).await {
+        Ok(Ok(s)) => s,
+        _ => {
+            engine.record_refusal(app_id, host, 443, Reason::Malformed, "no_inspect", "");
+            return;
+        }
+    };
+
+    let conn = engine.record_conn(app_id, host, &addr.ip().to_string(), 443, decision);
+    let (out, inn) = (AtomicU64::new(0), AtomicU64::new(0));
+    let sniffer = std::sync::Mutex::new(crate::inspect::Sniffer::new(host));
+    let trouble: std::sync::Mutex<Option<crate::inspect::Trouble>> = std::sync::Mutex::new(None);
+    let (mut cr, mut cw) = tokio::io::split(client);
+    let (mut ur, mut uw) = tokio::io::split(upstream);
+    let up = async {
+        let mut buf = vec![0u8; 32 * 1024];
+        loop {
+            match cr.read(&mut buf).await {
+                Ok(0) | Err(_) => break,
+                Ok(n) => {
+                    // Read before it is passed on: what cannot be vouched for does not leave.
+                    if let Err(t) = sniffer.lock().unwrap().feed(&buf[..n]) {
+                        *trouble.lock().unwrap() = Some(t);
+                        return true;
+                    }
+                    if uw.write_all(&buf[..n]).await.is_err() {
+                        break;
+                    }
+                    out.fetch_add(n as u64, Ordering::Relaxed);
+                }
+            }
+        }
+        let _ = uw.shutdown().await;
+        false
+    };
+    let down = async {
+        let mut buf = vec![0u8; 32 * 1024];
+        loop {
+            match ur.read(&mut buf).await {
+                Ok(0) | Err(_) => break,
+                Ok(n) => {
+                    if cw.write_all(&buf[..n]).await.is_err() {
+                        break;
+                    }
+                    inn.fetch_add(n as u64, Ordering::Relaxed);
+                }
+            }
+        }
+        let _ = cw.shutdown().await;
+    };
+    tokio::pin!(up, down);
+    let mut cut = engine.cut_signal();
+    tokio::select! {
+        stopped = &mut up => { if !stopped { let _ = tokio::time::timeout(Duration::from_secs(5), &mut down).await; } }
+        _ = &mut down => { let _ = tokio::time::timeout(Duration::from_secs(2), &mut up).await; }
+        _ = cut.changed() => {}
+    }
+    if let Some(conn) = conn {
+        let summary = sniffer.lock().unwrap().summary();
+        engine.record_end_inspected(conn, out.load(Ordering::Relaxed), inn.load(Ordering::Relaxed), started.elapsed().as_millis() as u64, &summary);
+    }
+    let found = trouble.lock().unwrap().take();
+    match found {
+        Some(crate::inspect::Trouble::OtherSite(other)) => engine.record_refusal(app_id, host, 443, Reason::Malformed, "other_site", &other),
+        Some(crate::inspect::Trouble::NotUnderstood(what)) => engine.record_refusal(app_id, host, 443, Reason::Malformed, "not_followed", what),
+        None => {}
+    }
 }
 
 /// Read from the client until `buf` holds one complete TLS record, then return its server name.

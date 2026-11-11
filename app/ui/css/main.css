@@ -218,3 +218,10 @@ body { display: flex; flex-direction: column; }
 .ws-host .num { flex: none; }
 .ws-box > .notice { margin-top: 10px; }
 .ws-foot { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
+
+/* what was asked for inside a connection */
+.ev-inside { margin: 8px 0 2px; padding: 8px 10px; border-radius: var(--r-md); background: var(--fill-1); font-size: var(--fs-small); }
+.ev-inside-h { display: block; margin-bottom: 4px; font-size: var(--fs-cap); font-weight: 600; color: var(--text-3); }
+.ev-inside ul { list-style: none; margin: 0; padding: 0; }
+.ev-inside li { display: flex; justify-content: space-between; gap: 12px; padding: 1px 0; }
+.ev-inside .num { color: var(--text-3); flex: none; }

@@ -244,6 +244,10 @@ const apps = {
       <div class="ap-row">${controls}${a.canStart ? `<button class="btn" data-do="app-launcher" data-key="ln-${esc(a.id)}" title="A shortcut of its own that opens ${esc(a.name)} protected. Keep it in the Dock.">${icon('link')}Show launcher</button>` : ''}</div>
       ${this.launcher.has(a.id) ? `<div class="notice ok" role="status">${icon('check')}<span>Shown in Finder as <b>${esc(a.name)} (protected)</b>. Drag it to your Dock and use it instead of the usual icon.</span></div>` : ''}
       ${a.workspace ? `<div class="ap-meta">Works only inside <span class="mono sel">${esc(a.workspace)}</span></div>` : ''}
+      ${a.canStart && a.canInspect ? `<label class="ap-inside"><span class="grow"><b>Look inside</b><br><span class="muted">${a.inspect
+          ? `On. The Feed shows what ${esc(a.name)} asks for inside its connections to trusted places, and a trusted name cannot be used as cover for another site. Applies the next time it is opened.`
+          : `See what ${esc(a.name)} asks for inside its connections to trusted places: which addresses and how much, never the content. Uses a certificate that exists only on this computer and that only protected apps are told about.`}</span></span>
+        <span class="switch sm green"><input type="checkbox" role="switch" data-inside data-key="in-${esc(a.id)}" aria-label="Look inside ${esc(a.name)}'s connections"${a.inspect ? ' checked' : ''}><i></i></span></label>` : ''}
       ${a.kind === 'window' ? `<div class="ap-meta ap-lighter"><b>Lighter protection.</b> Nothing it sends can skip the gate: you see it and are asked, or it is refused. It can still read your files, as it always could, and only the copy you open from here is protected. To make that possible its own inner sandbox is switched off.</div>` : ''}
       ${a.kind === 'agent' && a.canStart ? projects.section(a) : ''}
       ${err ? `<div class="notice error" role="alert">${icon('alert')}<span>${esc(err)}</span></div>` : ''}
@@ -275,6 +279,7 @@ export function init(el, context) {
   on(root, 'change', 'input[data-protect]', (ev, i) => apps.run(i.closest('.ap-card').dataset.app, 'app_set_protected', { protected: i.checked }));
   on(root, 'submit', '.tr-add', (ev, form) => { ev.preventDefault(); trusted.add(form); });
   on(root, 'change', 'input[data-login]', (ev, i) => advanced.setLogin(i.checked));
+  on(root, 'change', 'input[data-inside]', (ev, i) => apps.run(i.closest('.ap-card').dataset.app, 'app_set_inspect', { on: i.checked }));
   on(root, 'submit', '.ap-form', (ev, form) => { ev.preventDefault(); apps.add(form); });
   on(root, 'input', '.ap-form input', (ev, i) => apps.keep(i.form));
   on(root, 'click', '[data-do]', (ev, b) => {

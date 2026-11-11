@@ -115,10 +115,30 @@ fence() {
   check "reach the control socket (approve itself)"     "denied" "$(R /bin/ls "$("$SAI" call get_policy_text >/dev/null 2>&1; echo "${SAI_DATA_DIR:-$MYHOME/Library/Application Support/SandboxAI}")/control.sock" 2>&1 | grep -qiE 'not permitted|denied' && echo denied || echo REACHED)"
 }
 
+# Looking inside connections to trusted places. Switched on for the test and put back after.
+inside() {
+  "$SAI" call get_status 2>/dev/null | grep -q '"fence": "up"' || { echo "Inside: skipped (the fence is not up)"; return; }
+  was_on="$("$SAI" call get_status | /usr/bin/python3 -I -c "import sys,json; print([a['inspect'] for a in json.load(sys.stdin)['apps'] if a['id']=='$APP'][0])" 2>/dev/null)"
+  "$SAI" inspect "$APP" on >/dev/null
+  R() { "$SAI" run "$APP" -- "$@" 2>&1; }
+  code() { R /usr/bin/curl -sS -m 12 -o /dev/null -w '%{http_code}' "$@" | tail -1; }
+  marker="corpus-secret-$$"
+  echo "Inside: connections to a trusted place"
+  check "an ordinary request gets the real answer"       "401" "$(code "https://api.anthropic.com/v1/models?key=$marker")"
+  check "what follows \"?\" is never written down"        "0"   "$(grep -c "$marker" "${SAI_DATA_DIR:-$HOME/Library/Application Support/SandboxAI}/ledger.jsonl")"
+  check "a program not told about the certificate"       "000" "$(R /usr/bin/env -u CURL_CA_BUNDLE -u SSL_CERT_FILE /usr/bin/curl -sS -m 12 -o /dev/null -w '%{http_code}' https://api.anthropic.com/ | tail -1)"
+  check "the trusted name as cover for another site"     "000" "$(code -H 'Host: attacker.example.net' -d 'stolen=data' https://api.anthropic.com/upload)"
+  check "another site named with its port"               "000" "$(code -H 'Host: attacker.example.net:443' https://api.anthropic.com/)"
+  check "a request with two lengths (smuggling)"         "000" "$(code -H 'Content-Length: 5' -H 'Transfer-Encoding: chunked' -d 'hello' https://api.anthropic.com/v1/messages)"
+  check "an unusual transfer encoding"                   "000" "$(code -H 'Transfer-Encoding: gzip, chunked' -d 'hello' https://api.anthropic.com/v1/messages)"
+  [ "$was_on" = "True" ] || "$SAI" inspect "$APP" off >/dev/null
+}
+
 case "${1:-all}" in
   gate) gate ;;
   fence) fence ;;
-  *) gate; echo; fence ;;
+  inside) inside ;;
+  *) gate; echo; fence; echo; inside ;;
 esac
 echo
 printf '%d passed, %d failed\n' "$pass" "$fail"

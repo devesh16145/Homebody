@@ -28,6 +28,9 @@ pub fn config_file() -> PathBuf { data_dir().join("settings.json") }
 pub fn ledger_file() -> PathBuf { data_dir().join("ledger.jsonl") }
 pub fn ledger_key() -> PathBuf { data_dir().join("ledger.key") }
 pub fn control_socket() -> PathBuf { data_dir().join("control.sock") }
+/// The local certificate authority used for looking inside (see `inspect`). The key never leaves here.
+pub fn inspect_key() -> PathBuf { data_dir().join("inspect-ca.key") }
+pub fn inspect_cert() -> PathBuf { data_dir().join("inspect-ca.pem") }
 pub fn logs_dir() -> PathBuf { data_dir().join("logs") }
 
 pub fn downloads_dir() -> PathBuf {

@@ -146,6 +146,10 @@ pub struct AppStatus {
     pub today: Counters,
     /// Added by the user ("protect your own app"); can be removed.
     pub custom: bool,
+    /// Looking inside this app's connections to trusted places is switched on.
+    pub inspect: bool,
+    /// Whether it can be switched on for this kind of app.
+    pub can_inspect: bool,
     /// Installed, but in a way a protected app cannot use. A sentence for the user.
     pub problem: Option<String>,
 }
@@ -233,6 +237,17 @@ pub struct FeedEvent {
     pub bytes_in: Option<u64>,
     pub duration_ms: Option<u64>,
     pub trusted: bool,
+    /// Present when the connection was looked inside: what was asked for there, most frequent
+    /// first. Paths only, never anything after "?".
+    pub requests: Option<Vec<RequestKind>>,
+}
+
+#[derive(Serialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct RequestKind {
+    /// For example "POST /v1/messages".
+    pub what: String,
+    pub times: u64,
 }
 
 #[derive(Serialize, Clone, Debug)]

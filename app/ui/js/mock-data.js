@@ -92,6 +92,7 @@ function history(apps, now) {
   }
   add(now - 3 * HOUR, 'ollama', 'ollama.com', B, 'no_answer');
   add(now - 130 * MIN, cc, 'api.anthropic.com', A, 'trusted', 16400, 102000, 2700);
+  out[out.length - 1].requests = [{ what: 'POST /v1/messages', times: 3 }, { what: 'POST /api/event_logging/v2/batch', times: 1 }, { what: 'GET /api/claude_cli/bootstrap', times: 1 }];
   add(now - 100 * MIN, cc, 'github.com', A, 'trusted', 6100, 310000, 1100);
   add(now - 58 * MIN, cc, 'sentry.io', B, 'not_trusted');
   add(now - 44 * MIN, cc, '', B, 'around_gate');

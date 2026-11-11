@@ -157,3 +157,6 @@ div.log-lines { padding: 8px 14px; }
 .fd-name { font-weight: 500; display: flex; align-items: center; gap: 8px; }
 .fd-note { font-size: var(--fs-small); color: var(--text-3); }
 .fd > .notice { margin-top: 8px; }
+.ap-inside { display: flex; align-items: center; gap: 16px; margin-top: 10px; padding: 9px 12px; border-radius: var(--r-md); background: var(--fill-1); font-size: var(--fs-small); }
+.ap-inside b { font-weight: 600; font-size: var(--fs-body); }
+.ap-inside .muted { display: inline-block; max-width: 62ch; line-height: 1.4; }

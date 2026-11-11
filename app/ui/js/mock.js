@@ -100,6 +100,7 @@ export function createMock(scenarioName) {
         fence: a.protected ? f : 'not_installed', running: a.running,
         canStart: a.installed && a.protected && f === 'up' && !a.problem, workspace: a.workspace,
         custom: !!a.custom, problem: a.problem || null,
+        inspect: !!a.inspect, canInspect: a.kind === 'agent',
         today: counters(todays.filter((e) => e.appId === a.id)),
       })),
       pending,
@@ -420,6 +421,11 @@ export function createMock(scenarioName) {
       s.apps.splice(s.apps.indexOf(a), 1);
       queueStatus();
       return status();
+    },
+    async app_set_inspect({ appId, on } = {}) {
+      const a = needApp(appId);
+      if (a.kind !== 'agent') throw `${a.name} takes its trusted certificates from your Mac, which Sandbox-ai does not change. Its connections cannot be looked inside yet.`;
+      a.inspect = !!on; queueStatus(); return status();
     },
     async app_set_protected({ appId, protected: on } = {}) {
       const a = needApp(appId);

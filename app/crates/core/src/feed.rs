@@ -32,6 +32,8 @@ pub struct Row {
     pub detail: String,
     /// For "greeting": the name the app tried to greet the server with.
     pub other: String,
+    /// When the connection was looked inside: what was asked for, and how often.
+    pub requests: Option<Vec<(String, u64)>>,
 }
 
 #[derive(Default)]
@@ -60,7 +62,7 @@ impl FeedIndex {
         let n = |k: &str| rec.get(k).and_then(Value::as_u64);
         match rec.get("kind")?.as_str()? {
             "ask" => {
-                self.push(Row { id: seq, ts: s("ts"), app: s("app"), host: s("host"), port: n("port").unwrap_or(443) as u16, verb: Verb::Asked, reason: Reason::NotTrusted, open: true, bytes_out: None, bytes_in: None, duration_ms: None, conn: None, repeats: 0, unreachable: false, asked: true, detail: String::new(), other: String::new() });
+                self.push(Row { id: seq, ts: s("ts"), app: s("app"), host: s("host"), port: n("port").unwrap_or(443) as u16, verb: Verb::Asked, reason: Reason::NotTrusted, open: true, bytes_out: None, bytes_in: None, duration_ms: None, conn: None, repeats: 0, unreachable: false, asked: true, detail: String::new(), other: String::new(), requests: None });
                 Some(seq)
             }
             "answer" => {
@@ -96,7 +98,7 @@ impl FeedIndex {
                     (true, _) => Verb::Allowed,
                     (false, _) => Verb::Blocked,
                 };
-                self.push(Row { id: seq, ts: s("ts"), app: s("app"), host: s("host"), port: n("port").unwrap_or(443) as u16, verb, reason, open: allow, bytes_out: None, bytes_in: None, duration_ms: None, conn: if allow { Some(seq) } else { None }, repeats: n("repeats").unwrap_or(0), unreachable: false, asked: false, detail: s("detail"), other: s("other") });
+                self.push(Row { id: seq, ts: s("ts"), app: s("app"), host: s("host"), port: n("port").unwrap_or(443) as u16, verb, reason, open: allow, bytes_out: None, bytes_in: None, duration_ms: None, conn: if allow { Some(seq) } else { None }, repeats: n("repeats").unwrap_or(0), unreachable: false, asked: false, detail: s("detail"), other: s("other"), requests: None });
                 if allow {
                     self.by_conn.insert(seq, self.rows.len() - 1);
                 }
@@ -116,6 +118,9 @@ impl FeedIndex {
                 row.bytes_in = Some(row.bytes_in.unwrap_or(0) + n("in").unwrap_or(0));
                 row.duration_ms = n("ms");
                 row.unreachable = rec.get("unreachable").and_then(Value::as_bool).unwrap_or(false);
+                if let Some(paths) = rec.get("paths").and_then(Value::as_array) {
+                    row.requests = Some(paths.iter().filter_map(|p| Some((p.get(0)?.as_str()?.to_string(), p.get(1)?.as_u64()?))).collect());
+                }
                 row.open = false;
                 Some(row.id)
             }

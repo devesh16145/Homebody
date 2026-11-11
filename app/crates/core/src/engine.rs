@@ -74,6 +74,8 @@ struct Inner {
     deny_order: Mutex<()>,
     /// Gate ports this engine is listening on.
     gates: Mutex<HashSet<u16>>,
+    /// This computer's certificate authority for looking inside, opened on first use.
+    inspector: Mutex<Option<Arc<crate::inspect::Inspector>>>,
     /// The program launchers call to reach us: the desktop app's own executable.
     opener: Mutex<Option<String>>,
     /// Process ids of windowed apps we opened (app id -> pid), so we can ask exactly those to quit.
@@ -127,6 +129,7 @@ impl Engine {
             gates: Mutex::new(HashSet::new()),
             pids: Mutex::new(HashMap::new()),
             opener: Mutex::new(None),
+            inspector: Mutex::new(None),
             unsaved_repeats: Mutex::new(HashMap::new()),
             stop: watch::channel(false).0,
             health: Mutex::new(HashMap::new()),
@@ -436,6 +439,64 @@ impl Engine {
             f.insert("ask".into(), json!(a));
         }
         self.append("conn", f).and_then(|r| r.get("seq").and_then(Value::as_u64))
+    }
+
+    /// The certificate authority for looking inside, made on first use.
+    fn inspector(&self) -> Result<Arc<crate::inspect::Inspector>, String> {
+        let mut slot = self.0.inspector.lock().unwrap();
+        if let Some(i) = slot.as_ref() {
+            return Ok(i.clone());
+        }
+        let i = Arc::new(crate::inspect::Inspector::open(&paths::inspect_key(), &paths::inspect_cert())?);
+        *slot = Some(i.clone());
+        Ok(i)
+    }
+
+    /// Whether this app's connections are to be looked inside, and with what.
+    pub(crate) fn inspector_for(&self, app_id: &str) -> Option<Arc<crate::inspect::Inspector>> {
+        let on = self.0.cfg.lock().unwrap().app(app_id).map(|a| a.inspect && Self::cannot_inspect(a).is_none()).unwrap_or(false);
+        if on { self.inspector().ok() } else { None }
+    }
+
+    /// Why this app's connections cannot be looked inside, if they cannot. Looking inside
+    /// relies on telling the app about our certificate through its environment; an app that
+    /// takes its trusted certificates from the Mac itself never hears about it.
+    fn cannot_inspect(app: &AppConfig) -> Option<String> {
+        if app.windowed {
+            Some(format!("{} is a windowed app and takes its trusted certificates from your Mac, which Sandbox-ai does not change. Its connections cannot be looked inside yet.", app.name))
+        } else if app.kind == "model" {
+            // Seen on a real run: Ollama refused the certificate.
+            Some(format!("{} takes its trusted certificates from your Mac, which Sandbox-ai does not change. Its connections cannot be looked inside yet.", app.name))
+        } else {
+            None
+        }
+    }
+
+    /// Switch looking inside on or off for one app. Switching on makes the certificate
+    /// authority if needed and puts its certificate where protected apps can read it.
+    fn set_inspect(&self, app_id: &str, on: bool) -> Result<(), String> {
+        let app = self.0.cfg.lock().unwrap().app(app_id).cloned().ok_or("Unknown app.")?;
+        if on {
+            if let Some(why) = Self::cannot_inspect(&app) {
+                return Err(why);
+            }
+            let inspector = self.inspector()?;
+            crate::inspect::publish(inspector.ca_pem(), &fence::system_roots_pem())?;
+        }
+        if app.inspect != on {
+            if let Some(a) = self.0.cfg.lock().unwrap().app_mut(app_id) {
+                a.inspect = on;
+            }
+            self.save_cfg();
+            self.append("app", fields! { "action" => if on { "look_inside_on" } else { "look_inside_off" }, "app" => app_id });
+        }
+        Ok(())
+    }
+
+    /// The end of a connection that was looked inside: what was asked for in it.
+    pub fn record_end_inspected(&self, conn: u64, bytes_out: u64, bytes_in: u64, ms: u64, requests: &[(String, u64)]) {
+        let paths: Vec<Value> = requests.iter().map(|(what, n)| json!([what, n])).collect();
+        self.append("end", fields! { "conn" => conn, "out" => bytes_out, "in" => bytes_in, "ms" => ms, "paths" => paths });
     }
 
     pub fn record_end(&self, conn: u64, bytes_out: u64, bytes_in: u64, ms: u64, unreachable: bool) {
@@ -818,6 +879,10 @@ impl Engine {
                 "greeting" => format!("{app_name} asked for {label} and then tried to reach {} instead, so the connection was cut.", row.other),
                 "no_name" => format!("{app_name} asked for {label} but would not say who it was greeting, so the connection was cut."),
                 "not_encrypted" => format!("{app_name} asked for {label} but did not start an ordinary encrypted connection, so it was cut."),
+                "other_site" => format!("Inside its connection to {label}, {app_name} addressed a different site ({}). That is how a trusted name is used as cover, so the connection was cut.", row.other),
+                "not_followed" => format!("{app_name} sent {} to {label}. Sandbox-ai could not follow it, so it was not let through.", if row.other.is_empty() { "something unusual" } else { row.other.as_str() }),
+                "no_inspect" => format!("{app_name} did not accept Sandbox-ai's certificate for {label}, so nothing was sent. If this keeps happening, switch off \"Look inside\" for {app_name}: it does not support it."),
+                "real_certificate" => format!("The real {label} did not show a certificate that checks out, so Sandbox-ai did not connect {app_name} to it."),
                 _ => "This was not an ordinary destination name, so it was blocked.".into(),
             },
             Reason::LocalAddress => "This name points at your own computer or network, so it was blocked.".into(),
@@ -882,6 +947,7 @@ impl Engine {
             bytes_in: row.bytes_in,
             duration_ms: row.duration_ms,
             trusted,
+            requests: row.requests.as_ref().map(|r| r.iter().map(|(what, times)| RequestKind { what: what.clone(), times: *times }).collect()),
         }
     }
 
@@ -979,6 +1045,8 @@ impl Engine {
                 workspace: a.workspace.clone(),
                 today: per_app.get(&a.id).copied().unwrap_or_default(),
                 custom: a.custom,
+                inspect: a.inspect && Self::cannot_inspect(a).is_none(),
+                can_inspect: Self::cannot_inspect(a).is_none(),
                 problem,
             });
         }
@@ -1456,6 +1524,10 @@ impl Engine {
                 fence::stop_all(&app).await;
                 self.append("app", fields! { "action" => "removed", "app" => id.as_str() });
                 self.check_fence().await;
+                ok(&self.status())
+            }
+            "app_set_inspect" => {
+                self.set_inspect(&req("appId")?, b("on")?)?;
                 ok(&self.status())
             }
             "app_set_protected" => {

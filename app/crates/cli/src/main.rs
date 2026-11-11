@@ -34,6 +34,7 @@ const HELP: &str = "sai — Sandbox-ai command line
   sai project remove <app> <name>    delete the copy (your folder is not touched)
   sai run <app> -- <command...>   run a command protected, in this terminal
   sai open [feed|proof|studio|glance]   show a window of the running app
+  sai inspect <app> on|off        look inside an app's connections to trusted places
   sai found                       AI apps on this computer that are not protected yet
   sai open-protected <app>        open an app protected (what a launcher does)
   sai check                       re-check protection now
@@ -282,6 +283,14 @@ async fn main() {
                 tab => ("main", Some(tab)),
             };
             call("show", json!({ "window": window, "tab": tab })).await;
+        }
+        "inspect" => {
+            let st = call("app_set_inspect", json!({ "appId": a(1), "on": a(2) != "off" })).await;
+            for app in st["apps"].as_array().into_iter().flatten() {
+                if s(app, "id") == a(1) {
+                    println!("{}: looking inside is {}", s(app, "name"), if app["inspect"].as_bool() == Some(true) { "on" } else { "off" });
+                }
+            }
         }
         "found" => {
             for f in call("discover_apps", Value::Null).await.as_array().into_iter().flatten() {

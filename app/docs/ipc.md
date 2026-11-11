@@ -56,6 +56,8 @@ interface AppStatus {
   today: Counters;
   custom: boolean;              // added by the user ("protect another app"); can be removed
   problem: string | null;       // installed, but where a protected app cannot reach it (inside the home folder). A sentence for the user
+  inspect: boolean;             // looking inside is switched on
+  canInspect: boolean;          // false for windowed apps and model servers: they take trusted certificates from the Mac
 }
 
 type Verb = "allowed" | "blocked" | "asked" | "seen";
@@ -91,6 +93,8 @@ interface FeedEvent {
   bytesIn: number | null;
   durationMs: number | null;
   trusted: boolean;             // is this destination currently Trusted for this app
+  requests?: { what: string; times: number }[] | null;  // present when the connection was looked inside:
+                                // "POST /v1/messages" and how often, most frequent first. Never anything after "?"
 }
 
 interface Ask {
@@ -202,6 +206,7 @@ interface SetupResult { ok: boolean; message: string; }
 | `install_app` | — | `{ path }` | copies the app into Applications, replacing an older copy |
 | `install_and_restart` | — | `null` | shell only: `install_app`, then stop cleanly and reopen from Applications |
 | `get_login_item` / `set_login_item` | — / `{ on }` | `{ on: boolean }` | shell only: open the app at login (a per-user launch entry) |
+| `app_set_inspect` | `{ appId, on }` | `Status` | look inside this app's connections to trusted places (see "Looking inside" in the README). Switching on creates this computer's certificate authority if needed and puts its certificate where protected apps can read it. Rejects apps that cannot support it with a sentence for the user |
 | `app_set_protected` | `{ appId, protected }` | `Status` | |
 | `app_start` | `{ appId }` | `Status` | model apps: start the protected instance |
 | `app_stop` | `{ appId }` | `Status` | |
