@@ -99,9 +99,46 @@ const trusted = {
 
 const apps = {
   busy: new Map(), errors: new Map(),
+  found: null,           // FoundApp[]: AI apps on this computer that are not protected yet
+  foundBusy: null, foundError: '', launcher: new Map(),
   adding: null,          // null, or { name, program, busy, error } while the "protect another app" form is open
   removing: null,        // id of the added app awaiting "remove?" confirmation
-  show() { this.render(); for (const a of ctx.status().apps) if (a.kind === 'agent' && a.canStart) projects.load(a.id); },
+  show() { this.render(); this.discover(); for (const a of ctx.status().apps) if (a.kind === 'agent' && a.canStart) projects.load(a.id); },
+
+  async discover() {
+    try { this.found = await invoke('discover_apps'); } catch (e) { this.found = []; }
+    if (visible && pane === 'apps') this.render();
+  },
+
+  foundHtml() {
+    if (!this.found || !this.found.length) return '';
+    const rows = this.found.map((f) => `<div class="fd-row" data-path="${esc(f.path)}" data-name="${esc(f.name)}">
+        ${appTile('generic', f.name, 28)}
+        <div class="grow fd-id"><div class="fd-name">${esc(f.name)}${f.canProtect && !f.asks ? '<span class="tag">Offline only</span>' : ''}</div>
+          <div class="fd-note">${esc(f.note)}</div></div>
+        ${f.canProtect ? `<button class="btn sm" data-do="found-protect" data-key="fd-${esc(f.path)}"${this.foundBusy ? ' disabled' : ''}>${this.foundBusy === f.path ? 'Adding…' : 'Protect'}</button>` : ''}
+      </div>`).join('');
+    return `<section class="fd"><h3>Found on this Mac, not protected</h3>
+      <p class="ap-meta">These open without any limits today. Protecting one gives it lighter protection: nothing it sends can skip the gate.</p>
+      <div class="fd-list">${rows}</div>
+      ${this.foundError ? `<div class="notice error" role="alert">${icon('alert')}<span>${esc(this.foundError)}</span></div>` : ''}</section>`;
+  },
+
+  async protectFound(row) {
+    const path = row.dataset.path, name = row.dataset.name;
+    this.foundBusy = path; this.foundError = ''; this.render();
+    try { ctx.setStatus(await invoke('app_add', { name, program: path })); }
+    catch (e) { this.foundError = errText(e); }
+    this.foundBusy = null;
+    await this.discover();
+  },
+
+  async showLauncher(appId) {
+    this.errors.delete(appId);
+    try { const res = await invoke('app_launcher', { appId }); this.launcher.set(appId, res.path); }
+    catch (e) { this.errors.set(appId, errText(e)); }
+    if (visible && pane === 'apps') this.render();
+  },
   onStatus() { this.render(); },
   onEvent() {},
 
@@ -128,6 +165,7 @@ const apps = {
     patch(body, `<div class="ap"><h2>Apps</h2><p class="lead">Protected apps run in their own private space and can only reach what you trust.</p>
       ${list.map((a) => this.card(a)).join('') || '<p class="muted">No AI apps were found on this computer yet.</p>'}
       ${this.addHtml()}
+      ${this.foundHtml()}
       ${others.length ? `<p class="ap-also"><b>Also recognised:</b> ${others.map((a) => esc(a.name)).join(', ')}. Install one and it appears here, protected from its first run.</p>` : ''}</div>`);
   },
 
@@ -172,7 +210,9 @@ const apps = {
       catch (e) { if (this.adding) this.adding.error = errText(e); }
       return this.render();
     }
+    if (what === 'found-protect') return this.protectFound(b.closest('.fd-row'));
     const card = b.closest('.ap-card'), appId = card && card.dataset.app;
+    if (what === 'app-launcher') return this.showLauncher(appId);
     if (what === 'app-remove') { this.removing = appId; return this.render(); }
     if (what === 'app-remove-no') { this.removing = null; return this.render(); }
     if (what === 'app-remove-yes') { this.removing = null; return this.run(appId, 'app_remove', {}, true); }
@@ -201,7 +241,8 @@ const apps = {
           <div class="ap-state"><span class="state ${cls}"></span>${words}</div></div>
         <label class="ap-protect"><span>Protected</span><span class="switch green"><input type="checkbox" role="switch" data-protect data-key="p-${esc(a.id)}" aria-label="Protect ${esc(a.name)}"${a.protected ? ' checked' : ''}${a.installed ? '' : ' disabled'}><i></i></span></label></div>
       ${a.problem ? `<div class="notice warn" role="status">${icon('alert')}<span>${esc(a.problem)}</span></div>` : ''}
-      <div class="ap-row">${controls}</div>
+      <div class="ap-row">${controls}${a.canStart ? `<button class="btn" data-do="app-launcher" data-key="ln-${esc(a.id)}" title="A shortcut of its own that opens ${esc(a.name)} protected. Keep it in the Dock.">${icon('link')}Show launcher</button>` : ''}</div>
+      ${this.launcher.has(a.id) ? `<div class="notice ok" role="status">${icon('check')}<span>Shown in Finder as <b>${esc(a.name)} (protected)</b>. Drag it to your Dock and use it instead of the usual icon.</span></div>` : ''}
       ${a.workspace ? `<div class="ap-meta">Works only inside <span class="mono sel">${esc(a.workspace)}</span></div>` : ''}
       ${a.kind === 'window' ? `<div class="ap-meta ap-lighter"><b>Lighter protection.</b> Nothing it sends can skip the gate: you see it and are asked, or it is refused. It can still read your files, as it always could, and only the copy you open from here is protected. To make that possible its own inner sandbox is switched off.</div>` : ''}
       ${a.kind === 'agent' && a.canStart ? projects.section(a) : ''}

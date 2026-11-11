@@ -34,6 +34,8 @@ const HELP: &str = "sai — Sandbox-ai command line
   sai project remove <app> <name>    delete the copy (your folder is not touched)
   sai run <app> -- <command...>   run a command protected, in this terminal
   sai open [feed|proof|studio|glance]   show a window of the running app
+  sai found                       AI apps on this computer that are not protected yet
+  sai open-protected <app>        open an app protected (what a launcher does)
   sai check                       re-check protection now
   sai setup                       one-time setup (asks for the administrator password)
   sai daemon                      run the engine without the app (foreground)
@@ -280,6 +282,15 @@ async fn main() {
                 tab => ("main", Some(tab)),
             };
             call("show", json!({ "window": window, "tab": tab })).await;
+        }
+        "found" => {
+            for f in call("discover_apps", Value::Null).await.as_array().into_iter().flatten() {
+                let how = if f["canProtect"].as_bool() != Some(true) { "cannot be protected" } else if f["asks"].as_bool() == Some(true) { "can be protected" } else { "offline only" };
+                println!("{:<16} {:<20} {}", s(f, "name"), how, s(f, "path"));
+            }
+        }
+        "--open-protected" | "open-protected" => {
+            call("app_open", json!({ "appId": a(1) })).await;
         }
         "check" => print_status(&call("check_fence", Value::Null).await),
         "setup" => {

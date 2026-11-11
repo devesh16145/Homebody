@@ -90,6 +90,19 @@ pub struct WatchStatus {
     pub places: u64,
 }
 
+/// An AI app found on this computer that is not protected yet.
+#[derive(Serialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct FoundApp {
+    pub name: String,
+    pub path: String,
+    pub can_protect: bool,
+    /// Its traffic can be pointed at the gate, so you are asked. False: it can only run cut off.
+    pub asks: bool,
+    /// Why it cannot be protected, or what protecting it means. A sentence for the user.
+    pub note: String,
+}
+
 /// One place an app contacted during Watch that has no rule yet.
 #[derive(Serialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]

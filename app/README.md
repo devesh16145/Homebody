@@ -27,6 +27,8 @@ Status: second build, 10 Nov 2026 ("usable every day"). Everything below runs en
 | Protected apps | Claude Code (agent) and Ollama (local models): tested live. Codex CLI, Gemini CLI, Aider, opencode: recognised when installed, each with its own private user and gate; their short trusted lists follow the tools' documentation and have not been run here |
 | Protect another app: any command-line program gets its own private user, gate, workspace and an empty Trusted list (Studio → Apps) | Built, unit-tested; needs one more approval of setup per added app |
 | Windowed apps (lighter protection): added from Studio → Apps, opened protected as you under the launch-time profile, web traffic pointed at the app's own gate; handing things to other apps, driving other apps, login items and Sandbox-ai's own files are closed to it | Working for Electron apps, tested live with Obsidian: start-up contacts arrived at the gate as questions, direct connections and lookups were refused and shown. Not tried with LM Studio, Jan or Comfy, or with a non-Electron app (those would be offline rather than asked) |
+| Found on this Mac: known windowed AI apps in the Applications folders are listed in Studio → Apps with one-click Protect, or with the reason they cannot be protected | Working; on this Mac it found Antigravity, Bionic, Claude, Comfy Desktop, Cursor (can be asked), ChatGPT and Hermes (offline only) |
+| Launchers: every protected app can have "<Name> (protected)" in `~/Applications/Sandbox-ai`, for the Dock or Spotlight. Clicking it opens the app protected, starting Sandbox-ai first if it is not running | Working, both cases tested live. The launcher points at where Sandbox-ai is now; if the app is moved, use Show launcher again |
 | A program installed inside your home folder is detected and explained instead of failing silently | Working |
 | Open at login (Studio → Advanced) | Built; not yet tried across a real login |
 
@@ -83,7 +85,7 @@ app/
 
 The UI calls one command, `sai`, with `{cmd, args}`; the core's `dispatch` serves the app, the CLI and scripts alike. Opened in a plain browser, the UI runs against an in-page mock of the same contract (`ui/dev.html` is a review harness with scenarios).
 
-Sizes in this build: 64 unit tests, 46 bypass cases, a 4.2 MB app.
+Sizes in this build: 66 unit tests, 46 bypass cases, a 4.2 MB app.
 
 ## Verify it yourself
 

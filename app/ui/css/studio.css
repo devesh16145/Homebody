@@ -145,3 +145,15 @@ div.log-lines { padding: 8px 14px; }
 .ad-switch .muted { font-size: var(--fs-small); }
 .ap-lighter { max-width: 64ch; line-height: 1.45; }
 .ap-lighter b { font-weight: 600; color: var(--text-2); }
+
+/* AI apps found on this computer */
+.fd { margin: 6px 0 16px; }
+.fd h3 { font-weight: 600; margin-bottom: 2px; }
+.fd .ap-meta { margin: 0 0 8px; max-width: 64ch; }
+.fd-list { border-radius: var(--r-lg); background: var(--fill-1); box-shadow: inset 0 0 0 .5px var(--hairline); }
+.fd-row { display: flex; align-items: center; gap: 12px; padding: 8px 12px; border-top: 1px solid var(--hairline); }
+.fd-row:first-child { border-top: 0; }
+.fd-id { min-width: 0; }
+.fd-name { font-weight: 500; display: flex; align-items: center; gap: 8px; }
+.fd-note { font-size: var(--fs-small); color: var(--text-3); }
+.fd > .notice { margin-top: 8px; }

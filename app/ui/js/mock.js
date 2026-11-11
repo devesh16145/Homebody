@@ -382,6 +382,17 @@ export function createMock(scenarioName) {
       return status();
     },
     async pick_program() { return '/Applications/LM Studio.app'; },
+    async discover_apps() {
+      const all = [
+        { name: 'LM Studio', path: '/Applications/LM Studio.app', canProtect: true, asks: true, note: 'Everything it sends will go through the gate, so you are asked.' },
+        { name: 'Cursor', path: '/Applications/Cursor.app', canProtect: true, asks: true, note: 'Everything it sends will go through the gate, so you are asked.' },
+        { name: 'ChatGPT', path: '/Applications/ChatGPT.app', canProtect: true, asks: false, note: 'Can only be run cut off from the internet: this kind of app cannot be pointed at the gate yet.' },
+        { name: 'Draw Things', path: '/Applications/Draw Things.app', canProtect: false, asks: false, note: "Draw Things already runs in Apple's own sandbox, and macOS does not allow a second one around it. Apps like this need the Network Extension version of Sandbox-ai." },
+      ];
+      return all.filter((f) => !s.apps.some((a) => a.name === f.name));
+    },
+    async app_launcher({ appId } = {}) { const a = needApp(appId); return { path: `~/Applications/Sandbox-ai/${a.name} (protected).app` }; },
+    async app_open({ appId } = {}) { needApp(appId).running = true; queueStatus(); return null; },
     async get_login_item() { return { on: !!s.loginItem }; },
     async set_login_item({ on } = {}) { s.loginItem = !!on; return { on: s.loginItem }; },
     async app_add({ name, program } = {}) {

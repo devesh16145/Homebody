@@ -192,7 +192,10 @@ interface SetupResult { ok: boolean; message: string; }
 | `remove_setup` | — | `SetupResult` | undo everything setup created; asks for the admin password |
 | `check_fence` | — | `Status` | re-run health probes now |
 | `app_add` | `{ name, program }` | `Status` | protect another app. A command name or program path: it gets its own private user, gate and workspace, and setup must be approved again before it can run. A path ending in `.app`: a windowed app (`kind: "window"`), which runs as the user under the launch-time profile alone, needs no approval, and is opened and quit with `app_start` / `app_stop`. Rejects apps in Apple's App Sandbox with a sentence for the user |
-| `app_remove` | `{ appId }` | `Status` | only apps added with `app_add` |
+| `app_remove` | `{ appId }` | `Status` | only apps added with `app_add`; also deletes its launcher |
+| `discover_apps` | — | `FoundApp[]` | known windowed AI apps in the Applications folders that are not on the list yet. `FoundApp = { name, path, canProtect, asks, note }`: `asks` false means it can only run cut off from the internet; `note` is a sentence for the user (the reason, when `canProtect` is false) |
+| `app_open` | `{ appId }` | `null` | open an app the way its kind is opened: a window or service is started, an agent gets a protected terminal. What a launcher calls |
+| `app_launcher` | `{ appId, reveal?: boolean }` | `{ path }` | writes `~/Applications/Sandbox-ai/<Name> (protected).app`, a small app that opens this one protected (starting Sandbox-ai first if needed), and reveals it in Finder. Created automatically for windowed apps when they are added |
 | `pick_program` | — | `string \| null` | shell only: the system file chooser |
 | `get_login_item` / `set_login_item` | — / `{ on }` | `{ on: boolean }` | shell only: open the app at login (a per-user launch entry) |
 | `app_set_protected` | `{ appId, protected }` | `Status` | |

@@ -242,6 +242,18 @@ pub const APPS: &[AppPreset] = &[
     },
 ];
 
+/// Windowed AI apps worth pointing out when they are installed, by the name of the .app.
+/// Only a hint for "found on this computer": anything else can still be added by hand.
+pub const KNOWN_WINDOWED: &[&str] = &[
+    "LM Studio", "Jan", "Ollama", "Msty", "GPT4All", "AnythingLLM", "Open WebUI", "Comfy Desktop", "ComfyUI", "Draw Things", "DiffusionBee",
+    "ChatGPT", "Claude", "Gemini", "Copilot", "Perplexity", "DeepSeek", "Poe", "Cherry Studio", "Chatbox", "BoltAI", "Hermes", "Bionic",
+    "Cursor", "Windsurf", "Antigravity", "Kiro", "Trae", "Void", "Codex", "Goose",
+];
+
+pub fn is_known_windowed(app_name: &str) -> bool {
+    KNOWN_WINDOWED.iter().any(|k| k.eq_ignore_ascii_case(app_name.trim()))
+}
+
 /// Gate ports from here up are handed to apps the user adds.
 pub const FIRST_CUSTOM_PORT: u16 = 47120;
 

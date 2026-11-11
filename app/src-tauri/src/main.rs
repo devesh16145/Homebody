@@ -294,10 +294,42 @@ fn pump_events(app: AppHandle, engine: Engine) {
     });
 }
 
+/// Tell the user something from a process that has no window of its own.
+fn alert(message: &str) {
+    let text: String = message.chars().filter(|c| !c.is_control()).map(|c| if c == '"' || c == '\\' { '\'' } else { c }).collect();
+    let _ = std::process::Command::new("/usr/bin/osascript").args(["-e", &format!("display alert \"Sandbox-ai\" message \"{text}\"")]).output();
+}
+
+/// An answer that means "not ready yet, try again in a moment" rather than "no".
+fn not_ready(error: &str) -> bool {
+    error.contains("still being checked") || error.contains("not running")
+}
+
 fn main() {
+    // A launcher ("<App> (protected)" in the Dock) starts us with: --open-protected <app id>.
+    let args: Vec<String> = std::env::args().collect();
+    let wanted = args.iter().position(|a| a == "--open-protected").and_then(|i| args.get(i + 1)).cloned();
+    if let Some(id) = &wanted {
+        if tauri::async_runtime::block_on(sai_core::control::is_running()) {
+            // Sandbox-ai is already running: hand the request over and leave.
+            tauri::async_runtime::block_on(async {
+                let mut last = String::new();
+                for _ in 0..40 {
+                    match sai_core::control::call("app_open", serde_json::json!({ "appId": id })).await {
+                        Ok(_) => return,
+                        Err(e) if not_ready(&e) => last = e,
+                        Err(e) => return alert(&e),
+                    }
+                    tokio::time::sleep(Duration::from_millis(500)).await;
+                }
+                alert(&last);
+            });
+            return;
+        }
+    }
     tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![sai])
-        .setup(|app| {
+        .setup(move |app| {
             let handle = app.handle().clone();
             // One engine per user: if `sai daemon` or another copy of the app is running, bow out.
             if tauri::async_runtime::block_on(sai_core::control::is_running()) {
@@ -306,6 +338,25 @@ fn main() {
             }
             let engine = tauri::async_runtime::block_on(Engine::start())?;
             app.manage(Shell { engine: engine.clone(), glance_hidden_at: Mutex::new(None), indicator: Mutex::new(None) });
+            if let Ok(exe) = std::env::current_exe() {
+                engine.set_opener(&exe.to_string_lossy());
+            }
+            // Started by a launcher while not running yet: start up as usual, then open the app.
+            if let Some(id) = wanted.clone() {
+                let e = engine.clone();
+                tauri::async_runtime::spawn(async move {
+                    let mut last = String::new();
+                    for _ in 0..40 {
+                        match e.dispatch("app_open", serde_json::json!({ "appId": id })).await {
+                            Ok(_) => return,
+                            Err(err) if not_ready(&err) => last = err,
+                            Err(err) => return alert(&err),
+                        }
+                        tokio::time::sleep(Duration::from_millis(500)).await;
+                    }
+                    alert(&last);
+                });
+            }
 
             #[cfg(target_os = "macos")]
             app.set_activation_policy(tauri::ActivationPolicy::Accessory);

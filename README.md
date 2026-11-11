@@ -15,6 +15,7 @@ No virtual machine, no account, no telemetry, nothing hosted. Apache-2.0. Window
 - **Asks in plain words.** "Ollama wants to download a model. Allow once, always allow, or block?" Thirty seconds without an answer means no.
 - **Shows what tried to go around.** A program that connects directly or looks up a name by itself is refused by the fence, and that refusal shows up in the Feed.
 - **Lets agents work on your projects safely.** Bring a folder in and the agent works on a copy. You review what it changed and apply it to your own folder when you are happy.
+- **Finds your AI apps and makes protected the easy way in.** Known AI apps on the computer are listed with one-click Protect, and each protected app gets a launcher of its own for the Dock, so opening the protected copy is as easy as opening the ordinary one.
 - **Watch mode.** Allow everything for an hour, then see exactly what your AI contacted and choose what to trust.
 - **Proof.** An append-only, hash-chained, Ed25519-signed log. Export it and anyone can check it with `sai verify <file>`.
 

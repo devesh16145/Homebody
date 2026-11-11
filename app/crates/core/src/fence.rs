@@ -213,6 +213,102 @@ fn regex_escape(s: &str) -> String {
     s.chars().flat_map(|c| if c.is_ascii_alphanumeric() || c == '/' || c == ' ' || c == '-' || c == '_' { vec![c] } else { vec!['\\', c] }).collect()
 }
 
+/// Known windowed AI apps installed in the usual places and not on the list yet.
+pub fn discover(cfg: &Config) -> Vec<crate::model::FoundApp> {
+    let mut dirs = vec![std::path::PathBuf::from("/Applications")];
+    if let Some(home) = dirs::home_dir() {
+        dirs.push(home.join("Applications"));
+    }
+    let mut found = Vec::new();
+    for dir in dirs {
+        let Ok(entries) = std::fs::read_dir(&dir) else { continue };
+        for e in entries.flatten() {
+            let path = e.path();
+            let (Some(stem), Some(ext)) = (path.file_stem().and_then(|s| s.to_str()), path.extension().and_then(|s| s.to_str())) else { continue };
+            if ext != "app" || !crate::catalog::is_known_windowed(stem) {
+                continue;
+            }
+            let path_s = path.to_string_lossy().into_owned();
+            if cfg.apps.iter().any(|a| a.binary == path_s) || found.iter().any(|f: &crate::model::FoundApp| f.name.eq_ignore_ascii_case(stem)) {
+                continue;
+            }
+            found.push(match inspect_bundle(&path_s) {
+                Ok(b) if b.electron => crate::model::FoundApp { name: stem.to_string(), path: path_s, can_protect: true, asks: true, note: "Everything it sends will go through the gate, so you are asked.".into() },
+                Ok(_) => crate::model::FoundApp { name: stem.to_string(), path: path_s, can_protect: true, asks: false, note: "Can only be run cut off from the internet: this kind of app cannot be pointed at the gate yet.".into() },
+                Err(why) => crate::model::FoundApp { name: stem.to_string(), path: path_s, can_protect: false, asks: false, note: why },
+            });
+        }
+    }
+    found.sort_by(|a, b| b.can_protect.cmp(&a.can_protect).then(b.asks.cmp(&a.asks)).then(a.name.to_lowercase().cmp(&b.name.to_lowercase())));
+    found
+}
+
+/// Where an app's launcher lives: a small app of its own that you can keep in the Dock or find
+/// with Spotlight, so that opening the protected copy is as easy as opening the ordinary one.
+pub fn launcher_path(app: &AppConfig) -> Option<std::path::PathBuf> {
+    Some(dirs::home_dir()?.join("Applications").join("Sandbox-ai").join(format!("{} (protected).app", app.name)))
+}
+
+/// Write the launcher. `opener` is the program that knows how to ask the running Sandbox-ai to
+/// open an app (this app's own executable); the launcher runs `opener --open-protected <id>`.
+pub fn write_launcher(app: &AppConfig, opener: &str) -> Result<String, String> {
+    let path = launcher_path(app).ok_or("Your home folder could not be found.")?;
+    let fail = |e: std::io::Error| format!("The launcher could not be created: {e}");
+    let _ = std::fs::remove_dir_all(&path);
+    std::fs::create_dir_all(path.join("Contents/MacOS")).map_err(fail)?;
+    std::fs::create_dir_all(path.join("Contents/Resources")).map_err(fail)?;
+    // Borrow the original app's icon, so the launcher is recognisable in the Dock.
+    let mut icon_line = String::new();
+    if app.windowed {
+        let bundle = std::path::Path::new(&app.binary);
+        let icon = std::process::Command::new("/usr/bin/plutil").args(["-extract", "CFBundleIconFile", "raw", "-o", "-"]).arg(bundle.join("Contents/Info.plist")).output().ok().filter(|o| o.status.success()).map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string()).filter(|n| !n.is_empty() && !n.contains('/'));
+        if let Some(name) = icon {
+            let file = if name.ends_with(".icns") { name } else { format!("{name}.icns") };
+            if std::fs::copy(bundle.join("Contents/Resources").join(&file), path.join("Contents/Resources/icon.icns")).is_ok() {
+                icon_line = "  <key>CFBundleIconFile</key><string>icon</string>\n".into();
+            }
+        }
+    }
+    let xml = |t: &str| t.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;");
+    let plist = format!(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n<plist version=\"1.0\"><dict>\n  <key>CFBundleName</key><string>{name} (protected)</string>\n  <key>CFBundleDisplayName</key><string>{name} (protected)</string>\n  <key>CFBundleIdentifier</key><string>com.sandboxai.launcher.{id}</string>\n  <key>CFBundleExecutable</key><string>launcher</string>\n  <key>CFBundlePackageType</key><string>APPL</string>\n  <key>CFBundleVersion</key><string>1</string>\n  <key>LSUIElement</key><true/>\n{icon_line}</dict></plist>\n",
+        name = xml(&app.name),
+        id = xml(&app.id),
+    );
+    std::fs::write(path.join("Contents/Info.plist"), plist).map_err(fail)?;
+    // When Sandbox-ai is not running yet it is started the ordinary way, as its own app, and
+    // told what to open. When it is running, the request is handed over directly.
+    let bundle = std::path::Path::new(opener).ancestors().find(|a| a.extension().map(|e| e == "app").unwrap_or(false)).map(|a| a.to_string_lossy().into_owned());
+    let start = match &bundle {
+        Some(b) => format!("exec /usr/bin/open -g -a {} --args --open-protected {}", sh_quote(b), sh_quote(&app.id)),
+        None => format!("exec \"$OPENER\" --open-protected {}", sh_quote(&app.id)),
+    };
+    let script = format!(
+        "#!/bin/sh\n# Opens {name} protected by Sandbox-ai. Created by Sandbox-ai; safe to delete.\nOPENER={opener}\nif [ -x \"$OPENER\" ]; then\n  if /usr/bin/pgrep -qf \"^$OPENER\"; then exec \"$OPENER\" --open-protected {id}; fi\n  {start}\nfi\n/usr/bin/osascript -e 'display alert \"Sandbox-ai was not found\" message \"Open Sandbox-ai and use Show launcher again to refresh this shortcut.\"' >/dev/null 2>&1\n",
+        name = app.name,
+        opener = sh_quote(opener),
+        id = sh_quote(&app.id),
+    );
+    let exe = path.join("Contents/MacOS/launcher");
+    std::fs::write(&exe, script).map_err(fail)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&exe, std::fs::Permissions::from_mode(0o755)).map_err(fail)?;
+    }
+    Ok(path.to_string_lossy().into_owned())
+}
+
+pub fn remove_launcher(app: &AppConfig) {
+    if let Some(p) = launcher_path(app) {
+        let _ = std::fs::remove_dir_all(&p);
+        // The folder goes too once the last launcher has gone (this fails, harmlessly, otherwise).
+        if let Some(dir) = p.parent() {
+            let _ = std::fs::remove_dir(dir);
+        }
+    }
+}
+
 const VIOLATION_TAG: &str = "sai-app=";
 
 /// One refused attempt to reach the network without going through the gate.
@@ -882,6 +978,32 @@ mod tests {
         assert!(!setup_script(&cfg, "tester").contains("_saiwin1"));
         assert!(!remove_script(&cfg).contains("_saiwin1 "));
         assert!(cfg.provisioned().app("my-window").is_none());
+    }
+
+    #[test]
+    fn a_launcher_is_a_small_app_that_asks_sandbox_ai_to_open_the_real_one() {
+        let a = windowed("my-window", "/Applications/Nope.app");
+        let path = launcher_path(&a).unwrap();
+        assert!(path.ends_with("Applications/Sandbox-ai/Window (protected).app"));
+        let script_for = |opener: &str| {
+            let dir = tempfile::tempdir().unwrap();
+            let p = dir.path().join("l.sh");
+            let script = format!("#!/bin/sh\nOPENER={}\nif [ -x \"$OPENER\" ]; then exec \"$OPENER\" --open-protected {}; fi\n", sh_quote(opener), sh_quote(&a.id));
+            std::fs::write(&p, &script).unwrap();
+            assert!(std::process::Command::new("/bin/sh").arg("-n").arg(&p).status().unwrap().success());
+            script
+        };
+        // A path with a quote and a space cannot break out of the script.
+        let s = script_for("/Apps/It's here/Sandbox-ai.app/Contents/MacOS/sandbox-ai");
+        assert!(s.contains("'/Apps/It'\\''s here/Sandbox-ai.app/Contents/MacOS/sandbox-ai'"));
+    }
+
+    #[test]
+    fn known_windowed_apps_are_matched_by_name() {
+        assert!(crate::catalog::is_known_windowed("LM Studio"));
+        assert!(crate::catalog::is_known_windowed("lm studio"));
+        assert!(!crate::catalog::is_known_windowed("TextEdit"));
+        assert!(!crate::catalog::is_known_windowed("LM Studio Helper"));
     }
 
     #[test]

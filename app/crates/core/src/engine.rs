@@ -74,6 +74,8 @@ struct Inner {
     deny_order: Mutex<()>,
     /// Gate ports this engine is listening on.
     gates: Mutex<HashSet<u16>>,
+    /// The program launchers call to reach us: the desktop app's own executable.
+    opener: Mutex<Option<String>>,
     /// Process ids of windowed apps we opened (app id -> pid), so we can ask exactly those to quit.
     pids: Mutex<HashMap<String, u32>>,
     /// Repeats counted on a row in memory but not yet written down (row id -> how many).
@@ -124,6 +126,7 @@ impl Engine {
             deny_order: Mutex::new(()),
             gates: Mutex::new(HashSet::new()),
             pids: Mutex::new(HashMap::new()),
+            opener: Mutex::new(None),
             unsaved_repeats: Mutex::new(HashMap::new()),
             stop: watch::channel(false).0,
             health: Mutex::new(HashMap::new()),
@@ -217,6 +220,11 @@ impl Engine {
             }
         });
         Ok(engine)
+    }
+
+    /// Tell the engine which program launchers should call (see `fence::write_launcher`).
+    pub fn set_opener(&self, exe: &str) {
+        *self.0.opener.lock().unwrap() = Some(exe.to_string());
     }
 
     /// Start the gate on this port unless it is already running.
@@ -1364,8 +1372,39 @@ impl Engine {
                 self.append("app", fields! { "action" => "added", "app" => id.as_str() });
                 // Its gate starts now; its private space appears once setup is approved again.
                 self.ensure_gate(port).await;
+                // A windowed app is only protected when opened through us, so give it a launcher.
+                let added = self.0.cfg.lock().unwrap().app(&id).cloned();
+                let opener = self.0.opener.lock().unwrap().clone();
+                if let (Some(app), Some(opener)) = (added.filter(|a| a.windowed), opener) {
+                    let _ = fence::write_launcher(&app, &opener);
+                }
                 self.check_fence().await;
                 ok(&self.status())
+            }
+            "discover_apps" => {
+                let cfg = self.0.cfg.lock().unwrap().clone();
+                ok(&tokio::task::spawn_blocking(move || fence::discover(&cfg)).await.map_err(|e| e.to_string())?)
+            }
+            // Open an app the way its kind is opened: a window, a protected terminal, a service.
+            "app_open" => {
+                let id = req("appId")?;
+                let app = self.app_if_ready(&id)?;
+                if app.kind == "agent" {
+                    fence::open_terminal(&app, None).await?;
+                } else {
+                    self.app_start(&id).await?;
+                }
+                Ok(Value::Null)
+            }
+            // A small app of its own for the Dock or Spotlight that opens this one protected.
+            "app_launcher" => {
+                let app = self.0.cfg.lock().unwrap().app(&req("appId")?).cloned().ok_or("Unknown app.")?;
+                let opener = self.0.opener.lock().unwrap().clone().ok_or("Launchers are made by the Sandbox-ai app. Open it and try again.")?;
+                let path = fence::write_launcher(&app, &opener)?;
+                if args.get("reveal").and_then(Value::as_bool).unwrap_or(true) {
+                    fence::reveal(&path, true).await;
+                }
+                Ok(json!({ "path": path }))
             }
             "app_remove" => {
                 let id = req("appId")?;
@@ -1375,6 +1414,7 @@ impl Engine {
                 let app = self.0.cfg.lock().unwrap().app(&id).cloned().ok_or("Unknown app.")?;
                 self.0.cfg.lock().unwrap().remove_custom(&id)?;
                 self.save_cfg();
+                fence::remove_launcher(&app);
                 self.0.health.lock().unwrap().remove(&id);
                 fence::stop_all(&app).await;
                 self.append("app", fields! { "action" => "removed", "app" => id.as_str() });
