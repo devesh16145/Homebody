@@ -150,9 +150,23 @@
 
 /* ---------- the mark: the Homebody cat peeking over the sill ---------- */
 .mark { display: block; flex: none; overflow: visible; }
-.mark-live .hb-eyes { animation: blink 6.5s infinite; transform-origin: center; transform-box: fill-box; }
-@keyframes blink { 0%, 93%, 100% { transform: scaleY(1); } 95.5% { transform: scaleY(.1); } }
-@media (prefers-reduced-motion: reduce) { .mark-live .hb-eyes { animation: none; } }
+.mark .hb-cat, .mark .hb-paw { transform-box: view-box; }
+@media (prefers-reduced-motion: no-preference) {
+  /* Peeks up from behind the sill, overshooting a little, then the paws land on it. */
+  .mark-peek .hb-cat { animation: hb-peek .62s cubic-bezier(.3, 1.45, .5, 1) both; }
+  .mark-peek .hb-paw { animation: hb-paw .32s .3s cubic-bezier(.3, 1.6, .5, 1) both; transform-origin: 32px 41px; }
+  /* Ducks down out of sight: everything is blocked. */
+  .mark-duck .hb-cat { animation: hb-duck .42s cubic-bezier(.5, 0, .7, .4) both; }
+  /* A question: a quick hop. */
+  .mark-perk .hb-cat { animation: hb-perk .55s cubic-bezier(.3, 1.4, .5, 1) both; }
+  /* Pointing at the cat makes its ears twitch. */
+  button:hover > .mark:not(.mark-shut) .hb-cat, .mark:not(.mark-shut):hover .hb-cat { animation: hb-twitch .5s ease-in-out; }
+}
+@keyframes hb-peek { from { transform: translateY(17px); } to { transform: translateY(0); } }
+@keyframes hb-paw { from { transform: scale(.2); opacity: 0; } to { transform: scale(1); opacity: 1; } }
+@keyframes hb-duck { from { transform: translateY(0); } to { transform: translateY(15px); } }
+@keyframes hb-perk { 0% { transform: translateY(0); } 35% { transform: translateY(-4px); } 70% { transform: translateY(1px); } 100% { transform: translateY(0); } }
+@keyframes hb-twitch { 0%, 100% { transform: translateY(0); } 30% { transform: translateY(-1.5px); } 60% { transform: translateY(.5px); } }
 
 /* ---------- app icons: glass tiles ---------- */
 .tile {

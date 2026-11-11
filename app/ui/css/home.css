@@ -213,3 +213,38 @@ body.hm { display: block; background: var(--ground); background-image: var(--gro
 .fr-dots i { width: 7px; height: 7px; border-radius: 50%; background: var(--line-2); }
 .fr-dots i.on { background: var(--tide); width: 20px; border-radius: 4px; }
 @media (max-width: 860px) { .fr-choices { grid-template-columns: 1fr; } .fr h1 { font-size: 28px; } }
+
+/* ---------- motion ----------
+   One-shot only: a page rises in when you arrive, cards follow in a short cascade, a new question
+   slides in and glows once, menus pop from where they open. Nothing loops; nothing runs at rest
+   (except the cat's blink). All of it is off when the Mac asks for reduced motion. */
+@media (prefers-reduced-motion: no-preference) {
+  .hm-enter > * { animation: hm-rise .46s cubic-bezier(.2, .8, .2, 1) both; }
+  .hm-enter > :nth-child(2) { animation-delay: .04s; }
+  .hm-enter > :nth-child(3) { animation-delay: .08s; }
+  .hm-enter > :nth-child(4) { animation-delay: .12s; }
+  .hm-enter > :nth-child(n+5) { animation-delay: .16s; }
+  .hm-enter .hm-card, .hm-enter .hm-card-add, .hm-enter .pl, .hm-enter .fr-choice, .hm-enter .hm-list > .hm-row {
+    animation: hm-rise .5s cubic-bezier(.2, .8, .2, 1) both;
+  }
+  .hm-enter .hm-card:nth-child(1), .hm-enter .pl:nth-child(1), .hm-enter .hm-row:nth-child(1) { animation-delay: .1s; }
+  .hm-enter .hm-card:nth-child(2), .hm-enter .pl:nth-child(2), .hm-enter .hm-row:nth-child(2) { animation-delay: .14s; }
+  .hm-enter .hm-card:nth-child(3), .hm-enter .pl:nth-child(3), .hm-enter .hm-row:nth-child(3) { animation-delay: .18s; }
+  .hm-enter .hm-card:nth-child(4), .hm-enter .pl:nth-child(4), .hm-enter .hm-row:nth-child(4) { animation-delay: .22s; }
+  .hm-enter .hm-card:nth-child(5), .hm-enter .pl:nth-child(5), .hm-enter .hm-row:nth-child(5) { animation-delay: .26s; }
+  .hm-enter .hm-card:nth-child(n+6), .hm-enter .hm-card-add, .hm-enter .pl:nth-child(n+6), .hm-enter .hm-row:nth-child(n+6) { animation-delay: .3s; }
+  .hm-enter .fr-choice:nth-child(2) { animation-delay: .08s; }
+
+  .hm-q.is-new { animation: hm-ask-in .5s cubic-bezier(.3, 1.3, .5, 1) both, hm-ask-glow 1.6s .4s ease-out; }
+
+  .hm-menu:not([hidden]) { animation: hm-pop .18s cubic-bezier(.2, .9, .3, 1.2) both; transform-origin: 20px 0; }
+
+  .hm-item, .hm-card .cap, .cap { transition: background-color .18s, color .18s, transform var(--t-fast) var(--ease), box-shadow .18s, filter var(--t-fast); }
+  .hm-card .tile { transition: transform .35s cubic-bezier(.3, 1.4, .5, 1); }
+  .hm-card:hover .tile { transform: translateY(-2px) rotate(-3deg); }
+  .fr-dots i { transition: width .35s cubic-bezier(.3, 1.4, .5, 1), background-color .2s; }
+}
+@keyframes hm-rise { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
+@keyframes hm-ask-in { from { opacity: 0; transform: translateY(-10px) scale(.98); } to { opacity: 1; transform: none; } }
+@keyframes hm-ask-glow { 0% { box-shadow: 0 0 0 1.5px var(--ask), 0 0 0 0 var(--ask-soft); } 50% { box-shadow: 0 0 0 1.5px var(--ask), 0 0 0 10px var(--ask-soft); } 100% { box-shadow: 0 0 0 1.5px var(--ask), 0 6px 20px var(--ask-soft); } }
+@keyframes hm-pop { from { opacity: 0; transform: translateY(-4px) scale(.96); } to { opacity: 1; transform: none; } }

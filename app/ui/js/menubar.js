@@ -3,12 +3,13 @@
 
 import { invoke, onEvent } from './api.js';
 import { $, esc, on, patch, initPage, errText, fmtCount, secondsLeft } from './util.js';
-import { icon, appTile, mark } from './icons.js';
+import { icon, appTile, mark, markMove, markReset, startBlinking, isNew } from './icons.js';
 
 initPage();
 
 const root = $('#mb');
 let status = null, error = '';
+let entering = true;             // the panel was just opened: tiles pop in, the cat peeks up
 const busy = new Set();
 const plural = (n, one, many) => `${fmtCount(n)} ${n === 1 ? one : many}`;
 
@@ -20,11 +21,12 @@ function head(s) {
   else if (s.fence !== 'up') [st, title, sub] = ['ask', 'Needs a fix', 'Open Homebody'];
   else if (s.mode === 'watch') [title, sub] = ['Watching', 'All allowed, all written down'];
   else if (s.pending.length) [st, sub] = ['ask', plural(s.pending.length, 'question', 'questions')];
-  return `<header class="mb-head">${mark(36, st, st === 'private')}<div class="grow"><b>${esc(title)}</b><small>${esc(sub)}</small></div></header>`;
+  return `<header class="mb-head">${mark(36, st, st === 'private', markMove('mb', st))}<div class="grow"><b>${esc(title)}</b><small>${esc(sub)}</small></div></header>`;
 }
 
 function question(q) {
-  return `<div class="mb-q" data-ask="${esc(q.id)}">
+  const fresh = isNew('ask:' + q.id);
+  return `<div class="mb-q${fresh ? ' is-new' : ''}" data-ask="${esc(q.id)}">
     <div class="mb-q-t">${appTile(q.appIcon, q.appName, 28)}<span class="grow"><small>${esc(q.appName)} wants</small><b>${esc(q.label)}</b></span>
       <span class="mb-left" data-left="${esc(q.expiresAt)}" title="Blocked if you do not answer">${secondsLeft(q)} s</span></div>
     <div class="mb-q-a"><button class="cap sm" data-answer="block">Block</button><button class="cap sm" data-answer="once">Once</button><button class="cap sm tide" data-answer="always">Always</button></div></div>`;
@@ -54,7 +56,23 @@ function render() {
       <button class="cap" data-do="main">Open Homebody</button>
       ${s.setupNeeded ? '' : s.lockdown ? '<button class="cap" data-do="release">Let out</button>' : '<button class="cap danger" data-do="panic" title="Nothing leaves until you let things out again">Block all</button>'}
     </footer>`);
+  if (entering) {
+    entering = false;
+    root.classList.remove('mb-enter'); void root.offsetWidth; root.classList.add('mb-enter');
+    // Only this drawing plays the entrance; later redraws must not replay it.
+    clearTimeout(enterTimer); enterTimer = setTimeout(() => root.classList.remove('mb-enter'), 800);
+  }
 }
+
+// Each time the panel opens, play its entrance again (focus and visibility both report it: once).
+let enterTimer = 0, openedAt = 0;
+function opened() {
+  if (document.hidden || Date.now() - openedAt < 500) return;
+  openedAt = Date.now(); entering = true; markReset('mb'); root.__html = ''; render();
+}
+document.addEventListener('visibilitychange', opened);
+window.addEventListener('focus', opened);
+startBlinking();
 
 async function refresh() { try { status = await invoke('get_status'); render(); } catch (e) { /* keep last */ } }
 

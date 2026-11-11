@@ -7,7 +7,7 @@
 
 import { invoke, onEvent } from './api.js';
 import { $, $$, esc, on, patch, initPage, errText, dot, fmtBytes, fmtCount, secondsLeft } from './util.js';
-import { icon, appTile, mark } from './icons.js';
+import { icon, appTile, mark, markMove, markReset, startBlinking, isNew } from './icons.js';
 import * as proof from './proof.js';
 import * as feed from './feed.js';
 import * as watch from './watch.js';
@@ -51,10 +51,16 @@ const findApp = (id) => (status ? status.apps.find((a) => a.id === id) : null);
 
 // ---------- navigation ----------
 
+// A page that was just entered rises into place once; redraws of the same page stay still.
+let enterUntil = Date.now() + 700;
+const entering_ = () => Date.now() < enterUntil;
+
 function go(next) {
   closeMenu();
   if (next === route) return render();
   route = next;
+  enterUntil = Date.now() + 700;
+  if (next === 'overview') markReset('hero');
   el.view.scrollTop = 0;
   render();
   el.view.focus({ preventScroll: true });
@@ -101,7 +107,8 @@ export const markState = (ind) => ({ blocked: 'shut', off: 'off', asking: 'ask',
 
 function stateHtml() {
   const [ind, title, sub] = stateWords(status);
-  return `${mark(30, markState(ind))}<span class="grow"><b>${esc(title)}</b><small>${esc(sub)}</small></span>${icon('chevron', 'hm-down')}`;
+  const st = markState(ind);
+  return `${mark(30, st, false, markMove('side', st))}<span class="grow"><b>${esc(title)}</b><small>${esc(sub)}</small></span>${icon('chevron', 'hm-down')}`;
 }
 
 function menuHtml() {
@@ -149,7 +156,8 @@ async function setMode(m) {
 /** A waiting question, answered right where it is shown. */
 export function questionHtml(q, withApp = true) {
   const busyNow = answering.has(q.id);
-  return `<div class="hm-q" data-ask="${esc(q.id)}" role="group" aria-label="${esc(q.title)}">
+  const fresh = isNew('ask:' + q.id);
+  return `<div class="hm-q${fresh ? ' is-new' : ''}" data-ask="${esc(q.id)}" role="group" aria-label="${esc(q.title)}">
     ${withApp ? appTile(q.appIcon, q.appName, 36) : `<span class="hm-q-ic">${icon('info')}</span>`}
     <div class="grow">
       <div class="hm-q-t">${withApp ? `${esc(q.appName)} wants to reach` : 'Wants to reach'}<b>${esc(q.label)}</b></div>
@@ -230,7 +238,7 @@ function hero(s) {
   const stats = s.setupNeeded ? '' : `<div class="hm-stats" aria-label="Today">
       <span><b>${fmtCount(t.allowed)}</b> allowed</span><span><b>${fmtCount(t.blocked)}</b> stopped</span><span><b>${fmtBytes(t.bytesOut)}</b> out</span></div>`;
   return `<section class="hm-hero">
-    ${mark(64, markState(ind), ind === 'private' || ind === 'asking')}
+    ${mark(64, markState(ind), ind === 'private' || ind === 'asking', markMove('hero', markState(ind)))}
     <h1>${esc(s.setupNeeded ? 'Not set up yet' : word)}</h1><p>${esc(sub)}</p>${stats}
     ${act ? `<div class="hm-hero-act">${act}</div>` : ''}
   </section>`;
@@ -285,13 +293,13 @@ function firstRunHtml(s) {
     const found = s.apps.filter((a) => a.installed);
     const rows = found.map((a) => `<label class="hm-row">${appTile(a.icon, a.name, 36)}<span class="grow"><b>${esc(a.name)}</b></span>
         <span class="switch"><input type="checkbox" data-protect="${esc(a.id)}" data-key="protect-${esc(a.id)}" aria-label="Keep ${esc(a.name)} home"${a.protected ? ' checked' : ''}><i></i></span></label>`).join('');
-    body = `${mark(72, 'private', true)}
+    body = `${mark(72, 'private', true, markMove('fr1', 'private'))}
       <h1>Which AI apps should stay home?</h1>
       <p class="fr-lead">They keep working. They just can’t send anything out unless you say so.</p>
       ${rows ? `<div class="hm-list fr-list">${rows}</div>` : '<p class="hm-empty">No AI apps found yet. You can add them later.</p>'}
       <button class="cap tide lg" data-do="fr-next" data-key="fr-next">Continue</button>`;
   } else if (step === 2) {
-    body = `${mark(72, reason ? 'ask' : 'private', true)}
+    body = `${mark(72, reason ? 'ask' : 'private', true, markMove('fr2', reason ? 'ask' : 'private'))}
       <h1>${reason ? 'Protection needs a fix' : 'One password, and it’s on'}</h1>
       <p class="fr-lead">${reason ? esc(reason) : 'Your Mac asks for your password once. Homebody never sees it.'}</p>
       ${reason ? '' : `<div class="hm-explain fr-explain">
@@ -302,7 +310,7 @@ function firstRunHtml(s) {
       ${setup.state === 'error' ? `<div class="notice error" role="alert">${icon('alert')}<span>${esc(setup.error)} Try again whenever you’re ready.</span></div>` : ''}
       <div class="fr-links">${reason || waiting ? '' : '<button class="link" data-do="fr-back">Back</button>'}<button class="link" data-go="technical">What exactly it sets up</button></div>`;
   } else {
-    body = `${mark(72, 'private', true)}
+    body = `${mark(72, 'private', true, markMove('fr3', 'private'))}
       <h1>It’s on. How do you want to start?</h1>
       <p class="fr-lead">You can switch any time from the menu bar.</p>
       <div class="fr-choices">
@@ -319,14 +327,14 @@ async function runSetup() {
   try {
     const res = await invoke('run_setup');
     if (!res || !res.ok) throw (res && res.message) || 'Setup did not finish.';
-    setup.state = 'idle'; setup.step = firstTime ? 3 : 1;
+    setup.state = 'idle'; setup.step = firstTime ? 3 : 1; enterUntil = Date.now() + 700;
     ctx.setStatus(await invoke('get_status'));
   } catch (e) { setup.state = 'error'; setup.error = errText(e); render(); }
 }
 
 async function startWith(mode) {
   try { ctx.setStatus(await invoke('set_mode', mode === 'watch' ? { mode, minutes: 60 } : { mode })); } catch (e) { ctx.toast(errText(e)); }
-  setup.step = 1; render();
+  setup.step = 1; enterUntil = Date.now() + 700; markReset('hero'); render();
 }
 
 // ---------- "not in Applications yet" ----------
@@ -463,7 +471,8 @@ function render() {
   if (r.startsWith('app:')) {
     const a = findApp(r.slice(4));
     if (!a) { route = 'overview'; return render(); }
-    return appPage.render(el.view, a, env);
+    appPage.render(el.view, a, env);
+    return enterFx();
   }
   appPage.leave();
   const html = r === 'add' ? addHtml() : r === 'settings' ? settingsHtml() : r === 'technical' ? technicalHtml() : overviewHtml();
@@ -472,6 +481,13 @@ function render() {
     const node = $('#tech', el.view);
     if (node !== techNode) { techNode = node; advanced.show(); }
   }
+  enterFx();
+}
+
+function enterFx() {
+  if (!entering_()) return;
+  const page = el.view.querySelector('.hm-page');
+  if (page) page.classList.add('hm-enter');
 }
 
 const env = { ctx, questionHtml, primaryAction, appLine, plural, go, appErrors, render: () => render() };
@@ -490,8 +506,8 @@ on(document, 'click', '[data-app-do]', (ev, b) => appDo(b.dataset.appDo, b.datas
 on(el.view, 'click', '[data-do]', (ev, b) => {
   const what = b.dataset.do;
   if (what === 'setup') return runSetup();
-  if (what === 'fr-next') { setup.step = 2; return render(); }
-  if (what === 'fr-back') { setup.step = 1; return render(); }
+  if (what === 'fr-next') { setup.step = 2; enterUntil = Date.now() + 700; return render(); }
+  if (what === 'fr-back') { setup.step = 1; enterUntil = Date.now() + 700; return render(); }
   if (what === 'fr-start') return startWith(b.dataset.modeTo);
   if (what === 'install-later') { try { localStorage.setItem('sai.install.later', '1'); } catch (e) { /* private mode */ } return render(); }
   if (what === 'install-go') { installBusy = true; render(); return invoke('install_and_restart').catch((e) => { installBusy = false; ctx.toast(errText(e)); render(); }); }
@@ -536,6 +552,7 @@ onEvent((evt) => {
   appPage.onEvent(evt);
 });
 
+startBlinking();
 feed.init(el.activity, ctx);
 proof.init(el.report, ctx);
 watch.init(ctx);

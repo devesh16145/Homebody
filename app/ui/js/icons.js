@@ -79,19 +79,67 @@ let seq = 0;
  * state: 'private' (peeking), 'ask' (amber, looks up at you), 'shut' (ducked down: only the ear
  * tips show, everything is blocked), 'off' (faded: not protected). live: blinks now and then.
  */
-export function mark(size = 44, state = 'private', live = false) {
+export function mark(size = 44, state = 'private', live = false, anim = '') {
   const k = 'hb' + (++seq);
   const [dx, dy] = state === 'ask' ? [1.8, -1.8] : [0, 0];
   const tone = state === 'off' ? 'var(--ink-3)' : 'var(--tide)';
   const head = state === 'ask' ? 'var(--ask)' : 'currentColor';
   const cat = `<g mask="url(#${k}m)" style="fill:${head}">${CAT_HEAD}</g>`;
-  return `<svg class="mark${live ? ' mark-live' : ''}" width="${size}" height="${size}" viewBox="0 0 64 64" aria-hidden="true" style="color:${tone}${state === 'off' ? ';opacity:.55' : ''}">
-    <defs><mask id="${k}m"><rect x="-10" y="-10" width="90" height="90" fill="#fff"/><g class="hb-eyes" fill="#000">${state === 'shut' ? '' : catEyes(dx, dy)}</g></mask>
+  const cls = `mark mark-${state}${live ? ' mark-live' : ''}${anim ? ' mark-' + anim : ''}`;
+  return `<svg class="${cls}" width="${size}" height="${size}" viewBox="0 0 64 64" aria-hidden="true" style="color:${tone}${state === 'off' ? ';opacity:.55' : ''}">
+    <defs><mask id="${k}m"><rect x="-10" y="-10" width="90" height="90" fill="#fff"/><g fill="#000">${state === 'shut' ? '' : catEyes(dx, dy)}</g></mask>
       <clipPath id="${k}c"><rect width="64" height="40.5"/></clipPath></defs>
-    <g clip-path="url(#${k}c)">${state === 'shut' ? `<g transform="translate(0 15)">${cat}</g>` : cat}</g>
+    <g clip-path="url(#${k}c)"><g class="hb-cat"${state === 'shut' ? ' transform="translate(0 15)"' : ''}>${cat}</g></g>
     <rect x="6" y="40" width="52" height="6" rx="3" fill="currentColor"/>
-    ${state === 'shut' ? '' : '<circle cx="18" cy="41" r="3.8" fill="currentColor"/><circle cx="46" cy="41" r="3.8" fill="currentColor"/>'}
+    ${state === 'shut' ? '' : '<circle class="hb-paw" cx="18" cy="41" r="3.8" fill="currentColor"/><circle class="hb-paw" cx="46" cy="41" r="3.8" fill="currentColor"/>'}
   </svg>`;
+}
+
+// ---------- the cat moves ----------
+//
+// Each place that shows the cat keeps the state it showed last. When the state changes the cat
+// moves once: it peeks up from behind the sill, ducks down, or perks up with a question. Animation
+// classes are only present for that one drawing, so redrawing the page never replays them.
+// A movement stays in the drawing for its own length, so a quick redraw (several happen while a
+// window opens) restarts it instead of cutting it off.
+const lastShown = new Map();   // slot -> { state, move, at }
+const MOVE_MS = 700;
+
+/** Which movement to play in `slot` for `state`: 'peek', 'duck', 'perk', or ''. `fresh` forces a peek. */
+export function markMove(slot, state, fresh = false) {
+  const prev = lastShown.get(slot), now = Date.now();
+  if (prev && prev.state === state && !fresh) return now - prev.at < MOVE_MS ? prev.move : '';
+  let move = '';
+  if (state === 'shut') move = prev && prev.state !== 'shut' ? 'duck' : '';
+  else if (fresh || !prev || prev.state === 'shut') move = 'peek';
+  else if (state === 'ask') move = 'perk';
+  lastShown.set(slot, { state, move, at: now });
+  return move;
+}
+
+/** True for a while after `key` is first seen: for things that should arrive with a little motion. */
+const firstSeen = new Map();
+export function isNew(key, ms = MOVE_MS) {
+  const now = Date.now();
+  if (!firstSeen.has(key)) firstSeen.set(key, now);
+  return now - firstSeen.get(key) < ms;
+}
+
+/** Forget what a slot showed, so the next drawing peeks again (a window being shown, a page entered). */
+export function markReset(slot) { lastShown.delete(slot); }
+
+/** Live cats blink now and then: one quiet timer for the page, paused while the page is hidden. */
+let blinkTimer = 0;
+export function startBlinking() {
+  if (blinkTimer || (window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches)) return;
+  const tick = () => {
+    blinkTimer = setTimeout(tick, 4200 + Math.random() * 4200);
+    if (document.hidden) return;
+    const eyes = document.querySelectorAll('svg.mark-live mask ellipse');
+    eyes.forEach((e) => { e.dataset.ry = e.getAttribute('ry'); e.setAttribute('ry', '0.5'); });
+    setTimeout(() => eyes.forEach((e) => e.setAttribute('ry', e.dataset.ry || '3.7')), 130);
+  };
+  blinkTimer = setTimeout(tick, 2500);
 }
 
 /** The Homebody app icon, as drawn for the Dock. */
