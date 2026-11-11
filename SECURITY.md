@@ -43,6 +43,7 @@ These are limits of the current design, listed in the README, not new findings:
 - The build is not signed or notarized yet.
 - An organisation's fleet server sees what joined computers' apps reached, and its rules come before the user's own, including rules that trust a place the user had blocked. That is what joining means and the app says so first; it is not a finding.
 - Linux: firewall rules removed by an administrator come back within 20 seconds, not at once.
+- macOS: a protected program started with `homebody run` in a terminal of yours shares that terminal while it runs. (The terminal Homebody opens for an agent is the agent's own. On Linux a protected program always gets its own.)
 - Windows: a protected program gets no console of its own and cannot be stopped from Homebody. Variables handed to a run with `--env` are on the launcher's command line, which other programs running as you can read.
 - A browser profile kept for AI sites runs with the browser's own inner sandbox off. Homebody's profile stands in for it: no home folder apart from Downloads, and only the sites switched on. It can still reach programs listening on this computer (so a local AI page works), and a flaw in a page it shows is contained by that profile, not by the browser's.
 - The fleet server's console page allows inline script (it is one self-contained file); everything else is forbidden by its content security policy.

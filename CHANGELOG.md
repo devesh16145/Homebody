@@ -42,7 +42,7 @@ Built-in rules
 Fixed
 
 - [SAI-2026-004](docs/advisories/README.md): setup could be tricked by a protected app into creating a file the app owns, anywhere on the computer. Run setup once more after updating ("Check now" in Settings will ask).
-- Anything started as a protected user now gets a terminal of its own, so it cannot type into yours.
+- Linux: anything started as a protected user gets a terminal of its own, so it cannot type into yours.
 
 - The gate recorded a connection that a browser opened ahead of need and never used as a refused "not an ordinary encrypted connection". A connection that sends nothing is no longer recorded.
 

@@ -73,4 +73,6 @@ That needs no running app and no access to the machine the run happened on. It p
 
 ## What has been run
 
-On this project's own Linux build machine: the action from nothing, a clean run with a report that verifies, and a run with a refusal exiting 3. On macOS: the same by hand. On Windows: a clean run. A Linux runner is the cheapest place to use it.
+On a GitHub-hosted Linux machine, on every push to the work branch: the action from nothing, a clean run with a report that verifies, and a run with a refusal exiting 3. On macOS: the same by hand. On a GitHub-hosted Windows machine: a clean run. A Linux runner is the cheapest place to use it.
+
+Variables named with `--env` are handed over in a file only you and the app can read, which the run deletes as it starts; they are not put on a command line. (On Windows they are on the launcher's command line, readable by other programs running as you.)

@@ -12,6 +12,7 @@ Apple silicon Macs only.
 
 ```bash
 homebody box setup                 # once: makes the disk (downloads Debian, about 350 MB)
+homebody box install claude-code   # once: puts the agent into the disk
 homebody box start claude-code     # the Box sees only that agent's folder
 homebody box start claude-code my-project   # or only one project you brought in
 homebody box run -- <command...>   # run something inside it
@@ -28,13 +29,13 @@ The fence's limit is that a protected program shares the Mac's kernel: a kernel 
 ## What this first version does not do
 
 - **It needs Homebrew's `e2fsprogs` to make the disk** (`brew install e2fsprogs`), because the image's start-up line is edited before its first start. A ready-made disk published with Homebody's releases will remove that; until then the Box is for people comfortable with Homebrew.
-- **Agents are not installed in it for you.** The prepared disk is plain Debian with Python. Installing an agent means starting the Box, installing it there through the gate, and doing so again after the next start, because each start is a fresh copy. Keeping installed agents in the prepared disk is the next piece of work.
+- **Three agents can be put into it:** `homebody box install claude-code` (or `codex`, or `gemini`) installs the agent into the prepared disk, fetching everything through that agent's gate, so every later start has it. Only Claude Code has been installed this way so far. Other agents are installed by hand inside a running Box and are gone at the next start.
 - **One Box at a time**, started from the command line. There is no button for it in the app yet.
 - **API keys are typed inside it** like anywhere else. Keeping keys outside and adding them at the gate is not built.
 - **No window.** It is for command-line agents.
 
 ## What has been run
 
-`app/tests/box.sh`, 21 cases, on one Apple M4 Mac: no interface but loopback, direct connections (IPv4, IPv6, UDP) have nowhere to go, no name lookup, the host answers on the gate's channel only, trusted places reached and untrusted ones refused and shown in Activity, none of the Mac's folders visible, files written to the shared folder arrive as yours, and a new start does not have the last run's files.
+`app/tests/box.sh`, 22 cases, on one Apple M4 Mac: no interface but loopback, direct connections (IPv4, IPv6, UDP) have nowhere to go, no name lookup, the host answers on the gate's channel only, trusted places reached and untrusted ones refused and shown in Activity, none of the Mac's folders visible, files written to the shared folder arrive as yours, a command that stays quiet for a while is not cut off, and a new start does not have the last run's files. Claude Code was installed into the prepared disk through the gate (`homebody box install claude-code`, two minutes) and reported its version on the next start; it was not signed in or used for work there.
 
 An earlier experiment on the same Mac saw the Linux guest crash under heavy memory pressure (17 GB of swap in use). It has been stable in every run since, but it has not been run for hours at a time.

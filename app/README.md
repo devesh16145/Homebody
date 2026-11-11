@@ -57,10 +57,10 @@ Status: 11 Nov 2026. Everything in the table runs end to end on this Mac in the 
 | The rules as Cedar policies: `homebody policy`, and in every export | Working; Cedar's own library parses and validates them and agrees with Homebody on every one of 1,209 test questions (`tools/cedar-check`) |
 | Compliance mapping in every export (`../docs/compliance.md`) | Written by the project; not reviewed by an auditor |
 | The engine rebuilds to the same file (`scripts/repro-check.sh`) | Verified on macOS (Apple silicon) and Linux (x86-64): two builds in different folders are identical |
-| Linux: engine, command line and fence (`../docs/platforms.md`) | 41 of 41 fence cases and 29 of 29 gate cases on a GitHub-hosted Ubuntu machine on every push. No window. Not run on other distributions or with a real agent |
-| Windows: engine, command line and fence | See `../docs/platforms.md` for the current count on a GitHub-hosted Windows machine. No window, no interactive terminal. Not run with a real agent |
-| Fleet server for organisations: `homebody-fleet` (`../docs/fleet.md`), and Settings → Organisation | 12 server tests on macOS and Linux; one scratch engine joined a local server end to end. Not run with a real identity provider, a real management system, or more than one computer |
-| The Box: an agent in a Linux machine with no network interface (`../docs/box.md`) | 22 of 22 cases on this Mac (`tests/box.sh`). Command line only; making its disk needs Homebrew's e2fsprogs |
+| Linux: engine, command line and fence (`../docs/platforms.md`) | 42 of 42 fence cases and 29 of 29 gate cases on a GitHub-hosted Ubuntu machine on every push. No window. Not run on other distributions or with a real agent |
+| Windows: engine, command line and fence (`../docs/platforms.md`) | 22 of 22 cases on a GitHub-hosted Windows machine on every push. No window, no interactive terminal. Not run with a real agent |
+| Fleet server for organisations: `homebody-fleet` (`../docs/fleet.md`), and Settings → Organisation | 12 server tests on macOS and Linux; one scratch engine joined a local server end to end; an independent read of the code found eight problems in it, all fixed. Not run with a real identity provider, a real management system, or more than one computer |
+| The Box: an agent in a Linux machine with no network interface (`../docs/box.md`) | 22 of 22 cases on this Mac (`tests/box.sh`), run against the installed app. Claude Code installed into it through the gate; not yet signed in or used for work there. Command line only; making its disk needs Homebrew's e2fsprogs |
 | Editor plugins: VS Code and Cursor (`../editors/vscode`), JetBrains (`../editors/jetbrains`) | VS Code: 17 tests with a stand-in editor, and its client against the real engine; not yet installed in an editor. JetBrains: builds against IntelliJ 2024.2 and its client works against the real engine; not run inside an editor |
 
 ## Run it

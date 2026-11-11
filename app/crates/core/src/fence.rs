@@ -1260,9 +1260,7 @@ fi
 # 3. Let the app start things as the protected users without asking for a password each time.
 STEP="permission to start protected apps"
 "#);
-    // The second line gives anything started as a protected user a terminal of its own, so it
-    // cannot type into yours (a program sharing your terminal can push keystrokes into it).
-    s.push_str(&format!("printf '%s ALL=({0}) NOPASSWD: ALL\\nDefaults>{0} use_pty\\n' \"$REAL_USER\" > /etc/sudoers.d/homebody.tmp\n", users.join(",")));
+    s.push_str(&format!("printf '%s ALL=({}) NOPASSWD: ALL\\n' \"$REAL_USER\" > /etc/sudoers.d/homebody.tmp\n", users.join(",")));
     s.push_str(r#"chmod 440 /etc/sudoers.d/homebody.tmp
 if visudo -cf /etc/sudoers.d/homebody.tmp >/dev/null; then mv /etc/sudoers.d/homebody.tmp /etc/sudoers.d/homebody; else rm -f /etc/sudoers.d/homebody.tmp; echo "could not write the permission file" >&2; exit 1; fi
 
