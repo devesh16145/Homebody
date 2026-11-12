@@ -38,4 +38,4 @@ runs:
       shell: bash
       run: |
         homebody setup --print | sudo bash
-        homebody --help | head -1
+        homebody --help | sed -n 1p

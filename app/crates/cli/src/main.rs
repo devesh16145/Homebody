@@ -177,8 +177,24 @@ async fn call(cmd: &str, args: Value) -> Value {
     }
 }
 
+/// `homebody … | head -1`: the reader closes our output once it has what it wanted, and the
+/// next line printed would end this program with a crash report. That is the reader having had
+/// enough, not a fault, so it ends quietly instead. (The signal that does this for most tools
+/// is left switched off, as Rust has it: the engine writes to connections that may have closed.)
+fn end_quietly_when_output_closes() {
+    let usual = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let text = info.to_string();
+        if text.contains("failed printing to stdout") || text.contains("failed printing to stderr") {
+            std::process::exit(0);
+        }
+        usual(info);
+    }));
+}
+
 #[tokio::main]
 async fn main() {
+    end_quietly_when_output_closes();
     let args: Vec<String> = std::env::args().skip(1).collect();
     let a = |i: usize| args.get(i).map(String::as_str).unwrap_or("");
     match a(0) {
