@@ -111,8 +111,14 @@ def finish(pid, fd):
         pass
 
 
-who = run("/usr/bin/id", "-u")
-APP_UID = who.stdout.strip()
+# Homebody refuses to run a program while it is re-checking that the fence holds (it does that
+# after a setting changes); give it a moment rather than calling that a failure.
+for attempt in range(20):
+    who = run("/usr/bin/id", "-u")
+    APP_UID = who.stdout.strip()
+    if who.returncode == 0 and APP_UID.isdigit():
+        break
+    time.sleep(1)
 if who.returncode != 0 or not APP_UID.isdigit() or APP_UID == str(os.getuid()):
     print(f"{APP} cannot be run protected here: {who.stderr.strip() or who.stdout.strip()}")
     sys.exit(2)
