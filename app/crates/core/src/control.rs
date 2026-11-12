@@ -56,8 +56,22 @@ mod os {
         format!(r"\\.\pipe\homebody-control-{tag}")
     }
 
+    /// The pipe has one free end at a time, and the engine makes the next one just after a
+    /// caller takes it. A second caller arriving in that gap is told the pipe is busy (error
+    /// 231), which is not the same as nobody being there: wait a moment and try again.
     pub async fn connect() -> std::io::Result<Stream> {
-        ClientOptions::new().open(pipe_name())
+        const PIPE_BUSY: i32 = 231;
+        let name = pipe_name();
+        let mut tries = 0;
+        loop {
+            match ClientOptions::new().open(&name) {
+                Err(e) if e.raw_os_error() == Some(PIPE_BUSY) && tries < 80 => {
+                    tries += 1;
+                    tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+                }
+                other => return other,
+            }
+        }
     }
 
     pub async fn serve(engine: Engine) -> std::io::Result<()> {
