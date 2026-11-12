@@ -1932,6 +1932,92 @@ impl Engine {
     // The command surface (docs/ipc.md). One implementation for the app, the CLI and scripts.
     // -----------------------------------------------------------------------------------------
 
+    /// The Box as the window shows it: names beside ids, and, for one app, whether that agent
+    /// can be put in and whether it is.
+    #[cfg(unix)]
+    fn box_status(&self, app_id: Option<&str>) -> Value {
+        let mut st = crate::boxvm::status();
+        let name = |id: Option<&str>| id.and_then(|id| self.0.cfg.lock().unwrap().app(id).map(|a| a.name.clone()));
+        st["appName"] = json!(name(st["appId"].as_str()));
+        if st["busy"].is_object() {
+            st["busy"]["appName"] = json!(name(st["busy"]["appId"].as_str()));
+        }
+        if let Some(id) = app_id {
+            st["agent"] = json!({ "id": id, "canInstall": crate::boxvm::recipe(id).is_some(), "installed": st["installed"].get(id).cloned().unwrap_or(Value::Null) });
+        }
+        st
+    }
+
+    /// Make the Box's disk. The guest's set-up traffic (none is needed for the first start)
+    /// goes through this app's gate, so anything it did would be judged and logged like the app's own.
+    #[cfg(unix)]
+    async fn box_setup(&self, app_id: &str, image: Option<&str>) -> Result<String, String> {
+        let app = self.0.cfg.lock().unwrap().app(app_id).cloned().ok_or("Unknown app.")?;
+        let message = crate::boxvm::setup(app.proxy_port, image).await?;
+        self.append("box", fields! { "event" => "set up" });
+        Ok(message)
+    }
+
+    /// Put an agent into the Box's prepared disk. The packages come through the agent's own
+    /// gate; the places they come from are trusted for the length of the installation only.
+    #[cfg(unix)]
+    async fn box_install(&self, app_id: &str) -> Result<String, String> {
+        let app = self.0.cfg.lock().unwrap().app(app_id).cloned().ok_or("Unknown app.")?;
+        let recipe = crate::boxvm::recipe(&app.id).ok_or_else(|| format!("Homebody does not know how to install {} in the Box yet. Claude Code, Codex CLI and Gemini CLI can be.", app.name))?;
+        let mut added = Vec::new();
+        for host in recipe.hosts {
+            if app.rule_for(host).is_none() && self.set_trust_inner(&app.id, host, true, "box install").is_ok() {
+                added.push(*host);
+            }
+        }
+        let result = crate::boxvm::install(app.proxy_port, &app.id, &app.name, &recipe).await;
+        for host in added {
+            let _ = self.remove_trust(&app.id, host);
+        }
+        let version = result?;
+        self.append("box", fields! { "event" => "installed", "app" => app.id.as_str(), "version" => version.as_str() });
+        Ok(version)
+    }
+
+    /// Start the Box for an app. What it sees of this Mac: a project's copy if one is named,
+    /// else the app's own space.
+    #[cfg(unix)]
+    async fn dispatch_box_start(&self, app: &AppConfig, project: Option<String>) -> Result<(), String> {
+        if !app.protected {
+            return Err(format!("{} is not protected. Switch protection on for it first.", app.name));
+        }
+        let share = match project {
+            Some(name) => {
+                app.projects.iter().find(|p| p.name == name).ok_or("Unknown project.")?;
+                projects::copy_dir(app, &name).filter(|d| d.is_dir()).ok_or("That project's copy is missing.")?.to_string_lossy().into_owned()
+            }
+            None => app.workspace.clone().filter(|w| std::path::Path::new(w).is_dir()).ok_or("This app has no folder to share with the Box. Finish setup first.")?,
+        };
+        crate::boxvm::start(app, &share).await?;
+        self.append("box", fields! { "event" => "started", "app" => app.id.as_str(), "share" => share.as_str() });
+        Ok(())
+    }
+
+    /// Run a long Box step without making the caller wait for it. Returns once the step has
+    /// had a moment to mark itself busy; how it ends is in `box_status` (`last`).
+    #[cfg(unix)]
+    async fn box_in_background<F, Fut>(&self, what: &'static str, app_id: Option<String>, job: F)
+    where
+        F: FnOnce(Engine) -> Fut + Send + 'static,
+        Fut: std::future::Future<Output = Result<(), String>> + Send + 'static,
+    {
+        let me = self.clone();
+        tokio::spawn(async move {
+            let after = me.clone();
+            if let Err(e) = job(me).await {
+                // A step refused before it began has not recorded how it ended.
+                crate::boxvm::record_failure(what, app_id.as_deref(), &e);
+            }
+            after.touch();
+        });
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+
     pub async fn dispatch(&self, cmd: &str, args: Value) -> Result<Value, String> {
         let s = |k: &str| args.get(k).and_then(Value::as_str).map(str::to_string);
         let req = |k: &str| s(k).ok_or_else(|| format!("Missing \"{k}\"."));
@@ -2171,52 +2257,65 @@ impl Engine {
             }
             // The Box: an agent in a Linux virtual machine with no network interface (see `boxvm`).
             #[cfg(unix)]
-            "box_status" => Ok(crate::boxvm::status()),
+            "box_status" => Ok(self.box_status(s("appId").as_deref())),
+            // Making the disk and putting an agent in take minutes. From the command line the
+            // call waits for the end; the window passes `background` and follows `box_status`.
             #[cfg(unix)]
             "box_setup" => {
-                // The guest's set-up traffic (none is needed for the first start) goes through
-                // this app's gate, so anything it did would be judged and logged like the app's own.
-                let app = self.0.cfg.lock().unwrap().app(&s("appId").unwrap_or_else(|| "claude-code".into())).cloned().ok_or("Unknown app.")?;
-                let message = crate::boxvm::setup(app.proxy_port, s("image").as_deref()).await?;
-                self.append("box", fields! { "event" => "set up" });
+                let (app_id, image) = (s("appId").unwrap_or_else(|| "claude-code".into()), s("image"));
+                self.0.cfg.lock().unwrap().app(&app_id).ok_or("Unknown app.")?;
+                if args.get("background").and_then(Value::as_bool) == Some(true) {
+                    self.box_in_background("setup", None, |me| async move { me.box_setup(&app_id, image.as_deref()).await.map(|_| ()) }).await;
+                    return Ok(self.box_status(None));
+                }
+                let message = self.box_setup(&app_id, image.as_deref()).await?;
                 Ok(json!({ "message": message, "status": crate::boxvm::status() }))
             }
-            // Put an agent into the Box's prepared disk. The packages come through the agent's own
-            // gate; the places they come from are trusted for the length of the installation only.
             #[cfg(unix)]
             "box_install" => {
+                let app_id = req("appId")?;
+                let app = self.0.cfg.lock().unwrap().app(&app_id).cloned().ok_or("Unknown app.")?;
+                crate::boxvm::recipe(&app.id).ok_or_else(|| format!("Homebody does not know how to install {} in the Box yet. Claude Code, Codex CLI and Gemini CLI can be.", app.name))?;
+                if args.get("background").and_then(Value::as_bool) == Some(true) {
+                    let id = app_id.clone();
+                    self.box_in_background("install", Some(app_id.clone()), |me| async move { me.box_install(&id).await.map(|_| ()) }).await;
+                    return Ok(self.box_status(Some(&app_id)));
+                }
+                let version = self.box_install(&app_id).await?;
+                Ok(json!({ "message": format!("{} is in the Box: {version}", app.name) }))
+            }
+            // The window's one button: start the Box for this agent if it is not running, and
+            // open a Terminal window in it with the agent.
+            #[cfg(unix)]
+            "box_open" => {
                 let app = self.0.cfg.lock().unwrap().app(&req("appId")?).cloned().ok_or("Unknown app.")?;
-                let recipe = crate::boxvm::recipe(&app.id).ok_or_else(|| format!("Homebody does not know how to install {} in the Box yet. Claude Code, Codex CLI and Gemini CLI can be.", app.name))?;
-                let mut added = Vec::new();
-                for host in recipe.hosts {
-                    if app.rule_for(host).is_none() && self.set_trust_inner(&app.id, host, true, "box install").is_ok() {
-                        added.push(*host);
+                let recipe = crate::boxvm::recipe(&app.id).ok_or_else(|| format!("{} cannot be put in the Box yet.", app.name))?;
+                if !crate::boxvm::installed().contains_key(&app.id) {
+                    return Err(format!("{} is not in the Box yet.", app.name));
+                }
+                let now = crate::boxvm::status();
+                match (now["running"].as_bool() == Some(true), now["appId"].as_str()) {
+                    (true, Some(id)) if id == app.id => {}
+                    (true, other) => {
+                        let name = other.and_then(|id| self.0.cfg.lock().unwrap().app(id).map(|a| a.name.clone())).unwrap_or_else(|| "another app".into());
+                        return Err(format!("The Box is running for {name}. Stop it first: one Box runs at a time."));
+                    }
+                    _ => {
+                        self.dispatch_box_start(&app, s("project")).await?;
                     }
                 }
-                let result = crate::boxvm::install(app.proxy_port, &recipe).await;
-                for host in added {
-                    let _ = self.remove_trust(&app.id, host);
-                }
-                let version = result?;
-                self.append("box", fields! { "event" => "installed", "app" => app.id.as_str(), "version" => version.as_str() });
-                Ok(json!({ "message": format!("{} is in the Box: {version}", app.name) }))
+                crate::boxvm::open_terminal(&app, recipe.program).await?;
+                Ok(self.box_status(Some(&app.id)))
+            }
+            #[cfg(unix)]
+            "box_dismiss" => {
+                crate::boxvm::dismiss_last();
+                Ok(self.box_status(s("appId").as_deref()))
             }
             #[cfg(unix)]
             "box_start" => {
                 let app = self.0.cfg.lock().unwrap().app(&req("appId")?).cloned().ok_or("Unknown app.")?;
-                if !app.protected {
-                    return Err(format!("{} is not protected. Switch protection on for it first.", app.name));
-                }
-                // What the Box sees of this Mac: a project's copy if one is named, else the app's workspace.
-                let share = match s("project") {
-                    Some(name) => {
-                        app.projects.iter().find(|p| p.name == name).ok_or("Unknown project.")?;
-                        projects::copy_dir(&app, &name).filter(|d| d.is_dir()).ok_or("That project's copy is missing.")?.to_string_lossy().into_owned()
-                    }
-                    None => app.workspace.clone().filter(|w| std::path::Path::new(w).is_dir()).ok_or("This app has no folder to share with the Box. Finish setup first.")?,
-                };
-                crate::boxvm::start(&app, &share).await?;
-                self.append("box", fields! { "event" => "started", "app" => app.id.as_str(), "share" => share.as_str() });
+                self.dispatch_box_start(&app, s("project")).await?;
                 Ok(crate::boxvm::status())
             }
             #[cfg(unix)]

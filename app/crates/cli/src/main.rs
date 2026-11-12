@@ -307,7 +307,7 @@ async fn main() {
         "box" => match a(1) {
             "setup" => {
                 let image = args.iter().position(|x| x == "--image").and_then(|i| args.get(i + 1)).and_then(|p| std::path::absolute(p).ok()).map(|p| p.to_string_lossy().into_owned());
-                eprintln!("Setting the Box up. The first time this downloads about 350 MB from Debian and takes a few minutes.");
+                eprintln!("Setting the Box up. The first time this downloads about 200 MB from Debian and takes a few minutes.");
                 let r = call("box_setup", json!({ "image": image })).await;
                 println!("{}", s(&r, "message"));
             }
@@ -339,12 +339,18 @@ async fn main() {
                 let st = call("box_status", Value::Null).await;
                 if st["supported"].as_bool() != Some(true) {
                     println!("The Box needs a Mac with Apple silicon.");
+                } else if st["busy"].is_object() {
+                    println!("The Box is busy: {}.", s(&st["busy"], "step").to_lowercase());
                 } else if st["prepared"].as_bool() != Some(true) {
                     println!("The Box is not set up yet. Run:  homebody box setup");
                 } else if st["running"].as_bool() == Some(true) {
                     println!("The Box is running for {} since {}. It sees only {}", s(&st, "appId"), s(&st, "since"), s(&st, "share"));
                 } else {
                     println!("The Box is set up and stopped.");
+                    let inside: Vec<String> = st["installed"].as_object().into_iter().flatten().map(|(id, v)| format!("{id} {}", v.as_str().unwrap_or(""))).collect();
+                    if !inside.is_empty() {
+                        println!("In it: {}", inside.join("; "));
+                    }
                 }
             }
         },

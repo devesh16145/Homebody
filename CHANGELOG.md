@@ -27,7 +27,7 @@ New
 - A project can suggest the places it needs in `.homebody.json`; nothing is trusted until you tick it.
 - Check for a newer version, only when you ask.
 - AI websites: a separate profile of Chrome, Brave, Edge, Chromium or Vivaldi that can reach only the AI sites you switch on (ChatGPT, Claude, Gemini, Copilot, Perplexity, Le Chat, DeepSeek, Grok). Pages in it cannot read your home folder, apart from Downloads.
-- The Box: run an agent in a small Linux machine that has no network interface at all. Its only way out is the same gate. Apple silicon, command line, early.
+- The Box: run an agent in a small Linux machine that has no network interface at all. Its only way out is the same gate. Apple silicon, early. It has a card on the agent's page (set up, put the agent in, open, stop) and its disk is made without Homebrew.
 - Linux: the engine and the command line, with a fence made of a private user per app and firewall rules. No window yet.
 - Windows: the engine and the command line, with a fence made of app containers. No setup, no administrator. No window yet.
 - For build pipelines: `homebody ci` runs an agent with nobody at the keyboard and ends with a signed report; a GitHub action sets it up.

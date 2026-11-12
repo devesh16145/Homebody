@@ -8,6 +8,7 @@ import { invoke } from './api.js';
 import { $, esc, patch, errText, fmtBytes, fmtCount, relTime, isToday, cleanHost, feedTime, verbChip } from './util.js';
 import { icon, appTile } from './icons.js';
 import * as projects from './projects.js';
+import * as box from './box.js';
 
 let env = null;
 let shownId = null;
@@ -148,10 +149,11 @@ function moreHtml(a, d) {
 
 export function render(view, a, e) {
   env = e;
-  if (!inited) { inited = true; projects.init(() => { if (shownId) env.render(); }); }
+  if (!inited) { inited = true; projects.init(() => { if (shownId) env.render(); }); box.init(() => { if (shownId) env.render(); }); }
   if (shownId !== a.id) {
     shownId = a.id; moreOpen = false; adding = false; addText = ''; error = '';
     projects.load(a.id);
+    box.load(a.id);
     load(a.id);
     view.scrollTop = 0;
   }
@@ -186,6 +188,7 @@ export function render(view, a, e) {
           : `<button class="cap sm" data-do="add-place">${icon('plus')}Add place</button>`}<span class="muted">${askWord}</span></div>`
         : '<p class="muted">Loading…</p>'}
     </section>
+    ${box.section(a)}
     <section class="hm-block">
       <button class="hm-more" data-do="more" aria-expanded="${moreOpen}">${icon('sliders')}<span class="grow"><b>Options</b></span>${icon('chevron', moreOpen ? 'rot' : '')}</button>
       ${moreOpen && d ? moreHtml(a, d) : ''}
@@ -235,6 +238,7 @@ export async function act(what, b) {
   const appId = shownId;
   if (!appId) return;
   if (what.startsWith('proj-')) { const it = b.closest('.pj-item'); return projects.act(what, appId, it && it.dataset.project); }
+  if (what.startsWith('box-')) return box.act(what, appId);
   if (what === 'more') { moreOpen = !moreOpen; return env.render(); }
   if (what === 'add-place') { adding = true; return env.render(); }
   if (what === 'add-cancel') { adding = false; addText = ''; return env.render(); }
@@ -251,7 +255,7 @@ export async function act(what, b) {
   } catch (e) { rowBusy = ''; error = errText(e); env.render(); }
 }
 
-export function leave() { shownId = null; }
+export function leave() { shownId = null; box.leave(); }
 
 export function onEvent({ type, data: ev }) {
   if (!shownId) return;

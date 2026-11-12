@@ -275,8 +275,11 @@ interface PrivateFolders {
 | `fleet_status` | — | `{ joined, org?, url?, lastSync?, lastError?, sent?, waiting?, policyVersion?, rules?, locked? }` | whether this computer is in an organisation's fleet |
 | `fleet_join` | `{ url, code, caFile?: string }` | as `fleet_status` | join: its rules then come first and the log is sent to it |
 | `fleet_sync` / `fleet_leave` | — | as `fleet_status` | talk to the server now / leave it (its rules stop applying) |
-| `box_status` | — | `{ supported, helper, prepared, running, appId?, share?, since? }` | the Box (Apple silicon) |
-| `box_setup` | `{ appId?: string, image?: string }` | `{ message, status }` | make the Box's disk; long the first time |
+| `box_status` | `{ appId?: string }` | `{ supported, helper, prepared, running, appId?, appName?, share?, since?, busy?: { what: "setup"\|"install", appId?, appName?, step, since, downloadedMb?, downloadMb }, last?: { what, appId?, ok, message, at }, installed: { [appId]: version }, downloadMb, agent?: { id, canInstall, installed? } }` | the Box (Apple silicon). `busy` is a long step in progress; `last` is how the last one ended; `agent` is there when an app is named |
+| `box_setup` | `{ appId?: string, image?: string, background?: boolean }` | `{ message, status }`, or `box_status` at once with `background` | make the Box's disk; long the first time |
+| `box_install` | `{ appId, background?: boolean }` | `{ message }`, or `box_status` at once with `background` | put an agent into the prepared disk, through its gate |
+| `box_open` | `{ appId, project?: string }` | as `box_status` | start the Box for this agent if it is not running, and open a Terminal window in it with the agent |
+| `box_dismiss` | `{ appId?: string }` | as `box_status` | forget how the last long step ended |
 | `box_start` | `{ appId, project?: string }` | as `box_status` | start it for one agent, sharing that agent's folder or one project |
 | `box_stop` | — | as `box_status` | stop it and throw its disk away |
 | `box_argv` | `{ program, args?: string[], interactive?: boolean }` | `string[]` | the command line that runs something inside the running Box |

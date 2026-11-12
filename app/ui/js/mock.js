@@ -41,6 +41,18 @@ export function createMock(scenarioName) {
     return id;
   }
   const wait = (ms) => new Promise((res) => later(res, ms));
+  // The Box (see box.js). One for the whole Mac, like the real one.
+  const boxAt = (typeof location !== 'undefined' && new URLSearchParams(location.search).get('box')) || '';
+  const box = { prepared: !!boxAt, running: false, appId: null, share: null, since: null, busy: null, last: null, installed: boxAt === 'installed' || boxAt === 'running' ? { 'claude-code': '2.1.322' } : {} };
+  if (boxAt === 'running') Object.assign(box, { running: true, appId: 'claude-code', share: '/Users/you/Homebody/claude-code', since: new Date(Date.now() - 12 * 60000).toISOString() });
+  const BOX_AGENTS = ['claude-code', 'codex', 'gemini'];
+  const boxView = (appId) => ({
+    supported: true, helper: true, prepared: box.prepared, running: box.running, appId: box.appId, share: box.share, since: box.since, downloadMb: 200,
+    appName: box.appId ? (s.apps.find((a) => a.id === box.appId) || {}).name : null,
+    busy: box.busy ? { ...box.busy, appName: box.busy.appId ? (s.apps.find((a) => a.id === box.busy.appId) || {}).name : null } : null,
+    last: box.last, installed: { ...box.installed },
+    agent: appId ? { id: appId, canInstall: BOX_AGENTS.includes(appId), installed: box.installed[appId] || null } : undefined,
+  });
   function emit(type, data) {
     const json = JSON.stringify({ type, data });
     later(() => subs.forEach((fn) => { try { fn(JSON.parse(json)); } catch (e) { subs.delete(fn); } }), 0);
@@ -408,6 +420,43 @@ export function createMock(scenarioName) {
       return s.fleet;
     },
     async fleet_leave() { s.fleet = { joined: false }; return s.fleet; },
+    // The Box, with its long steps played in a few seconds. `?box=ready|installed|running` starts further along.
+    async box_status({ appId } = {}) { return boxView(appId); },
+    async box_dismiss({ appId } = {}) { box.last = null; return boxView(appId); },
+    async box_setup({ appId } = {}) {
+      if (box.busy) throw 'The Box is busy. Try again when it has finished.';
+      box.last = null;
+      box.busy = { what: 'setup', appId: null, step: 'Downloading Debian', since: new Date().toISOString(), downloadedMb: 0, downloadMb: 200 };
+      const tick = () => {
+        if (!box.busy) return;
+        if (box.busy.downloadedMb < 200) { box.busy.downloadedMb = Math.min(200, box.busy.downloadedMb + 35); return later(tick, 600); }
+        if (box.busy.step === 'Downloading Debian') { box.busy.step = 'Preparing the disk'; box.busy.downloadedMb = null; return later(tick, 1500); }
+        if (box.busy.step === 'Preparing the disk') { box.busy.step = 'Starting it for the first time'; return later(tick, 2500); }
+        box.busy = null; box.prepared = true; box.installed = {};
+      };
+      later(tick, 600);
+      return boxView(appId);
+    },
+    async box_install({ appId } = {}) {
+      if (box.busy) throw 'The Box is busy. Try again when it has finished.';
+      box.last = null;
+      box.busy = { what: 'install', appId, step: 'Starting the Box', since: new Date().toISOString() };
+      const name = (s.apps.find((a) => a.id === appId) || {}).name || appId;
+      later(() => { if (box.busy) box.busy.step = `Installing ${name}`; }, 1500);
+      later(() => {
+        if (appId === 'gemini') { box.busy = null; box.last = { what: 'install', appId, ok: false, message: 'The installation did not finish: registry.npmjs.org could not be reached.', at: new Date().toISOString() }; return; }
+        box.busy = null; box.installed[appId] = '2.1.322';
+      }, 5000);
+      return boxView(appId);
+    },
+    async box_open({ appId } = {}) {
+      await wait(900);
+      if (box.running && box.appId !== appId) throw 'The Box is running for another app. Stop it first: one Box runs at a time.';
+      const app = s.apps.find((a) => a.id === appId);
+      Object.assign(box, { running: true, appId, share: app && app.workspace, since: box.running ? box.since : new Date().toISOString() });
+      return boxView(appId);
+    },
+    async box_stop() { await wait(600); Object.assign(box, { running: false, appId: null, share: null, since: null }); return boxView(null); },
     async get_ai_sites({ appId } = {}) {
       const app = appId ? s.apps.find((a) => a.id === appId) : null;
       const on = (app && app.sites) || [];

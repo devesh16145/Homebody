@@ -134,6 +134,15 @@ body.hm { display: block; background: var(--ground); background-image: var(--gro
 .hm-set { display: flex; align-items: center; gap: 16px; padding: 13px 16px; border-radius: var(--r-card); background: var(--surface); box-shadow: 0 0 0 1px var(--line); }
 .hm-set b { display: block; font-weight: 500; }
 .hm-set small { display: block; color: var(--ink-2); font-size: var(--fs-small); }
+/* The Box: one card with the next step, and a bar under the text while a long step runs. */
+.bx { align-items: flex-start; }
+.bx-act { display: flex; flex: none; gap: 8px; align-items: center; align-self: center; }
+.bx-bar { position: relative; height: 4px; margin-top: 10px; border-radius: 2px; background: var(--still-soft); overflow: hidden; }
+.bx-bar i { position: absolute; inset: 0 auto 0 0; width: 30%; border-radius: 2px; background: var(--tide); animation: bx-slide 1.4s ease-in-out infinite; }
+.bx-bar.known i { animation: none; transition: width .4s ease; }
+@keyframes bx-slide { 0% { left: -30%; } 100% { left: 100%; } }
+@media (prefers-reduced-motion: reduce) { .bx-bar i { animation: none; width: 100%; opacity: .5; } }
+@media (max-width: 560px) { .bx { flex-wrap: wrap; } .bx-act { align-self: flex-start; } }
 .hm-more {
   display: flex; align-items: center; gap: 12px; width: 100%; padding: 13px 16px; text-align: left; color: var(--ink);
   border: 0; border-radius: var(--r-card); background: var(--surface); box-shadow: 0 0 0 1px var(--line);

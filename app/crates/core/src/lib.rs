@@ -22,6 +22,7 @@
 //! - [`appicons`]: each app's own icon, from its maker's Mac app
 
 pub mod appicons;
+pub mod boxdisk;
 #[cfg(unix)]
 pub mod boxvm;
 pub mod catalog;
