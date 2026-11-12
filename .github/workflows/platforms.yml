@@ -1,14 +1,17 @@
 # Builds and tests the core and the command line tool on Linux and Windows.
 #
-# This Mac cannot run either system, so GitHub's machines are the test bed for them. Runs only on
-# the `platforms` work branch and by hand; the macOS tests live in test.yml.
+# This Mac cannot run either system, so GitHub's machines are the test bed for them. Runs when the
+# app's code or the pipeline action changes on `main`, on the `platforms` work branch, on a pull
+# request, and by hand; the macOS tests live in test.yml.
 
 name: Linux and Windows
 
 on:
   push:
-    branches: [platforms]
-    paths: ["app/**", ".github/workflows/platforms.yml"]
+    branches: [main, platforms]
+    paths: ["app/**", "ci/**", ".github/workflows/platforms.yml"]
+  pull_request:
+    paths: ["app/**", "ci/**", ".github/workflows/platforms.yml"]
   workflow_dispatch:
 
 concurrency:
