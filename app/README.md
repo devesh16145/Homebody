@@ -61,7 +61,7 @@ Status: 11 Nov 2026. Everything in the table runs end to end on this Mac in the 
 | Windows: engine, command line and fence (`../docs/platforms.md`) | 22 of 22 cases on a GitHub-hosted Windows machine on every push. No window, no interactive terminal. Not run with a real agent |
 | Fleet server for organisations: `homebody-fleet` (`../docs/fleet.md`), and Settings → Organisation | 12 server tests on macOS and Linux; one scratch engine joined a local server end to end; an independent read of the code found eight problems in it, all fixed. Not run with a real identity provider, a real management system, or more than one computer |
 | The Box: an agent in a Linux machine with no network interface (`../docs/box.md`) | 22 of 22 cases on this Mac (`tests/box.sh`), run against the installed app. Claude Code installed into it through the gate and opened from the app's engine in a Terminal window; not yet signed in or used for work there. Its disk is made without extra software. The card on the agent's page was checked in a preview, not clicked in the real window |
-| Editor plugins: VS Code and Cursor (`../editors/vscode`), JetBrains (`../editors/jetbrains`) | VS Code: 17 tests with a stand-in editor, and its client against the real engine; not yet installed in an editor. JetBrains: builds against IntelliJ 2024.2 and its client works against the real engine; not run inside an editor |
+| Editor plugins: VS Code and Cursor (`../editors/vscode`), JetBrains (`../editors/jetbrains`) | Both run inside real editors against the real engine, with a script answering the pop-ups (`test/in-editor/run.sh` in each). VS Code extension: 33 of 33 in Cursor 3.28, plus 17 tests with a stand-in editor; not run in VS Code itself. JetBrains: 22 of 22 in IntelliJ IDEA 2024.2.4; JetBrains' checker passes it for DataGrip 2026.2, where it was installed and seen to load, its actions not pressed. macOS only |
 
 ## Run it
 
@@ -114,6 +114,7 @@ app/
   ui/              plain HTML, CSS and ES modules; no framework, no build step
   docs/ipc.md      the contract between core and UI
   tests/bypass-corpus.sh   every known way around the gate or fence, as executable checks
+  tests/terminal.py        a protected program and its terminal: closed, suspended, resumed, interrupted
 ```
 
 The UI calls one command, `homebody`, with `{cmd, args}`; the core's `dispatch` serves the app, the CLI and scripts alike. Opened in a plain browser, the UI runs against an in-page mock of the same contract (`ui/dev.html` is a review harness with scenarios).

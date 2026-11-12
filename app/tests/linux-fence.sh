@@ -137,6 +137,11 @@ if [ -z "$seen" ]; then
 fi
 
 "$HB" ask on >/dev/null 2>&1
+echo "Its terminal"
+term="$(python3 "$HERE/terminal.py" "$HB" "$APP" 2>&1)"
+check "a protected program never outlives its terminal (tests/terminal.py)" ", 0 failed" "$(echo "$term" | tail -1)"
+echo "$term" | grep -q ", 0 failed" || echo "$term" | sed 's/^/      /'
+
 if [ "${1:-}" = "--remove" ]; then
   echo "Removal"
   "$HB" setup --print-remove > /tmp/homebody-remove.sh

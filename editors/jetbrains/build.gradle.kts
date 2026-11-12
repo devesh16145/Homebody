@@ -19,6 +19,7 @@ repositories {
 dependencies {
     intellijPlatform {
         intellijIdeaCommunity("2024.2.4")
+        pluginVerifier()
     }
 }
 
@@ -28,11 +29,38 @@ java {
 }
 
 intellijPlatform {
+    // JetBrains' own checker reads the built plugin against another editor's code and lists
+    // anything the plugin uses that is not there:  gradle verifyPlugin -PverifyAgainst=/Applications/DataGrip.app
+    pluginVerification {
+        ides {
+            providers.gradleProperty("verifyAgainst").orNull?.let { local(it) }
+        }
+    }
     buildSearchableOptions = false
     pluginConfiguration {
         ideaVersion {
             sinceBuild = "242"
             untilBuild = provider { null }
         }
+    }
+}
+
+// The plugin, exercised inside a real running editor against the Homebody on this computer:
+//   test/in-editor/run.sh   (it passes -PselfCheck=<result file> -PselfCheckProject=<folder>)
+// Only then is src/selfcheck compiled in; a normal build does not contain it.
+val selfCheck = providers.gradleProperty("selfCheck")
+if (selfCheck.isPresent) {
+    sourceSets["main"].java.srcDir("src/selfcheck/java")
+    tasks.named<org.jetbrains.intellij.platform.gradle.tasks.RunIdeTask>("runIde") {
+        jvmArgs(
+            "-Dhomebody.selfcheck=${selfCheck.get()}",
+            // A fresh editor asks about privacy, trust and tips before it opens anything.
+            "-Djb.privacy.policy.text=<!--999.999-->",
+            "-Djb.consents.confirmation.enabled=false",
+            "-Didea.trust.all.projects=true",
+            "-Dide.show.tips.on.startup.default.value=false",
+            "-Dhomebody.selfcheck.place=${providers.gradleProperty("selfCheckPlace").getOrElse("example.net")}",
+        )
+        args(providers.gradleProperty("selfCheckProject").get())
     }
 }

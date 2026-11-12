@@ -33,7 +33,8 @@ New
 - For build pipelines: `homebody ci` runs an agent with nobody at the keyboard and ends with a signed report; a GitHub action sets it up.
 - For organisations: `homebody-fleet`, a server you run yourself. Joined computers take its signed rules and send it their logs. A web console with roles, sign-in through your identity provider, provisioning, evidence bundles, and a management profile for Macs.
 - For reviewers: the rules as Cedar policies (`homebody policy`), a mapping of the evidence to NIST SP 800-53 and OWASP's list for AI agents, and an engine that rebuilds to the same file bit for bit.
-- Editor plugins: VS Code and Cursor, and JetBrains editors. A status indicator, Homebody's questions, an agent opened protected on a copy of the open project.
+- Editor plugins: VS Code and Cursor, and JetBrains editors. A status indicator, Homebody's questions, an agent opened protected on a copy of the open project. Each has a test that runs it inside the real editor.
+- A protected program never outlives its terminal. Closing an agent's terminal in an editor used to leave the agent running unseen until the editor quit; `homebody run` now stays beside the program and ends it.
 
 Built-in rules
 

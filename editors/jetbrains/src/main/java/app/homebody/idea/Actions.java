@@ -67,6 +67,20 @@ final class Actions {
         return i < 0 ? null : list.get(i);
     }
 
+    /**
+     * The project's folder by its real path. Homebody records a folder under the path it really
+     * has, so one reached through a link (/tmp on a Mac, a linked Documents) is named the same way.
+     */
+    static String folder(Project project) {
+        String base = project.getBasePath();
+        if (base == null) return null;
+        try {
+            return java.nio.file.Path.of(base).toRealPath().toString();
+        } catch (java.io.IOException | RuntimeException e) {
+            return base;
+        }
+    }
+
     /** The agent's copy of this project, if the project has been brought in. */
     static JsonObject projectFor(JsonObject app, String dir) throws HomebodyClient.Refused {
         JsonArray list = HomebodyClient.call("get_projects", HomebodyClient.args("appId", HomebodyClient.text(app, "id"))).getAsJsonArray();
@@ -82,7 +96,7 @@ final class OpenAgentAction extends AnAction {
     @Override public void actionPerformed(@NotNull AnActionEvent e) {
         Project project = e.getProject();
         if (project == null || project.getBasePath() == null) return;
-        String dir = project.getBasePath();
+        String dir = Actions.folder(project);
         Actions.background(project, () -> {
             JsonObject app = Actions.pickAgent(project);
             if (app == null) return;
@@ -103,7 +117,7 @@ final class ReviewChangesAction extends AnAction {
     @Override public void actionPerformed(@NotNull AnActionEvent e) {
         Project project = e.getProject();
         if (project == null || project.getBasePath() == null) return;
-        String dir = project.getBasePath();
+        String dir = Actions.folder(project);
         Actions.background(project, () -> {
             JsonObject status = HomebodyClient.call("get_status", null).getAsJsonObject();
             for (JsonElement a : status.getAsJsonArray("apps")) {

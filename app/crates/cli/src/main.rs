@@ -48,6 +48,61 @@ fn run_in_place(argv: &[String]) -> ! {
     }
 }
 
+/// Run a protected program and stay beside it until it ends (Unix), then leave with its exit code.
+///
+/// Why not simply become it, as `run_in_place` does: a protected program runs as another user,
+/// under `sudo`. When its terminal goes away, an editor does not close the terminal device as a
+/// terminal program does; it sends "hang up" to the one process it started. `sudo` passes that
+/// on to the program, and a program that does not quit on "hang up" (Claude Code does not) then
+/// runs on with no terminal and nobody watching, until the editor itself quits. So this process
+/// stays as the one the terminal started: asked to hang up or to stop, it asks the program to
+/// stop, and after three seconds ends it.
+///
+/// Ctrl-C and Ctrl-\ belong to the program (the terminal delivers them); they must only not end
+/// this process first. Ctrl-Z needs nothing here: `sudo` suspends its whole group when the
+/// program is suspended, this process included, so the shell gets the terminal back, and `fg`
+/// wakes the group. (Following the program into suspension from here as well was tried and
+/// taken out: the two could race and leave this process suspended after `fg`.)
+#[cfg(unix)]
+async fn keep(argv: &[String]) -> ! {
+    use tokio::signal::unix::{signal, SignalKind};
+    let mut child = match std::process::Command::new(&argv[0]).args(&argv[1..]).current_dir("/").spawn() {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("could not run: {e}");
+            std::process::exit(1);
+        }
+    };
+    let pid = child.id() as libc::pid_t;
+    let on = |kind| signal(kind).expect("signal handler");
+    let (mut hup, mut term, mut int, mut quit) = (on(SignalKind::hangup()), on(SignalKind::terminate()), on(SignalKind::interrupt()), on(SignalKind::quit()));
+    let mut ended = tokio::task::spawn_blocking(move || {
+        use std::os::unix::process::ExitStatusExt;
+        match child.wait() {
+            Ok(s) => s.code().or_else(|| s.signal().map(|n| 128 + n)).unwrap_or(1),
+            Err(_) => 1,
+        }
+    });
+    let asked = loop {
+        tokio::select! {
+            code = &mut ended => std::process::exit(code.unwrap_or(1)),
+            _ = hup.recv() => break 129,
+            _ = term.recv() => break 143,
+            _ = int.recv() => {}
+            _ = quit.recv() => {}
+        }
+    };
+    // SAFETY: plain system calls on the id of a process this one started and is still waiting
+    // for. `sudo` passes "stop" on to the program; if that does not end it, ending `sudo`
+    // itself makes `sudo`'s own keeper end the program.
+    unsafe { libc::kill(pid, libc::SIGTERM) };
+    if tokio::time::timeout(std::time::Duration::from_secs(3), &mut ended).await.is_err() {
+        unsafe { libc::kill(pid, libc::SIGKILL) };
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(3), &mut ended).await;
+    }
+    std::process::exit(asked)
+}
+
 /// Be the engine in this process, with the control socket other commands talk to.
 pub(crate) async fn engine_here() -> Result<Engine, String> {
     let engine = Engine::start().await?;
@@ -565,6 +620,9 @@ async fn main() {
             let cwd = args.iter().position(|x| x == "--cwd").filter(|i| *i < sep).and_then(|i| args.get(i + 1)).cloned();
             let argv = call("fenced_argv", json!({ "appId": a(1), "program": program, "args": &args[sep + 2..], "cwd": cwd })).await;
             let argv: Vec<String> = argv.as_array().into_iter().flatten().filter_map(|v| v.as_str().map(str::to_string)).collect();
+            #[cfg(unix)]
+            keep(&argv).await;
+            #[cfg(not(unix))]
             run_in_place(&argv);
         }
         "call" => {

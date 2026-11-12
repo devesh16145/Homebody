@@ -22,6 +22,23 @@ gradle buildPlugin
 
 The plugin is then in `build/distributions/`. Install it with Settings → Plugins → ⚙ → Install Plugin from Disk.
 
-## What has been checked
+## Test inside a real editor
 
-It compiles against IntelliJ IDEA 2024.2 and passes the build's own plugin checks. It has not been run inside an editor on the machine it was written on, which has none installed. Windows is not supported yet.
+```bash
+test/in-editor/run.sh
+```
+
+Gradle starts the editor the plugin is built against, with a throw-away profile and a throw-away project. A build made for this run carries `src/selfcheck`, which runs the plugin's own actions and presses the buttons of the dialogs they really show, against the Homebody running on this computer: it brings the project in for one agent, opens that agent protected in a Terminal window, has it change a file and takes the change back, answers one of Homebody's questions from the notification, blocks everything for a moment, and puts all of it back. A released build does not contain the self-check.
+
+To read the built plugin against another JetBrains editor on this computer (JetBrains' own checker lists anything the plugin uses that is not there):
+
+```bash
+gradle verifyPlugin -PverifyAgainst=/Applications/DataGrip.app
+```
+
+## What has been run
+
+- `test/in-editor/run.sh` in **IntelliJ IDEA Community 2024.2.4** on a Mac: 22 of 22, and nothing from the plugin in the editor's error log.
+- JetBrains' checker against **DataGrip 2026.2.6**: compatible. The packaged plugin was then installed into that DataGrip and DataGrip started: it lists Homebody among its loaded plugins, the status bar entry exists and refreshes, and its log has no errors. The actions were not pressed there.
+- One fault was found this way and fixed: a project opened through a link (`/tmp` on a Mac) was not recognised as already brought in.
+- Not run: any other JetBrains editor, Linux. Windows is not supported yet.

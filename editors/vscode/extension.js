@@ -7,12 +7,18 @@ const path = require('path');
 const fs = require('fs');
 const hb = require('./lib/client');
 
-let bar, feed, status = null, running = false, shown = new Set();
+let bar, feed, status = null, running = false, shown = new Set(), feedLines = 0;
 
 const cfg = () => vscode.workspace.getConfiguration('homebody');
 const say = (e) => vscode.window.showErrorMessage(String((e && e.message) || e));
 const call = (cmd, args) => hb.call(cmd, args);
-const folder = () => { const f = vscode.workspace.workspaceFolders; return f && f.length ? f[0].uri.fsPath : null; };
+// The folder that is open, by its real path: Homebody records a folder under the path it
+// really has, so one reached through a link (/tmp, a linked Documents) must be named the same way.
+const folder = () => {
+  const f = vscode.workspace.workspaceFolders;
+  if (!f || !f.length) return null;
+  try { return fs.realpathSync(f[0].uri.fsPath); } catch (e) { return f[0].uri.fsPath; }
+};
 
 function paint() {
   const s = hb.summary(running ? status : null);
@@ -104,9 +110,10 @@ async function reviewChanges() {
 
 async function showActivity() {
   const rows = await call('get_feed', { limit: 60 });
-  feed.clear();
+  feed.clear(); feedLines = 0;
   for (const e of rows.slice().reverse()) {
     const verb = { allowed: 'Allowed', blocked: 'Blocked', asked: 'Asked  ', seen: 'Seen   ' }[e.verb] || e.verb;
+    feedLines++;
     feed.appendLine(`${new Date(e.ts).toLocaleTimeString()}  ${verb}  ${e.appName.padEnd(14)} ${e.label}${e.host && e.host !== e.label ? ` (${e.host})` : ''}  — ${e.explanation}`);
   }
   feed.show(true);
@@ -157,6 +164,8 @@ function activate(context) {
   context.subscriptions.push(bar, feed, { dispose: () => sub.stop() });
   paint();
   refresh();
+  // What the status bar shows right now, for the test that runs inside a real editor (test/in-editor).
+  return { state: () => ({ text: bar.text, tooltip: bar.tooltip, running, activityLines: feedLines }) };
 }
 
 function deactivate() {}

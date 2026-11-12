@@ -124,7 +124,9 @@ const test = async (name, fn) => { await fn(); passed++; console.log('  ✓ ' + 
     ui.picks.push((items) => items.find((i) => i.app.id === 'claude-code'));
     ui.answers.push('Bring this folder in');
     await ui.commands['homebody.openAgent']();
-    assert.equal(world.imported[0].source, path.join(dir, 'my-project'));
+    // By its real path: the temporary folder here is reached through a link, as /tmp is on a Mac,
+    // and Homebody records a folder under the path it really has.
+    assert.equal(world.imported[0].source, fs.realpathSync(path.join(dir, 'my-project')));
     const t = ui.terminals[0];
     assert.equal(t.name, 'Claude Code (protected)');
     assert.deepEqual(t.shellArgs, ['run', 'claude-code', '--cwd', '/ws/claude-code/proj', '--', 'claude']);
@@ -144,7 +146,7 @@ const test = async (name, fn) => { await fn(); passed++; console.log('  ✓ ' + 
     assert.deepEqual(offered, ['Claude Code']);
   });
   await test('changes are listed and put back only when you choose to', async () => {
-    world.imported.push({ name: 'proj', source: path.join(dir, 'my-project'), copy: '/ws/claude-code/proj', copyExists: true });
+    world.imported.push({ name: 'proj', source: fs.realpathSync(path.join(dir, 'my-project')), copy: '/ws/claude-code/proj', copyExists: true });
     ui.messages.length = 0;
     ui.picks.push((items) => { assert.equal(items.length, 3); return items[0]; });
     await ui.commands['homebody.reviewChanges']();
