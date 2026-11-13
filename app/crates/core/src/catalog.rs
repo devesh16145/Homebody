@@ -22,6 +22,10 @@ pub const DESTINATIONS: &[Destination] = &[
     Destination { pattern: "claude.ai", label: "Claude sign-in", purpose: "Signing in to your Claude account", companions: &["console.anthropic.com", "platform.claude.com"] },
     Destination { pattern: "console.anthropic.com", label: "Claude sign-in", purpose: "Signing in to your Claude account", companions: &[] },
     Destination { pattern: "platform.claude.com", label: "Claude sign-in", purpose: "Signing in to your Claude account", companions: &[] },
+    // Seen in the first real signed-in session of Claude Code, where both were asked about by
+    // bare name, seconds after start, with nothing to go on.
+    Destination { pattern: "downloads.claude.ai", label: "Claude downloads", purpose: "Updates to Claude Code itself", companions: &[] },
+    Destination { pattern: "mcp-proxy.anthropic.com", label: "Claude connectors", purpose: "Other services linked to your Claude account", companions: &[] },
     Destination { pattern: "statsig.anthropic.com", label: "Anthropic usage statistics", purpose: "Usage statistics", companions: &[] },
     Destination { pattern: "*.statsig.com", label: "Statsig", purpose: "Usage statistics", companions: &[] },
     Destination { pattern: "*.sentry.io", label: "Sentry", purpose: "Crash reports", companions: &[] },
