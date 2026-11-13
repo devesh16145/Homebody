@@ -149,7 +149,15 @@ function moreHtml(a, d) {
 
 export function render(view, a, e) {
   env = e;
-  if (!inited) { inited = true; projects.init(() => { if (shownId) env.render(); }); box.init(() => { if (shownId) env.render(); }); }
+  if (!inited) {
+    inited = true;
+    projects.init(() => { if (shownId) env.render(); });
+    box.init(() => { if (shownId) env.render(); });
+    // Coming back from the terminal is exactly when you want to see what the agent changed.
+    window.addEventListener('focus', () => projects.refresh(shownId, 500));
+    document.addEventListener('visibilitychange', () => { if (!document.hidden) projects.refresh(shownId, 500); });
+    setInterval(() => { if (!document.hidden) projects.refresh(shownId, 12000); }, 4000);
+  }
   if (shownId !== a.id) {
     shownId = a.id; moreOpen = false; adding = false; addText = ''; error = '';
     projects.load(a.id);
@@ -261,6 +269,8 @@ export function onEvent({ type, data: ev }) {
   if (!shownId) return;
   if (type === 'feed' && ev.appId !== shownId) return;
   if (type !== 'feed' && type !== 'ask_resolved') return;
+  // The agent is at work: what it has changed in its folders may have changed too.
+  if (type === 'feed') projects.refresh(shownId, 3000);
   clearTimeout(reloadSoon);
   reloadSoon = setTimeout(() => shownId && load(shownId), 600);
 }

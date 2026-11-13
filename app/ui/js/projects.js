@@ -44,6 +44,19 @@ async function count(appId, name) {
   rerender();
 }
 
+/**
+ * Look again at what is waiting in each of an agent's folders. The agent changes files while
+ * this page sits open, and a page that looked once would go on saying "No changes waiting"
+ * with Review switched off. Called when you come back to the window, when the agent is seen
+ * to be active, and now and then; `minGap` keeps a busy agent from causing a check per event.
+ */
+let lastLook = 0;
+export function refresh(appId, minGap = 3000) {
+  if (!appId || Date.now() - lastLook < minGap) return;
+  lastLook = Date.now();
+  for (const p of lists.get(appId) || []) count(appId, p.name);
+}
+
 function waiting(set) {
   if (!set) return ['', 'Checking…'];
   if (set.failed) return ['warn', 'Could not be checked'];

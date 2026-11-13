@@ -271,12 +271,14 @@ impl Engine {
         let e = engine.clone();
         tokio::spawn(async move {
             e.check_fence().await;
-            // We have just started, so nothing in a private space was started by this run. Anything
-            // still there was left by a run that ended abruptly; its gate went with that run.
+            // We have just started, so nothing in a private space was started by this run. What
+            // is there with no terminal was left behind by a run that ended abruptly, and is
+            // stopped. What still has a terminal has a person at it, and carries on: its gate
+            // is back, on the same port (see `fence::stop_leftovers`).
             let apps = e.0.cfg.lock().unwrap().provisioned().apps;
             for app in apps {
                 if e.0.health.lock().unwrap().get(&app.id).map(|h| h.can_run).unwrap_or(false) && !e.0.running.lock().unwrap().contains(&app.id) {
-                    fence::stop_all(&app).await;
+                    fence::stop_leftovers(&app).await;
                 }
             }
             loop {

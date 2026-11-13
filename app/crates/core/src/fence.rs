@@ -881,6 +881,31 @@ pub async fn start_managed(app: &AppConfig) -> Result<tokio::process::Child, Str
     Command::new(&argv[0]).args(&argv[1..]).current_dir("/").stdin(Stdio::null()).stdout(Stdio::from(log)).stderr(Stdio::from(err)).spawn().map_err(|e| format!("{} could not be started: {e}", app.name))
 }
 
+/// What `stop_leftovers` runs as the app's private user: stop its processes that have no
+/// terminal, other than the system's own per-user helpers and this shell.
+const STOP_LEFTOVERS: &str = r#"me=$(id -u)
+list=$(ps -U "$me" -o pid=,tty=,comm= 2>/dev/null | awk '($2=="?" || $2=="??") && $3 !~ /^\/(usr\/libexec|usr\/sbin|System)\// {print $1}')
+for p in $list; do [ "$p" = "$$" ] || kill -TERM "$p" 2>/dev/null; done
+true"#;
+
+/// When Homebody starts: stop what an earlier run left behind in this app's private space,
+/// and leave alone what a person is still using.
+///
+/// Left behind means running with no terminal: a server Homebody started and did not get to
+/// stop, a helper an agent put in the background. A program that still has a terminal has a
+/// person at it; Homebody restarting (an update, a crash, a quit and reopen) must not end
+/// their work. It lost its gate for the seconds Homebody was away, and nothing else changed
+/// for it: the private user, the packet filter and the profile it was started under all hold
+/// without Homebody running, and the gate comes back on the same port. One thing does stay as
+/// it was: a session opened before an update keeps the launch-time profile of the version
+/// that opened it until it is closed.
+pub async fn stop_leftovers(app: &AppConfig) {
+    if app.windowed {
+        return;
+    }
+    let _ = run(&["/usr/bin/sudo", "-n", "-u", &app.os_user, "/bin/sh", "-c", STOP_LEFTOVERS], Duration::from_secs(5)).await;
+}
+
 /// Stop everything running as this app's OS user. We cannot signal another user's processes
 /// directly, so the signal is sent as that user.
 pub async fn stop_all(app: &AppConfig) {
@@ -1652,6 +1677,20 @@ mod tests {
         assert!(script.contains("/usr/bin/sandbox-exec"));
         assert!(script.contains("-u' '_hbagent'") || script.contains("'-u' '_hbagent'"));
         assert!(script.contains("(deny network*"));
+    }
+
+    #[test]
+    fn the_leftovers_script_is_valid_and_spares_terminals_and_system_helpers() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("leftovers.sh");
+        std::fs::write(&p, STOP_LEFTOVERS).unwrap();
+        assert!(std::process::Command::new("/bin/sh").arg("-n").arg(&p).status().unwrap().success());
+        // The choosing, on a made-up process list: only the two without a terminal that are not the system's.
+        let awk = STOP_LEFTOVERS.lines().find(|l| l.contains("awk")).unwrap();
+        let program = awk.split_once("awk '").unwrap().1.rsplit_once("')").unwrap().0;
+        let list = "101 ??  /usr/libexec/trustd\n102 ??  /usr/sbin/cfprefsd\n103 ttys002 /opt/homebrew/bin/claude\n104 ??  /opt/homebrew/bin/ollama\n105 ?   /usr/bin/python3\n106 pts/0 /usr/bin/bash\n107 ?? /System/Library/x\n";
+        let out = std::process::Command::new("/bin/sh").arg("-c").arg(format!("printf '{list}' | awk '{program}'")).output().unwrap();
+        assert_eq!(String::from_utf8_lossy(&out.stdout).split_whitespace().collect::<Vec<_>>(), ["104", "105"]);
     }
 
     #[test]
