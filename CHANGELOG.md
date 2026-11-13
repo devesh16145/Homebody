@@ -34,6 +34,7 @@ New
 - For organisations: `homebody-fleet`, a server you run yourself. Joined computers take its signed rules and send it their logs. A web console with roles, sign-in through your identity provider, provisioning, evidence bundles, and a management profile for Macs.
 - For reviewers: the rules as Cedar policies (`homebody policy`), a mapping of the evidence to NIST SP 800-53 and OWASP's list for AI agents, and an engine that rebuilds to the same file bit for bit.
 - Editor plugins: VS Code and Cursor, and JetBrains editors. A status indicator, Homebody's questions, an agent opened protected on a copy of the open project. Each has a test that runs it inside the real editor.
+- A protected app can no longer put a macOS password or keychain prompt on your screen (SAI-2026-005). Signing in to Claude Code under Homebody no longer stops at "Keychain Not Found".
 - A protected program never outlives its terminal. Closing an agent's terminal in an editor used to leave the agent running unseen until the editor quit; `homebody run` now stays beside the program and ends it.
 
 Built-in rules

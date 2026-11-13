@@ -46,7 +46,7 @@ Builds the engine twice from scratch in two different folders and compares the r
 |---|---|---|
 | Unit tests (engine) | `cd app && cargo test -p homebody-core` | nothing |
 | Unit and whole-server tests (fleet) | `cargo test -p homebody-fleet` | `tar`, `curl`; `openssl` for the sign-in test |
-| Bypass corpus, 81 cases | `SAI=$PWD/target/release/homebody tests/bypass-corpus.sh` | macOS with setup done and the engine running |
+| Bypass corpus, 83 cases | `SAI=$PWD/target/release/homebody tests/bypass-corpus.sh` | macOS with setup done and the engine running |
 | The fence on Linux, 42 cases | `tests/linux-fence.sh` | a throwaway Linux machine with sudo |
 | The fence on Windows | `tests/windows-fence.sh` (Git Bash) | Windows 11 |
 | The Box, 22 cases | `tests/box.sh` | Apple silicon Mac with the Box set up |

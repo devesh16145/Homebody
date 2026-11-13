@@ -1184,10 +1184,16 @@ impl Engine {
                     "gate" => "tried to use another app's gate".to_string(),
                     "open" => "tried to hand something to another app, such as a link to your browser. That is a way for data to leave without passing the gate".to_string(),
                     "control" => "tried to control another app".to_string(),
+                    "prompt" => "asked macOS to put a password or keychain prompt on your screen".to_string(),
                     _ => "tried a kind of network access that protected apps do not get".to_string(),
                 };
                 let who = if who == app_name { who.to_string() } else { format!("{who}, started by {app_name},") };
-                format!("{who} {tried}. The fence refused it, so nothing left this computer.")
+                if row.detail == "prompt" {
+                    // Not an attempt to send anything: usually a program trying to save its sign-in.
+                    format!("{who} {tried}. Protected apps cannot do that. A program that wanted to save a sign-in keeps it in its own private folder instead.")
+                } else {
+                    format!("{who} {tried}. The fence refused it, so nothing left this computer.")
+                }
             }
         };
         if row.unreachable {
@@ -1213,9 +1219,10 @@ impl Engine {
                 "gate" => "Another app's gate",
                 "open" => "Opening another app",
                 "control" => "Controlling another app",
+                "prompt" => "System prompt",
                 _ => "Network access",
             };
-            (label.to_string(), "Went around the gate".to_string())
+            (label.to_string(), if row.detail == "prompt" { "Asked for a prompt on your screen" } else { "Went around the gate" }.to_string())
         } else {
             catalog::describe(&row.host)
         };

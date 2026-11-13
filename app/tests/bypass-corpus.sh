@@ -113,6 +113,13 @@ fence() {
   check "read your SSH keys"                            "denied" "$(R /bin/ls "$MYHOME/.ssh" 2>&1 | grep -qiE 'not permitted|denied' && echo denied || echo LISTED)"
   check "create a file in your home"                    "denied" "$(refused R /usr/bin/touch "$MYHOME/.sai-corpus-probe")"
   check "reach the control socket (approve itself)"     "denied" "$(R /bin/ls "$("$SAI" call get_policy_text >/dev/null 2>&1; echo "${HOMEBODY_DATA_DIR:-$MYHOME/Library/Application Support/Homebody}")/control.sock" 2>&1 | grep -qiE 'not permitted|denied' && echo denied || echo REACHED)"
+
+  echo "Fence: your screen"
+  # A keychain write by a user that has no keychain makes macOS show "Keychain Not Found … Reset
+  # To Defaults" on your screen, and waits. Inside the fence it must fail at once instead. The
+  # alarm ends it after 5 s if it did wait (which would also take the prompt away again).
+  check "put a system keychain prompt on your screen"   "refused at once" "$(R /usr/bin/perl -e 'alarm 5; exec @ARGV' /usr/bin/security add-generic-password -a hb-corpus -s hb-corpus-probe -w x 2>&1 | grep -q 'Unable to obtain authorization' && echo 'refused at once' || echo 'WAITED OR STORED')"
+  check "and nothing was stored in a keychain"          "not found" "$(R /usr/bin/security find-generic-password -s hb-corpus-probe 2>&1 | grep -q 'could not be found' && echo 'not found' || echo FOUND)"
 }
 
 # Looking inside connections to trusted places. Switched on for the test and put back after.

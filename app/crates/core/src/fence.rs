@@ -517,6 +517,7 @@ pub fn parse_violation(message: &str) -> Option<Violation> {
         ("gate", _) => "gate",
         ("open", _) => "open",
         ("event", _) => "control",
+        ("prompt", _) => "prompt",
         (_, "network-outbound") if target.contains("mDNSResponder") => "lookup",
         (_, "network-outbound") if target.starts_with('/') => "other",
         (_, "network-outbound") => "direct",
@@ -625,6 +626,13 @@ pub fn seatbelt_profile_for(app: &AppConfig, own_servers: bool) -> String {
     p.push_str(&format!("(deny mach-lookup (global-name \"com.apple.dnssd.service\") {})\n", tag("dns")));
     p.push_str(&format!("(deny mach-lookup (global-name \"com.apple.mDNSResponder\") {})\n", tag("dns")));
     p.push_str(&format!("(deny network-outbound (remote unix-socket (path-literal \"/private/var/run/mDNSResponder\")) {})\n", tag("dns")));
+    // No system prompts on the person's screen. A program in the fence shares the screen with
+    // the person: asked to save something in a keychain the private user does not have, macOS
+    // would show "Keychain Not Found … Reset To Defaults" there, and the same service shows
+    // "enter your password to allow this". Neither is a question a protected app should be
+    // able to put to anyone. Refused, the keychain call fails at once, and programs that keep
+    // a sign-in fall back to a file in their own private folder (Claude Code does).
+    p.push_str(&format!("(deny mach-lookup (global-name \"com.apple.authd\") {})\n", tag("prompt")));
     // Nothing under the real user's home, whatever the file permissions say.
     let home = real_home();
     if home.starts_with("/Users/") && !home.contains('"') {
@@ -1555,6 +1563,8 @@ mod tests {
         assert_eq!((v.what, v.port), ("lookup", 0));
         let v = parse_violation("Sandbox: x(7) deny(1) mach-lookup com.apple.dnssd.service\nhomebody-app=ollama;dns").unwrap();
         assert_eq!((v.app.as_str(), v.what), ("ollama", "lookup"));
+        let v = parse_violation("Sandbox: security(9) deny(1) mach-lookup com.apple.authd\nhomebody-app=claude-code;prompt").unwrap();
+        assert_eq!((v.what, v.process.as_str()), ("prompt", "security"));
         let v = parse_violation("Sandbox: python3.12(9) deny(1) network-bind local:*:8080\nhomebody-app=claude-code;net").unwrap();
         assert_eq!((v.process.as_str(), v.what, v.port), ("python3.12", "listen", 0));
         let v = parse_violation("Sandbox: ollama(9) deny(1) network-outbound remote:*:47110\nhomebody-app=ollama;gate").unwrap();
@@ -1596,6 +1606,7 @@ mod tests {
         let allow = p.find(&format!("localhost:{}", app.proxy_port)).unwrap();
         assert!(deny < allow, "the allow must come after the deny so it wins");
         assert!(p.contains("com.apple.dnssd.service"));
+        assert!(p.contains("(deny mach-lookup (global-name \"com.apple.authd\")"), "no system prompts from inside the fence");
         assert!(!p.contains("(allow network*)"));
     }
 
