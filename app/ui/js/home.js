@@ -501,6 +501,7 @@ function settingsHtml() {
       <div class="hm-set"><span class="grow"><b>${s.fence === 'up' ? 'On' : 'Needs attention'}</b><small>${esc(fence)}</small></span>
         <button class="cap" data-do="check">Check now</button></div>
       ${sw('data-set="ask"', s.ask !== false, 'Ask me about new places', 'Off: new places are blocked without asking.')}
+      ${s.ask !== false ? sw('data-set="ask-sound"', s.askSound !== false, 'Play a sound when asking', 'A question you did not see stays on screen until you deal with it.') : ''}
     </section>
     <section class="hm-block"><h2>Private folders</h2>
       <p class="hm-sub">Text from these folders is never sent.</p>
@@ -621,6 +622,7 @@ on(el.view, 'change', 'input[data-protect]', async (ev, i) => {
 on(el.view, 'change', 'input[data-set]', async (ev, i) => {
   try {
     if (i.dataset.set === 'ask') ctx.setStatus(await invoke('set_ask', { on: i.checked }));
+    if (i.dataset.set === 'ask-sound') ctx.setStatus(await invoke('set_ask_sound', { on: i.checked }));
     if (i.dataset.set === 'login') set.login = (await invoke('set_login_item', { on: i.checked })).on;
   } catch (e) { i.checked = !i.checked; ctx.toast(errText(e)); }
 });

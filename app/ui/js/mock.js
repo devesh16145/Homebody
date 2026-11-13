@@ -29,6 +29,7 @@ export function createMock(scenarioName) {
   const s = seed(scenario);
   const subs = new Set(), hostSubs = new Set(), timers = new Set();
   const asks = new Map();   // askId -> { ask, eventIds, timer }
+  const missed = [];        // asks that ran out of time and can still be answered
   const once = new Map();   // app|host -> allowed until (ms)
   const quiet = new Map();  // app|host -> { until, reason }
   const flags = { failSetup: false, checking: false };
@@ -117,6 +118,8 @@ export function createMock(scenarioName) {
         today: counters(todays.filter((e) => e.appId === a.id)),
       })),
       pending,
+      missed: missed.map((a) => ({ ...a })),
+      askSound: s.askSound !== false,
       localServers: !!s.localServers,
       ask: s.ask !== false,
       presetNotes: s.presetsSeen ? [] : ['llama.cpp, Cursor CLI and OpenClaw are recognised. Nothing is trusted for them until you say so.'],
@@ -238,6 +241,7 @@ export function createMock(scenarioName) {
     if (choice === 'always') upsertTrust(appId, h, true);
     else if (choice === 'once') once.set(k, now + ONCE_MS);
     else quiet.set(k, { until: now + QUIET_MS, reason: choice === 'block' ? 'you_blocked' : 'no_answer' });
+    if (choice === 'timeout') { const i = missed.findIndex((m) => m.appId === appId && m.host === h); if (i >= 0) missed.splice(i, 1); missed.push(a.ask); }
     const reason = { always: 'you_always_allow', once: 'you_allowed_once', block: 'you_blocked', timeout: 'no_answer' }[choice];
     a.eventIds.forEach((eid) => {
       const e = s.events.find((x) => x.id === eid);
@@ -522,6 +526,16 @@ export function createMock(scenarioName) {
       return local(mockInside);
     },
     async set_ask({ on } = {}) { s.ask = !!on; queueStatus(); return status(); },
+    async set_ask_sound({ on } = {}) { s.askSound = !!on; queueStatus(); return status(); },
+    async missed_answer({ id, choice } = {}) {
+      const i = missed.findIndex((a) => a.id === id);
+      if (i < 0) throw 'That question has already been dealt with.';
+      const [a] = missed.splice(i, 1);
+      if (choice === 'always' || choice === 'block') upsertTrust(a.appId, a.host, choice === 'always');
+      if (choice === 'later') quiet.delete(key(a.appId, a.host));
+      queueStatus();
+      return status();
+    },
     async ack_presets() { s.presetsSeen = true; queueStatus(); return status(); },
     async set_limit({ appId, host, mb } = {}) { const t = s.trust.find((x) => x.appId === appId && x.host === host); if (t) { t.limitMb = mb || null; t.sentMb = mb ? 0.4 : null; } return trustList(); },
     async get_private_folders() { return { folders: (s.privateFolders || []).map((path) => ({ path, exists: true })), files: (s.privateFolders || []).length ? 212 : null, lines: (s.privateFolders || []).length ? 5310 : null }; },

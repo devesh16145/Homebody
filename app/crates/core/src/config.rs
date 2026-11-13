@@ -199,6 +199,9 @@ pub struct Config {
     /// Ask about destinations that are neither trusted nor blocked. Off means block them quietly.
     #[serde(default = "yes")]
     pub ask: bool,
+    /// A soft sound when a question appears, so one is not missed while looking elsewhere.
+    #[serde(default = "yes")]
+    pub ask_sound: bool,
     /// When Watch switches itself back to Private. None: it stays on until switched off.
     #[serde(default)]
     pub watch_until: Option<String>,
@@ -230,7 +233,7 @@ fn yes() -> bool {
 impl Config {
     pub fn fresh() -> Config {
         let now = crate::now_iso();
-        let mut c = Config { version: 1, mode: Mode::Private, mode_since: now.clone(), private_since: Some(now), lockdown: false, ask: true, watch_until: None, watch_review: None, presets_seen: catalog::presets_version(), private_folders: vec![], org: None, apps: vec![] };
+        let mut c = Config { version: 1, mode: Mode::Private, mode_since: now.clone(), private_since: Some(now), lockdown: false, ask: true, ask_sound: true, watch_until: None, watch_review: None, presets_seen: catalog::presets_version(), private_folders: vec![], org: None, apps: vec![] };
         c.merge_presets();
         c
     }

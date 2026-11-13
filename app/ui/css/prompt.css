@@ -9,7 +9,7 @@ html, body { background: transparent; }
 .prompt { position: absolute; inset: var(--prompt-inset); }
 
 .p-card {
-  position: absolute; inset: 0; display: grid; grid-template-rows: 1fr auto; gap: 12px;
+  position: absolute; inset: 0; display: grid; grid-template-rows: 1fr auto; grid-template-columns: minmax(0, 1fr); gap: 12px;
   padding: 14px 14px 14px 16px; border-radius: 20px;
   background: var(--glass-strong); box-shadow: var(--glass-rim), var(--glass-drop);
   -webkit-backdrop-filter: var(--blur); backdrop-filter: var(--blur);
@@ -34,6 +34,13 @@ html, body { background: transparent; }
 
 .p-btns { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 6px; }
 .p-btns .cap { height: 30px; }
+/* A question that ran out of time: the same card, two answers, and a way to put it off. */
+.p-btns.two { grid-template-columns: 1fr 1.4fr; }
+.p-missed .p-who { color: var(--ask-text); }
+.p-x { flex: none; align-self: flex-start; width: 22px; height: 22px; margin: -2px -4px 0 0; border: 0; border-radius: 50%; background: transparent; color: var(--ink-3); font-size: 16px; line-height: 20px; cursor: pointer; }
+.p-x:hover { background: var(--still-soft); color: var(--ink); }
+.p-x:focus-visible { outline: 3px solid var(--focus); outline-offset: 1px; }
+.p-missed .p-more { right: 40px; }
 
 /* outcome, shown briefly when nobody answered */
 .p-done { display: flex; align-items: center; gap: 12px; }

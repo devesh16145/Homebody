@@ -24,6 +24,8 @@ use tokio::sync::{broadcast, watch, Notify};
 pub const ASK_TIMEOUT: Duration = Duration::from_secs(30);
 const ONCE_GRANT: Duration = Duration::from_secs(5 * 60);
 const QUIET_AFTER_NO: Duration = Duration::from_secs(10 * 60);
+/// How many unanswered questions are kept for answering later.
+const MISSED_KEPT: usize = 12;
 const DEFAULT_WATCH_MINUTES: u64 = 60;
 const MAX_WATCH_MINUTES: u64 = 7 * 24 * 60;
 const REPEAT_WINDOW: Duration = Duration::from_secs(60);
@@ -67,6 +69,8 @@ struct Inner {
     ledger: Mutex<Ledger>,
     feed: Mutex<FeedIndex>,
     asks: Mutex<HashMap<String, Pending>>,
+    /// Questions that ran out of time, kept so they can still be answered (see `Status::missed`).
+    missed: Mutex<Vec<Ask>>,
     grants: Mutex<HashMap<String, Instant>>,
     quiet: Mutex<HashMap<String, (Instant, Reason)>>,
     recent_denies: Mutex<HashMap<String, (Instant, u64)>>,
@@ -138,6 +142,7 @@ impl Engine {
             ledger: Mutex::new(ledger),
             feed: Mutex::new(feed),
             asks: Mutex::new(HashMap::new()),
+            missed: Mutex::new(Vec::new()),
             grants: Mutex::new(HashMap::new()),
             quiet: Mutex::new(HashMap::new()),
             recent_denies: Mutex::new(HashMap::new()),
@@ -337,6 +342,11 @@ impl Engine {
     /// The app whose gate this is, if any.
     pub(crate) fn app_for_gate(&self, port: u16) -> Option<String> {
         self.0.cfg.lock().unwrap().apps.iter().find(|a| a.proxy_port == port).map(|a| a.id.clone())
+    }
+
+    /// Whether a new question should make a sound.
+    pub fn ask_sound(&self) -> bool {
+        self.0.cfg.lock().unwrap().ask_sound
     }
 
     pub fn subscribe(&self) -> broadcast::Receiver<Event> {
@@ -900,6 +910,16 @@ impl Engine {
             Choice::Timeout => {
                 self.0.quiet.lock().unwrap().insert(key(&app, &host), (Instant::now() + QUIET_AFTER_NO, Reason::NoAnswer));
                 *self.0.last_blocked.lock().unwrap() = Some(Instant::now());
+                // Blocked for now, but the question is not lost: a person looking at another
+                // window, another desktop or away from the desk never saw it. It stays, still
+                // answerable, until they deal with it.
+                let mut missed = self.0.missed.lock().unwrap();
+                missed.retain(|m| !(m.app_id == app && m.host == host));
+                missed.push(p.ask.clone());
+                if missed.len() > MISSED_KEPT {
+                    let extra = missed.len() - MISSED_KEPT;
+                    missed.drain(..extra);
+                }
             }
         }
         let _ = self.0.tx.send(Event::AskResolved { id: id.to_string(), choice: choice.as_str().to_string() });
@@ -944,6 +964,8 @@ impl Engine {
         let prefix = format!("{app_id}|");
         let matches = |k: &String| k.strip_prefix(&prefix).map(|h| h == pattern || hostname::matches(&pattern, h)).unwrap_or(false);
         self.0.quiet.lock().unwrap().retain(|k, _| !matches(k));
+        // Decided now, however it was decided: no longer a question that was missed.
+        self.0.missed.lock().unwrap().retain(|m| !(m.app_id == app_id && (m.host == pattern || hostname::matches(&pattern, &m.host))));
         self.0.grants.lock().unwrap().retain(|k, _| !matches(k));
         self.0.recent_denies.lock().unwrap().retain(|k, _| !k.starts_with(&prefix));
         self.touch();
@@ -1427,6 +1449,8 @@ impl Engine {
             today,
             apps,
             pending,
+            missed: self.0.missed.lock().unwrap().clone(),
+            ask_sound: cfg.ask_sound,
             ask: cfg.ask,
             preset_notes: catalog::PRESET_NOTES.iter().filter(|(v, _)| *v > cfg.presets_seen).map(|(_, text)| text.to_string()).collect(),
             local_servers: fence::own_servers(),
@@ -2407,6 +2431,35 @@ impl Engine {
             "ack_presets" => {
                 self.0.cfg.lock().unwrap().presets_seen = catalog::presets_version();
                 self.save_cfg();
+                ok(&self.status())
+            }
+            // A question nobody answered in time, answered now. "always" and "block" make a rule,
+            // as they would have; "later" only clears it away, and the app is asked about again
+            // the next time it tries.
+            "missed_answer" => {
+                let id = req("id")?;
+                let ask = self.0.missed.lock().unwrap().iter().find(|m| m.id == id).cloned().ok_or("That question has already been dealt with.")?;
+                match req("choice")?.as_str() {
+                    "always" => {
+                        self.set_trust_inner(&ask.app_id, &ask.host, true, "prompt, afterwards")?;
+                        for c in catalog::companions(&ask.host) {
+                            let _ = self.set_trust_inner(&ask.app_id, c, true, "prompt, afterwards");
+                        }
+                    }
+                    "block" => self.set_trust_inner(&ask.app_id, &ask.host, false, "prompt, afterwards")?,
+                    "later" => {
+                        self.0.quiet.lock().unwrap().remove(&key(&ask.app_id, &ask.host));
+                    }
+                    _ => return Err("Choose always, block or later.".into()),
+                }
+                self.0.missed.lock().unwrap().retain(|m| m.id != id);
+                self.touch();
+                ok(&self.status())
+            }
+            "set_ask_sound" => {
+                self.0.cfg.lock().unwrap().ask_sound = b("on")?;
+                self.save_cfg();
+                self.touch();
                 ok(&self.status())
             }
             "set_ask" => {

@@ -37,6 +37,8 @@ interface Status {
   today: Counters;
   apps: AppStatus[];
   pending: Ask[];               // unanswered prompts, oldest first
+  missed: Ask[];                // prompts nobody answered in time: blocked, and still answerable (`missed_answer`), oldest first
+  askSound: boolean;            // a soft sound when a prompt appears
   ask: boolean;                 // false: places that are neither trusted nor blocked are refused without a prompt
   presetNotes: string[];        // what changed in the built-in rules since the user last said "Got it"; empty when nothing did
   localServers: boolean;            // agents may reach servers they started themselves (setup tested it here)
@@ -219,6 +221,8 @@ interface PrivateFolders {
 | `remove_trust` | `{ appId, host }` | `TrustEntry[]` | only entries with source "you" |
 | `set_limit` | `{ appId, host, mb?: number }` | `TrustEntry[]` | megabytes the app may send to this trusted place per hour; leave `mb` out to remove the limit. Counted by the gate for every app, with or without looking inside. Over the limit, new connections are refused and an open one is cut, until the hour has moved on |
 | `set_ask` | `{ on }` | `Status` | off: unknown places are refused without a prompt, and prompts that are waiting end as if unanswered (blocked) |
+| `set_ask_sound` | `{ on: boolean }` | `Status` | a soft sound when a question appears (on by default) |
+| `missed_answer` | `{ id: string, choice: "always" \| "block" \| "later" }` | `Status` | answer a question that ran out of time (`Status.missed`): make the rule it would have made, or clear it so the app is asked about again next time |
 | `ack_presets` | — | `Status` | the user has read `Status.presetNotes` |
 | `get_private_folders` | — | `PrivateFolders` | |
 | `add_private_folder` / `remove_private_folder` | `{ path }` | `PrivateFolders` | a folder whose text must never be sent. While an app's connections are looked inside, a request that repeats three or more long lines from a file in one of these folders is stopped. Must be a folder inside the user's home folder (not the home folder itself); at most 20 |
@@ -304,7 +308,7 @@ One channel, `homebody:event`. Payload is `{ type, data }`:
 |---|---|---|---|
 | Main | `ui/home.html` | 980×680, min 760×520 | native title bar overlay: the traffic lights sit on the floating sidebar, whose top is a drag region (`data-tauri-drag-region`), as is a strip across the top of the page |
 | Menu-bar panel | `ui/menubar.html` | 340×480 | window label `glance`; frameless, transparent, native popover vibrancy behind it; the page draws nothing but its content on a transparent body; hides on blur |
-| Prompt | `ui/prompt.html` | 380×128 | frameless, transparent, always on top, top-right of the screen; shows the oldest pending `Ask`; hides itself when none are pending |
+| Prompt | `ui/prompt.html` | 380×128 | frameless, transparent, always on top and on every desktop, top-right of the screen the pointer is on; shows the oldest pending `Ask`, then any `missed` ones, which stay until dealt with; hides itself when there are none |
 
 ## Rules the UI can rely on
 

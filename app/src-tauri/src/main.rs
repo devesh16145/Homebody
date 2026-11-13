@@ -165,9 +165,13 @@ fn toggle_glance(app: &AppHandle, icon: tauri::Rect) {
     let _ = w.set_focus();
 }
 
+/// Show the question where the person is looking: on the screen the pointer is on (the main
+/// screen if that cannot be told), top right. The window itself follows them to whichever
+/// desktop is in front (see `build_windows`).
 fn show_prompt(app: &AppHandle) {
     let Some(w) = app.get_webview_window("prompt") else { return };
-    if let Ok(Some(m)) = app.primary_monitor() {
+    let here = app.cursor_position().ok().and_then(|p| app.monitor_from_point(p.x, p.y).ok().flatten());
+    if let Some(m) = here.or_else(|| app.primary_monitor().ok().flatten()) {
         let scale = m.scale_factor();
         let x = m.position().x as f64 + m.size().width as f64 - (PROMPT.0 + 16.0) * scale;
         let y = m.position().y as f64 + 40.0 * scale;
@@ -222,6 +226,8 @@ fn build_windows(app: &AppHandle) -> tauri::Result<()> {
         .decorations(false)
         .transparent(true)
         .always_on_top(true)
+        // On every desktop: a question raised while you work on another one has to be seen there.
+        .visible_on_all_workspaces(true)
         .skip_taskbar(true)
         .visible(false)
         .focused(false)
@@ -285,7 +291,15 @@ fn pump_events(app: AppHandle, engine: Engine) {
                         let _ = tray.set_tooltip(Some(format!("Homebody: {}", s.sentence)));
                     }
                 }
-                Event::Ask(_) => show_prompt(&app),
+                Event::Ask(ask) => {
+                    show_prompt(&app);
+                    // A soft sound for a new question (not for the same one being asked again):
+                    // the card may be on a screen nobody is looking at.
+                    #[cfg(target_os = "macos")]
+                    if ask.waiting <= 1 && app.state::<Shell>().engine.ask_sound() {
+                        let _ = std::process::Command::new("/usr/bin/afplay").args(["-v", "0.5", "/System/Library/Sounds/Glass.aiff"]).stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).spawn();
+                    }
+                }
                 Event::Show { window, tab } => {
                     match window.as_str() {
                         "glance" => {

@@ -74,6 +74,11 @@ pub struct Status {
     pub today: Counters,
     pub apps: Vec<AppStatus>,
     pub pending: Vec<Ask>,
+    /// Questions nobody answered in time. The place was blocked; the question stays here, still
+    /// answerable, until the person deals with it. Oldest first.
+    pub missed: Vec<Ask>,
+    /// Play a soft sound when a question appears.
+    pub ask_sound: bool,
     /// Ask about places that are neither trusted nor blocked. Off: block them without asking.
     pub ask: bool,
     /// What changed in the built-in rules since the user was last told. Empty when nothing did.
