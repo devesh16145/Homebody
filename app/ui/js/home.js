@@ -217,7 +217,17 @@ async function appDo(what, id) {
   if (!a) return;
   appErrors.delete(id);
   try {
-    if (what === 'open') { await invoke('app_open_terminal', { appId: id }); ctx.toast(`${a.name} is opening in a protected terminal.`); return; }
+    if (what === 'open') {
+      // With one folder brought in, that is where the person means to work: start inside its
+      // copy. With several, start in the app's own space, which holds them all.
+      const folders = (await invoke('get_projects', { appId: id }).catch(() => [])).filter((p) => p.copyExists);
+      const one = folders.length === 1 ? folders[0] : null;
+      await invoke('app_open_terminal', one ? { appId: id, project: one.name } : { appId: id });
+      ctx.toast(one ? `${a.name} is opening in a protected terminal, inside ${one.name}.`
+        : folders.length ? `${a.name} is opening in a protected terminal. Your ${folders.length} folders are inside its space; each has its own Open terminal.`
+        : `${a.name} is opening in a protected terminal.`);
+      return;
+    }
     busy.add(id); render();
     const out = await invoke(what === 'stop' ? 'app_stop' : 'app_start', { appId: id });
     busy.delete(id);

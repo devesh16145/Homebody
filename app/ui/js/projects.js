@@ -135,7 +135,7 @@ export async function act(what, appId, name) {
       notes.set(k, `${plural(chosen.length, 'place', 'places')} added to Trusted.`);
       return rerender();
     }
-    if (what === 'proj-term') return void (await invoke('app_open_terminal', { appId, project: name }));
+    if (what === 'proj-term') { await invoke('app_open_terminal', { appId, project: name }); notes.set(k, 'Opening in a protected terminal, inside this folder’s copy.'); return rerender(); }
     if (what === 'proj-review') { open = open === k ? null : k; notes.delete(k); rerender(); if (open) count(appId, name); return; }
     if (what === 'proj-recheck') { sets.delete(k); rerender(); return count(appId, name); }
     if (what === 'proj-remove') { confirm = k; return rerender(); }

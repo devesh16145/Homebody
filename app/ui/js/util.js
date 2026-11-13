@@ -14,10 +14,41 @@ export function on(root, type, sel, fn) {
   });
 }
 
+/* A redraw replaces every element in the page. If one lands between pressing a button and
+   letting go, the button under the pointer is gone and the browser never reports the click:
+   the button "does not work". Pages here redraw whenever activity arrives, several times a
+   second while an agent is busy, so that was easy to hit. While the main button is held, a
+   redraw is kept back, and done once the click has been delivered. */
+let pressed = false, pressTimer = 0;
+const heldBack = new Map();   // element -> the newest HTML asked for while pressed
+function released() {
+  if (!pressed) return;
+  pressed = false;
+  clearTimeout(pressTimer);
+  // The click follows the release in the same turn of the event loop; redraw after it.
+  setTimeout(() => {
+    const all = [...heldBack];
+    heldBack.clear();
+    for (const [el, html] of all) if (el.isConnected) patch(el, html);
+  }, 0);
+}
+if (typeof document !== 'undefined') {
+  document.addEventListener('pointerdown', (ev) => {
+    if (ev.button !== 0) return;
+    pressed = true;
+    clearTimeout(pressTimer);
+    pressTimer = setTimeout(released, 4000);   // a press that never ends must not freeze the page
+  }, true);
+  document.addEventListener('pointerup', released, true);
+  document.addEventListener('pointercancel', released, true);
+  window.addEventListener('blur', released);
+}
+
 /** Replace innerHTML only when it changed, so animations survive re-renders.
-    Keyboard focus is carried across by matching `data-key`. */
+    Keyboard focus is carried across by matching `data-key`. Returns whether it redrew now. */
 export function patch(el, html) {
-  if (el.__html === html) return false;
+  if (el.__html === html) { heldBack.delete(el); return false; }
+  if (pressed) { heldBack.set(el, html); return false; }
   const active = document.activeElement;
   const key = active && el.contains(active) ? active.getAttribute('data-key') : null;
   el.__html = html;
