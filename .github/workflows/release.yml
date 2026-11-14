@@ -1,4 +1,6 @@
-# Builds the downloadable disk image for macOS.
+# Builds the downloadable disk image for macOS, then tries it on a second Mac that has never seen
+# Homebody: installed from the image, set up, attacked with the whole bypass corpus, and removed
+# again (app/tests/clean-mac.sh). A release is drafted only if that passes.
 #
 # Runs only when started by hand (Actions tab → Release → Run workflow) or when a version tag
 # such as v0.1.0 is pushed. It never runs on ordinary commits, so it costs nothing day to day.
@@ -10,8 +12,6 @@
 #   APPLE_SIGNING_IDENTITY       for example: Developer ID Application: Your Name (TEAMID)
 #   APPLE_ID, APPLE_PASSWORD     the Apple account and an app-specific password, for notarization
 #   APPLE_TEAM_ID                the ten-character team id
-#
-# Not yet run: this file was written before the project had an Apple Developer identity.
 
 name: Release
 
@@ -79,8 +79,32 @@ jobs:
           path: app/target/release/bundle/dmg/*.dmg
           if-no-files-found: error
 
+  # A different machine from the one that built it, as it comes from GitHub: no Homebody, no
+  # private users, no rules. The nearest thing to a stranger's Mac that can be had without one.
+  clean-mac:
+    needs: macos
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: Homebody-macos
+          path: image
+      - name: Install it, set it up, attack it, remove it
+        run: bash app/tests/clean-mac.sh image/*.dmg --throwaway
+
+  draft:
+    needs: [macos, clean-mac]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: Homebody-macos
+          path: image
       - name: Draft a release for the tag
-        if: startsWith(github.ref, 'refs/tags/v')
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" target/release/bundle/dmg/*.dmg --draft --generate-notes --title "Homebody $GITHUB_REF_NAME"
+        run: gh release create "$GITHUB_REF_NAME" image/*.dmg --draft --generate-notes --title "Homebody $GITHUB_REF_NAME"
