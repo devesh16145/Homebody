@@ -30,6 +30,7 @@
     ],
     "macOS": {
       "minimumSystemVersion": "13.0",
+      "signingIdentity": "-",
       "files": {
         "MacOS/homebody": "../target/release/homebody",
         "MacOS/homebody-box": "../target/box/homebody-box",

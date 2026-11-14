@@ -11,7 +11,7 @@ cd app && npm install
 ```
 
 ```bash
-cd app && cargo test -p sai-core
+cd app && cargo test -p homebody-core
 ```
 
 The UI needs no build step and no app: serve `app/ui` with any static file server and open `main.html`, `glance.html` or `dev.html`. In a plain browser it runs against an in-page mock of the same contract the app uses, with scenarios (`?scenario=private`, `watching`, `asking`, `setup`, …).
