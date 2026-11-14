@@ -140,7 +140,14 @@ fi
 echo "The app's own test"
 # What "Test it" shows in the window: every attempt has to be seen to be stopped, and none
 # may be passed over as "could not tell".
-out="$("$HB" test "$APP" 2>&1)"
+# (The section above took the rules away and had them put back; nothing runs as protected
+# until the next check has confirmed them, so give that a moment.)
+for _ in $(seq 1 20); do
+  "$HB" check >/dev/null 2>&1
+  out="$("$HB" test "$APP" 2>&1)"
+  echo "$out" | grep -q "Trying to get out" && break
+  sleep 1
+done
 check "every attempt is seen to be stopped"              "Everything was stopped." "$out"
 echo "$out" | grep -q "Everything was stopped." || echo "$out" | sed 's/^/      /'
 
