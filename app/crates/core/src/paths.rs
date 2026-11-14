@@ -39,6 +39,8 @@ pub fn ensure_data_dir() -> std::io::Result<PathBuf> {
 }
 
 pub fn config_file() -> PathBuf { data_dir().join("settings.json") }
+/// The real keys Homebody keeps for apps (see `keys`). Readable only by you.
+pub fn keys_file() -> PathBuf { data_dir().join("keys.json") }
 pub fn ledger_file() -> PathBuf { data_dir().join("ledger.jsonl") }
 pub fn ledger_key() -> PathBuf { data_dir().join("ledger.key") }
 pub fn control_socket() -> PathBuf { data_dir().join("control.sock") }

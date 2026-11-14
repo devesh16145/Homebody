@@ -226,6 +226,29 @@ pub const EXPORT_FORMAT: &str = "homebody-log-v1";
 /// Check a log exported with "Export" (a header line, then the records exactly as written).
 /// The key is read from the file itself, so a pass means "unchanged since it was signed by the
 /// holder of this key"; compare the key with the one on the Proof screen to know whose it is.
+/// The public half of the log key kept in this file, if there is one. Reads; never creates.
+pub fn public_key_of(key_path: &Path) -> Option<String> {
+    let bytes: [u8; 32] = std::fs::read(key_path).ok()?.try_into().ok()?;
+    Some(b64().encode(SigningKey::from_bytes(&bytes).verifying_key().to_bytes()))
+}
+
+/// Check a proof file (the one "Share proof" saves): that its statement was signed by the key
+/// it names and has not been changed since. Returns the proof itself. This says who made the
+/// statement, not that it is true; the exported log is what backs it.
+pub fn verify_proof(file: &Value) -> Result<Value, String> {
+    let proof = file.get("proof").filter(|p| p.is_object()).ok_or("This is not a Homebody proof file.")?;
+    if proof.get("format").and_then(Value::as_str) != Some("homebody-proof-v1") {
+        return Err("This proof is in a form this version does not know.".into());
+    }
+    let key = proof.get("publicKey").and_then(Value::as_str).ok_or("The proof does not name the key that signed it.")?;
+    let key: [u8; 32] = b64().decode(key).ok().and_then(|b| b.try_into().ok()).ok_or("The key in the proof is not a key.")?;
+    let key = VerifyingKey::from_bytes(&key).map_err(|_| "The key in the proof is not a key.".to_string())?;
+    let sig = file.get("signature").and_then(Value::as_str).ok_or("The proof is not signed.")?;
+    let sig: [u8; 64] = b64().decode(sig).ok().and_then(|b| b.try_into().ok()).ok_or("The signature is not a signature.")?;
+    key.verify(canonical(proof).as_bytes(), &Signature::from_bytes(&sig)).map_err(|_| "The statement was changed after it was signed, or was signed by a different key.".to_string())?;
+    Ok(proof.clone())
+}
+
 pub fn verify_export(path: &Path) -> (ChainCheck, Option<String>) {
     let checked_at = crate::now_iso();
     let fail = |msg: &str| (ChainCheck { ok: false, count: 0, checked_at: checked_at.clone(), error: Some(msg.to_string()) }, None);
@@ -344,6 +367,26 @@ macro_rules! fields {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_proof_file_is_believed_only_as_it_was_signed() {
+        let dir = tempfile::tempdir().unwrap();
+        let (ledger, _) = Ledger::open(&dir.path().join("l.jsonl"), &dir.path().join("l.key")).unwrap();
+        let body = serde_json::json!({ "format": "homebody-proof-v1", "generatedAt": "2026-11-15T00:00:00Z", "statement": "Since Tuesday, Ollama sent nothing.", "publicKey": ledger.public_key_b64() });
+        let file = serde_json::json!({ "proof": body, "signature": ledger.sign(canonical(&body).as_bytes()) });
+        assert_eq!(verify_proof(&file).unwrap()["statement"], "Since Tuesday, Ollama sent nothing.");
+        // One word changed.
+        let mut forged = file.clone();
+        forged["proof"]["statement"] = serde_json::json!("Since Monday, Ollama sent nothing.");
+        assert!(verify_proof(&forged).is_err());
+        // Signed by someone else, naming their own key: it checks out, as theirs. Naming ours: it does not.
+        let (other, _) = Ledger::open(&dir.path().join("o.jsonl"), &dir.path().join("o.key")).unwrap();
+        let mut theirs = file.clone();
+        theirs["signature"] = serde_json::json!(other.sign(canonical(&body).as_bytes()));
+        assert!(verify_proof(&theirs).is_err());
+        assert!(verify_proof(&serde_json::json!({ "something": "else" })).is_err());
+    }
+
 
     fn open(dir: &Path) -> (Ledger, Vec<Value>) {
         Ledger::open(&dir.join("ledger.jsonl"), &dir.join("ledger.key")).unwrap()

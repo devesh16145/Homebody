@@ -78,6 +78,54 @@ pub const DESTINATIONS: &[Destination] = &[
     Destination { pattern: "api.github.com", label: "GitHub", purpose: "Code hosting", companions: &[] },
     Destination { pattern: "raw.githubusercontent.com", label: "GitHub files", purpose: "Code hosting", companions: &[] },
     Destination { pattern: "objects.githubusercontent.com", label: "GitHub files", purpose: "Code hosting", companions: &[] },
+    // More agents, from their makers' documentation (see the presets below).
+    Destination { pattern: "copilot-proxy.githubusercontent.com", label: "GitHub Copilot", purpose: "Your AI provider", companions: &[] },
+    Destination { pattern: "origin-tracker.githubusercontent.com", label: "GitHub Copilot", purpose: "Your AI provider", companions: &[] },
+    Destination { pattern: "*.githubcopilot.com", label: "GitHub Copilot", purpose: "Your AI provider", companions: &[] },
+    Destination { pattern: "collector.github.com", label: "GitHub usage statistics", purpose: "Usage statistics", companions: &[] },
+    Destination { pattern: "copilot-telemetry.githubusercontent.com", label: "GitHub Copilot usage statistics", purpose: "Usage statistics", companions: &[] },
+    Destination { pattern: "default.exp-tas.com", label: "Microsoft experiments", purpose: "Usage statistics", companions: &[] },
+    Destination { pattern: "copilot-reports.github.com", label: "GitHub Copilot usage reports", purpose: "Usage statistics", companions: &[] },
+    Destination { pattern: "ampcode.com", label: "Amp", purpose: "Your AI provider and account", companions: &[] },
+    Destination { pattern: "static.ampcode.com", label: "Amp downloads", purpose: "Updates to Amp itself", companions: &[] },
+    Destination { pattern: "chat.qwen.ai", label: "Qwen sign-in", purpose: "Signing in to your Qwen account", companions: &[] },
+    Destination { pattern: "dashscope.aliyuncs.com", label: "Alibaba Model Studio", purpose: "Your AI provider", companions: &[] },
+    Destination { pattern: "*.rum.aliyuncs.com", label: "Alibaba usage statistics", purpose: "Usage statistics", companions: &[] },
+    Destination { pattern: "catwalk.charm.land", label: "Charm model list", purpose: "List of available models", companions: &[] },
+    Destination { pattern: "hyper.charm.land", label: "Charm Hyper", purpose: "An AI provider run by Charm", companions: &[] },
+    Destination { pattern: "data.charm.land", label: "Charm usage statistics", purpose: "Usage statistics", companions: &[] },
+    Destination { pattern: "app.kiro.dev", label: "Kiro sign-in", purpose: "Signing in to your Kiro account", companions: &[] },
+    Destination { pattern: "telemetry.us-east-1.kiro.dev", label: "Kiro usage statistics", purpose: "Usage statistics", companions: &[] },
+    Destination { pattern: "telemetry.eu-central-1.kiro.dev", label: "Kiro usage statistics", purpose: "Usage statistics", companions: &[] },
+    Destination { pattern: "*.kiro.aws.dev", label: "Kiro usage statistics", purpose: "Usage statistics", companions: &[] },
+    Destination { pattern: "*.kiro.dev", label: "Kiro", purpose: "Your AI provider", companions: &[] },
+    Destination { pattern: "api.cline.bot", label: "Cline", purpose: "Account and hosted models", companions: &[] },
+    Destination { pattern: "app.factory.ai", label: "Factory sign-in", purpose: "Signing in to your Factory account", companions: &[] },
+    Destination { pattern: "auth.factory.ai", label: "Factory sign-in", purpose: "Signing in to your Factory account", companions: &[] },
+    Destination { pattern: "api.factory.ai", label: "Factory", purpose: "Your AI provider", companions: &[] },
+    Destination { pattern: "relay.factory.ai", label: "Factory", purpose: "Your AI provider", companions: &[] },
+    Destination { pattern: "telemetry.factory.ai", label: "Factory usage statistics", purpose: "Usage statistics", companions: &[] },
+    Destination { pattern: "downloads.factory.ai", label: "Factory downloads", purpose: "Updates to Droid itself", companions: &[] },
+    Destination { pattern: "api.workos.com", label: "WorkOS sign-in", purpose: "Signing in", companions: &[] },
+    Destination { pattern: "auth.workos.com", label: "WorkOS sign-in", purpose: "Signing in", companions: &[] },
+    Destination { pattern: "api.x.ai", label: "xAI API", purpose: "Your AI provider", companions: &[] },
+    Destination { pattern: "api.mixpanel.com", label: "Mixpanel", purpose: "Usage statistics", companions: &[] },
+    Destination { pattern: "api.ipify.org", label: "ipify", purpose: "Looks up your public internet address", companions: &[] },
+    Destination { pattern: "registry.yarnpkg.com", label: "Yarn registry", purpose: "Package downloads", companions: &[] },
+    Destination { pattern: "proxy.golang.org", label: "Go modules", purpose: "Package downloads", companions: &[] },
+    Destination { pattern: "sum.golang.org", label: "Go modules", purpose: "Package downloads", companions: &[] },
+    Destination { pattern: "formulae.brew.sh", label: "Homebrew", purpose: "Package downloads", companions: &[] },
+    Destination { pattern: "ghcr.io", label: "GitHub packages", purpose: "Package downloads", companions: &[] },
+    Destination { pattern: "pkg-containers.githubusercontent.com", label: "GitHub packages", purpose: "Package downloads", companions: &[] },
+    Destination { pattern: "codeload.github.com", label: "GitHub files", purpose: "Code hosting", companions: &[] },
+    Destination { pattern: "release-assets.githubusercontent.com", label: "GitHub files", purpose: "Code hosting", companions: &[] },
+    Destination { pattern: "rubygems.org", label: "RubyGems", purpose: "Package downloads", companions: &[] },
+    Destination { pattern: "index.rubygems.org", label: "RubyGems", purpose: "Package downloads", companions: &[] },
+    Destination { pattern: "repo.maven.apache.org", label: "Maven Central", purpose: "Package downloads", companions: &[] },
+    Destination { pattern: "repo1.maven.org", label: "Maven Central", purpose: "Package downloads", companions: &[] },
+    Destination { pattern: "registry-1.docker.io", label: "Docker Hub", purpose: "Image downloads", companions: &[] },
+    Destination { pattern: "auth.docker.io", label: "Docker Hub", purpose: "Image downloads", companions: &[] },
+    Destination { pattern: "production.cloudflare.docker.com", label: "Docker Hub", purpose: "Image downloads", companions: &[] },
     // Places data is commonly exfiltrated to in published attacks. Labelled so a prompt is honest.
     Destination { pattern: "webhook.site", label: "webhook.site", purpose: "A public drop box anyone can read", companions: &[] },
     Destination { pattern: "*.webhook.site", label: "webhook.site", purpose: "A public drop box anyone can read", companions: &[] },
@@ -381,6 +429,18 @@ pub const APPS: &[AppPreset] = &[
     AppPreset { id: "llama-cpp", name: "llama.cpp", kind: "agent", icon: "generic", binary: "llama-server", os_user: "_hbllama", proxy_port: 47116, local_ports: LOCAL_MODEL_PORTS, serves_port: None, loopback_all: false, trust: &[], inside: &[] },
     AppPreset { id: "cursor-agent", name: "Cursor CLI", kind: "agent", icon: "generic", binary: "cursor-agent", os_user: "_hbcursor", proxy_port: 47117, local_ports: LOCAL_MODEL_PORTS, serves_port: None, loopback_all: false, trust: &[], inside: &[] },
     AppPreset { id: "openclaw", name: "OpenClaw", kind: "agent", icon: "generic", binary: "openclaw", os_user: "_hbopenclaw", proxy_port: 47118, local_ports: LOCAL_MODEL_PORTS, serves_port: None, loopback_all: false, trust: &[], inside: &[] },
+    // Written from each maker's documentation or source on 15 Nov 2026; none has been run on
+    // the computer this was written on. On: what the maker says the tool cannot work without.
+    // Off: where it says usage statistics go. Everything else asks first. Their gate ports
+    // count down from the top of the range, away from the ones handed to apps people add.
+    AppPreset { id: "copilot", name: "GitHub Copilot CLI", kind: "agent", icon: "generic", binary: "copilot", os_user: "_hbcopilot", proxy_port: 47139, local_ports: LOCAL_MODEL_PORTS, serves_port: None, loopback_all: false, trust: &[PresetTrust { host: "github.com", enabled: true, recommended: true }, PresetTrust { host: "api.github.com", enabled: true, recommended: true }, PresetTrust { host: "copilot-proxy.githubusercontent.com", enabled: true, recommended: true }, PresetTrust { host: "origin-tracker.githubusercontent.com", enabled: true, recommended: true }, PresetTrust { host: "*.githubcopilot.com", enabled: true, recommended: true }, PresetTrust { host: "collector.github.com", enabled: false, recommended: false }, PresetTrust { host: "copilot-telemetry.githubusercontent.com", enabled: false, recommended: false }, PresetTrust { host: "default.exp-tas.com", enabled: false, recommended: false }, PresetTrust { host: "copilot-reports.github.com", enabled: false, recommended: false }], inside: &[] },
+    AppPreset { id: "goose", name: "Goose", kind: "agent", icon: "generic", binary: "goose", os_user: "_hbgoose", proxy_port: 47138, local_ports: LOCAL_MODEL_PORTS, serves_port: None, loopback_all: false, trust: &[PresetTrust { host: "us.i.posthog.com", enabled: false, recommended: false }], inside: &[] },
+    AppPreset { id: "amp", name: "Amp", kind: "agent", icon: "generic", binary: "amp", os_user: "_hbamp", proxy_port: 47137, local_ports: LOCAL_MODEL_PORTS, serves_port: None, loopback_all: false, trust: &[PresetTrust { host: "ampcode.com", enabled: true, recommended: true }], inside: &[] },
+    AppPreset { id: "qwen", name: "Qwen Code", kind: "agent", icon: "generic", binary: "qwen", os_user: "_hbqwen", proxy_port: 47136, local_ports: LOCAL_MODEL_PORTS, serves_port: None, loopback_all: false, trust: &[PresetTrust { host: "chat.qwen.ai", enabled: true, recommended: true }, PresetTrust { host: "dashscope.aliyuncs.com", enabled: true, recommended: true }, PresetTrust { host: "gb4w8c3ygj-default-sea.rum.aliyuncs.com", enabled: false, recommended: false }], inside: &[] },
+    AppPreset { id: "crush", name: "Crush", kind: "agent", icon: "generic", binary: "crush", os_user: "_hbcrush", proxy_port: 47135, local_ports: LOCAL_MODEL_PORTS, serves_port: None, loopback_all: false, trust: &[PresetTrust { host: "catwalk.charm.land", enabled: true, recommended: true }, PresetTrust { host: "data.charm.land", enabled: false, recommended: false }], inside: &[] },
+    AppPreset { id: "kiro-cli", name: "Kiro CLI", kind: "agent", icon: "generic", binary: "kiro-cli", os_user: "_hbkiro", proxy_port: 47134, local_ports: LOCAL_MODEL_PORTS, serves_port: None, loopback_all: false, trust: &[PresetTrust { host: "app.kiro.dev", enabled: true, recommended: true }, PresetTrust { host: "telemetry.us-east-1.kiro.dev", enabled: false, recommended: false }, PresetTrust { host: "telemetry.eu-central-1.kiro.dev", enabled: false, recommended: false }, PresetTrust { host: "*.kiro.aws.dev", enabled: false, recommended: false }], inside: &[] },
+    AppPreset { id: "cline", name: "Cline CLI", kind: "agent", icon: "generic", binary: "cline", os_user: "_hbcline", proxy_port: 47133, local_ports: LOCAL_MODEL_PORTS, serves_port: None, loopback_all: false, trust: &[PresetTrust { host: "api.cline.bot", enabled: true, recommended: true }], inside: &[] },
+    AppPreset { id: "droid", name: "Droid", kind: "agent", icon: "generic", binary: "droid", os_user: "_hbdroid", proxy_port: 47132, local_ports: LOCAL_MODEL_PORTS, serves_port: None, loopback_all: false, trust: &[PresetTrust { host: "app.factory.ai", enabled: true, recommended: true }, PresetTrust { host: "api.factory.ai", enabled: true, recommended: true }, PresetTrust { host: "auth.factory.ai", enabled: true, recommended: true }, PresetTrust { host: "relay.factory.ai", enabled: true, recommended: true }, PresetTrust { host: "api.workos.com", enabled: true, recommended: true }, PresetTrust { host: "auth.workos.com", enabled: true, recommended: true }, PresetTrust { host: "telemetry.factory.ai", enabled: false, recommended: false }], inside: &[] },
 ];
 
 /// The built-in rules have a version, and every change to them a line here, newest last, so
@@ -391,7 +451,48 @@ pub const PRESET_NOTES: &[(u32, &str)] = &[
     (2, "Codex CLI, Gemini CLI, Aider and opencode are recognised. For each, only its AI provider and sign-in are trusted."),
     (3, "Claude Code: event logging inside Anthropic's address is switched off. It acts while Look inside is on."),
     (4, "llama.cpp, Cursor CLI and OpenClaw are recognised. Nothing is trusted for them until you say so."),
+    (5, "GitHub Copilot CLI, Goose, Amp, Qwen Code, Crush, Kiro CLI, Cline CLI and Droid are recognised. For each, only what its maker says it cannot work without is trusted, and where it sends usage statistics is switched off."),
 ];
+
+/// What agents usually need beyond their AI provider, as one switch each: the places a package
+/// manager fetches from. Each host list is the one its maintainers document. A pack marked
+/// downloads-only gets a small hourly limit on what may be SENT to its places, so a registry
+/// an agent only fetches from cannot be used to carry much out.
+pub struct Pack {
+    pub id: &'static str,
+    pub name: &'static str,
+    pub what: &'static str,
+    pub hosts: &'static [&'static str],
+    pub downloads_only: bool,
+}
+
+/// The hourly limit, in megabytes, on what may be sent to a downloads-only place. Enough for
+/// the requests of a large install; far too little to carry a project out.
+pub const DOWNLOADS_ONLY_MB: u64 = 2;
+
+pub const PACKS: &[Pack] = &[
+    Pack { id: "npm", name: "npm packages", what: "Installing JavaScript packages (npm, pnpm, Yarn)", hosts: &["registry.npmjs.org", "registry.yarnpkg.com"], downloads_only: true },
+    Pack { id: "python", name: "Python packages", what: "Installing Python packages (pip, uv, Poetry)", hosts: &["pypi.org", "files.pythonhosted.org"], downloads_only: true },
+    Pack { id: "rust", name: "Rust crates", what: "Installing Rust crates (cargo)", hosts: &["crates.io", "index.crates.io", "static.crates.io"], downloads_only: true },
+    Pack { id: "go", name: "Go modules", what: "Fetching Go modules", hosts: &["proxy.golang.org", "sum.golang.org"], downloads_only: true },
+    Pack { id: "ruby", name: "Ruby gems", what: "Installing Ruby gems (gem, Bundler)", hosts: &["rubygems.org", "index.rubygems.org"], downloads_only: true },
+    Pack { id: "java", name: "Java libraries", what: "Fetching libraries from Maven Central (Maven, Gradle)", hosts: &["repo.maven.apache.org", "repo1.maven.org"], downloads_only: true },
+    Pack { id: "homebrew", name: "Homebrew", what: "Installing tools with Homebrew", hosts: &["formulae.brew.sh", "ghcr.io", "pkg-containers.githubusercontent.com"], downloads_only: true },
+    Pack { id: "docker", name: "Docker images", what: "Pulling images from Docker Hub", hosts: &["registry-1.docker.io", "auth.docker.io", "production.cloudflare.docker.com"], downloads_only: true },
+    // Not downloads-only: pushing your own work is sending. Anyone can publish on GitHub, so
+    // this is also a place things can be carried out to; Look inside can switch sending off.
+    Pack { id: "github", name: "GitHub", what: "Fetching and pushing code, and files and releases hosted there", hosts: &["github.com", "api.github.com", "codeload.github.com", "raw.githubusercontent.com", "objects.githubusercontent.com", "release-assets.githubusercontent.com"], downloads_only: false },
+];
+
+pub fn pack(id: &str) -> Option<&'static Pack> {
+    PACKS.iter().find(|p| p.id == id)
+}
+
+/// The pack, among those switched on, that a place belongs to.
+pub fn pack_for<'a>(host: &str, on: &'a [String]) -> Option<&'static Pack> {
+    PACKS.iter().find(|p| on.iter().any(|id| id == p.id) && p.hosts.contains(&host))
+}
+
 
 pub fn presets_version() -> u32 {
     PRESET_NOTES.last().map(|(v, _)| *v).unwrap_or(0)
@@ -532,7 +633,15 @@ mod tests {
         ports.dedup();
         assert_eq!(ports.len(), APPS.len());
         assert!(APPS.iter().all(|a| GATE_PORTS.contains(&a.proxy_port)));
-        assert!(APPS.iter().all(|a| a.proxy_port < FIRST_CUSTOM_PORT), "preset ports stay below the range for added apps");
+        // Added apps get ports from FIRST_CUSTOM_PORT upward. The first presets sit below that;
+        // later ones count down from the top, leaving a dozen ports for added apps in between
+        // (and a preset is never put over an added app that got there first: see merge_presets).
+        assert!(APPS.iter().all(|a| a.proxy_port < FIRST_CUSTOM_PORT || a.proxy_port >= FIRST_CUSTOM_PORT + 12), "preset ports leave room for added apps");
+        // Every pack names real places, each once.
+        for p in PACKS {
+            assert!(!p.hosts.is_empty() && p.hosts.iter().all(|h| hostname::valid_pattern(h)), "{}", p.id);
+            assert!(p.hosts.iter().all(|h| describe(h).0 != *h), "every place in pack {} has a name", p.id);
+        }
         let mut users: Vec<&str> = APPS.iter().map(|a| a.os_user).collect();
         users.sort();
         users.dedup();

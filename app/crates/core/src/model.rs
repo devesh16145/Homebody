@@ -167,6 +167,8 @@ pub struct AppStatus {
     pub can_inspect: bool,
     /// While looking inside, requests carrying something that looks like a secret are stopped.
     pub secrets: bool,
+    /// Keys Homebody keeps for this app. Never the keys themselves.
+    pub keys: Vec<KeyInfo>,
     /// Installed, but in a way a protected app cannot use. A sentence for the user.
     pub problem: Option<String>,
 }
@@ -259,6 +261,28 @@ pub struct FeedEvent {
     pub requests: Option<Vec<RequestKind>>,
     /// Present when this row is a request that was stopped for carrying a secret.
     pub secret: Option<SecretSeen>,
+    /// The names of keys Homebody keeps that were put into requests on this connection.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub keys: Vec<String>,
+    /// Present when this row is a request stopped for carrying the stand-in of a kept key to a
+    /// place that key is not for: the key's name.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub key_stopped: Option<String>,
+}
+
+/// A key Homebody keeps for an app, as shown to the user.
+#[derive(Serialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct KeyInfo {
+    /// The environment variable the app reads it from: "ANTHROPIC_API_KEY".
+    pub name: String,
+    /// Whose key it is, when known: "Anthropic".
+    pub maker: String,
+    /// Its last few characters: "…a1B2".
+    pub hint: String,
+    /// The places it may go to.
+    pub hosts: Vec<String>,
+    pub added: String,
 }
 
 #[derive(Serialize, Clone, Debug, PartialEq)]
@@ -324,6 +348,9 @@ pub struct Ask {
 #[serde(rename_all = "camelCase")]
 pub struct TrustEntry {
     pub app_id: String,
+    /// The pack that brought this place, when one did: its id and name.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pack: Option<String>,
     pub host: String,
     pub label: String,
     pub purpose: String,

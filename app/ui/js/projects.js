@@ -80,6 +80,7 @@ function review(a, p, set) {
       ${clean ? `<button class="btn primary" data-do="proj-apply" data-key="pa-${esc(k)}"${doing ? ' disabled' : ''}>${doing === 'apply' ? 'Applying…' : `Apply ${plural(clean, 'change', 'changes')} to my folder`}</button>` : ''}
       ${set.conflicts ? `<button class="btn danger" data-do="proj-apply-all" data-key="pf-${esc(k)}"${doing ? ' disabled' : ''}>Apply all, replacing mine</button>` : ''}
       <button class="btn" data-do="proj-recheck" data-key="pr-${esc(k)}"${doing ? ' disabled' : ''}>Check again</button>
+      <button class="btn" data-do="proj-restart" data-key="ps-${esc(k)}"${doing ? ' disabled' : ''} title="Throw the copy away, with these changes, and bring your folder in again as it is now. Your own folder is not touched.">${doing === 'restart' ? 'Starting over…' : 'Throw these away'}</button>
       <button class="btn" data-do="proj-review" data-key="pc-${esc(k)}">Close</button>
     </div>
     <p class="pj-into">Goes into <span class="mono sel">${esc(tidy(p.source))}</span>. Version history inside the copy is not brought back; changes arrive as ordinary edits for you to review.</p>
@@ -151,6 +152,14 @@ export async function act(what, appId, name) {
     if (what === 'proj-term') { await invoke('app_open_terminal', { appId, project: name }); notes.set(k, 'Opening in a protected terminal, inside this folder’s copy.'); return rerender(); }
     if (what === 'proj-review') { open = open === k ? null : k; notes.delete(k); rerender(); if (open) count(appId, name); return; }
     if (what === 'proj-recheck') { sets.delete(k); rerender(); return count(appId, name); }
+    if (what === 'proj-restart') {
+      if (!window.confirm(`Throw away what the agent changed in its copy of ${name}?\n\nThe copy becomes your folder as it is now. Your own folder is not touched.`)) return;
+      busy.set(k, 'restart'); rerender();
+      await invoke('project_restart', { appId, name });
+      busy.delete(k); sets.delete(k); open = null;
+      notes.set(k, 'Started over: the copy is your folder as it is now.');
+      return load(appId);
+    }
     if (what === 'proj-remove') { confirm = k; return rerender(); }
     if (what === 'proj-remove-no') { confirm = null; return rerender(); }
     if (what === 'proj-remove-yes') {

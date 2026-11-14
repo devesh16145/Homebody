@@ -9,6 +9,8 @@ import { $, esc, patch, errText, fmtBytes, fmtCount, relTime, isToday, cleanHost
 import { icon, appTile } from './icons.js';
 import * as projects from './projects.js';
 import * as box from './box.js';
+import * as keys from './keys.js';
+import * as leaktest from './leaktest.js';
 
 let env = null;
 let shownId = null;
@@ -26,13 +28,14 @@ function matches(pattern, host) {
 }
 
 async function load(appId) {
-  const [events, trust, inside, web] = await Promise.all([
+  const [events, trust, inside, web, packs] = await Promise.all([
     invoke('get_feed', { appId, limit: 500 }).catch(() => []),
     invoke('get_trust', { appId }).catch(() => []),
     invoke('get_inside_rules', { appId }).catch(() => []),
     invoke('get_ai_sites', { appId }).catch(() => null),
+    invoke('get_packs', { appId }).catch(() => []),
   ]);
-  data.set(appId, { events, trust: trust.filter((t) => t.appId === appId), inside: inside.filter((r) => r.appId === appId), sites: (web && web.sites) || [], loadedAt: Date.now() });
+  data.set(appId, { events, trust: trust.filter((t) => t.appId === appId), inside: inside.filter((r) => r.appId === appId), sites: (web && web.sites) || [], packs: packs || [], loadedAt: Date.now() });
   if (shownId === appId) env.render();
 }
 
@@ -61,6 +64,15 @@ function places(d, askOn) {
     }
   }
   const state = (r) => (r.rule ? (r.rule.enabled ? 'allowed' : 'blocked') : askOn ? 'ask' : 'blocked');
+  // The places a pack brought are one line, named after what they are for.
+  for (const p of (d.packs || []).filter((p) => p.on)) {
+    const mine = [...rows.values()].filter((r) => r.rule && r.rule.pack === p.id);
+    if (!mine.length) continue;
+    const sum = (f) => mine.reduce((n, r) => n + f(r), 0);
+    mine.forEach((r) => rows.delete(r.key));
+    rows.set(`pack:${p.id}`, { key: `pack:${p.id}`, pack: p, host: mine.map((r) => r.host).join(', '), label: p.name, purpose: p.what, rule: { enabled: true },
+      today: sum((r) => r.today), todayBlocked: sum((r) => r.todayBlocked), sent: sum((r) => r.sent), last: mine.map((r) => r.last).filter(Boolean).sort().pop() || null });
+  }
   const list = [...rows.values()].map((r) => ({ ...r, state: state(r) }));
   const weight = (r) => (r.today || r.todayBlocked ? 0 : 1) * 10 + ({ allowed: 0, ask: 1, blocked: 2 })[r.state];
   list.sort((a, b) => weight(a) - weight(b) || (b.today + b.todayBlocked) - (a.today + a.todayBlocked) || a.label.localeCompare(b.label));
@@ -74,7 +86,24 @@ function activityText(r) {
   return 'Not used yet';
 }
 
+function packRow(appId, r) {
+  const p = r.pack, b = rowBusy === `${appId}|pack:${p.id}`;
+  return `<li class="pl pl-allowed" title="${esc(p.what + ' · ' + r.host)}">
+    <span class="pl-ic" aria-hidden="true">${icon('box')}</span>
+    <div class="grow pl-name"><b>${esc(p.name)}</b>${p.downloadsOnly ? '<span class="tag">Downloads only</span>' : ''}<small>${esc(activityText(r))}</small></div>
+    <span class="switch"><input type="checkbox" data-pack="${esc(p.id)}" aria-label="Allow ${esc(p.name)}" checked${b ? ' disabled' : ''}><i></i></span>
+  </li>`;
+}
+
+/** Packs that are not on yet, as one-click additions under the list. */
+function packOffers(d) {
+  const off = (d.packs || []).filter((p) => !p.on);
+  if (!off.length) return '';
+  return `<div class="pk"><span class="muted">Often needed:</span>${off.map((p) => `<button class="chip" data-do="pack-on" data-pack="${esc(p.id)}" data-key="pack-${esc(p.id)}" title="${esc(p.what + (p.downloadsOnly ? '. Downloads only: very little may be sent there.' : '') + ' ' + p.hosts.join(', '))}">${icon('plus')}${esc(p.name)}</button>`).join('')}</div>`;
+}
+
 function placeRow(appId, r) {
+  if (r.pack) return packRow(appId, r);
   const k = `${appId}|${r.host}`, b = rowBusy === k;
   const org = r.rule && r.rule.source === 'org';
   const tags = [
@@ -153,6 +182,8 @@ export function render(view, a, e) {
     inited = true;
     projects.init(() => { if (shownId) env.render(); });
     box.init(() => { if (shownId) env.render(); });
+    keys.init(() => { if (shownId) env.render(); });
+    leaktest.init(() => { if (shownId) env.render(); });
     // Coming back from the terminal is exactly when you want to see what the agent changed.
     window.addEventListener('focus', () => projects.refresh(shownId, 500));
     document.addEventListener('visibilitychange', () => { if (!document.hidden) projects.refresh(shownId, 500); });
@@ -162,6 +193,7 @@ export function render(view, a, e) {
     shownId = a.id; moreOpen = false; adding = false; addText = ''; error = '';
     projects.load(a.id);
     box.load(a.id);
+    keys.load(a.id);
     load(a.id);
     view.scrollTop = 0;
   }
@@ -193,10 +225,12 @@ export function render(view, a, e) {
       ${d ? `${list.length || auto.total || upkeep.length ? `<ul class="pls">${list.map((r) => placeRow(a.id, r)).join('')}${upkeepRow(upkeep)}${autoRow(auto)}</ul>`
           : `<p class="hm-empty">Nothing yet. ${s.ask !== false ? 'You’re asked' : 'It’s blocked'} the first time ${esc(a.name)} tries somewhere.</p>`}
         <div class="pl-foot">${adding ? `<form class="pl-add"><input name="host" value="${esc(addText)}" placeholder="example.com" aria-label="Place to allow" data-key="pl-add" autocomplete="off" autofocus><button class="cap tide sm" type="submit">Allow</button><button class="cap quiet sm" type="button" data-do="add-cancel">Cancel</button></form>`
-          : `<button class="cap sm" data-do="add-place">${icon('plus')}Add place</button>`}<span class="muted">${askWord}</span></div>`
+          : `<button class="cap sm" data-do="add-place">${icon('plus')}Add place</button>`}<span class="muted">${askWord}</span></div>${packOffers(d)}`
         : '<p class="muted">Loading…</p>'}
     </section>
+    ${keys.section(a)}
     ${box.section(a)}
+    ${leaktest.section(a)}
     <section class="hm-block">
       <button class="hm-more" data-do="more" aria-expanded="${moreOpen}">${icon('sliders')}<span class="grow"><b>Options</b></span>${icon('chevron', moreOpen ? 'rot' : '')}</button>
       ${moreOpen && d ? moreHtml(a, d) : ''}
@@ -219,6 +253,10 @@ function bind(view) {
         rowBusy = `${appId}|${t.dataset.place}`;
         await invoke('set_trust', { appId, host: t.dataset.place, enabled: t.checked });
         rowBusy = ''; await load(appId);
+      } else if (t.matches('[data-pack]')) {
+        rowBusy = `${appId}|pack:${t.dataset.pack}`;
+        await invoke('set_pack', { appId, pack: t.dataset.pack, on: t.checked });
+        rowBusy = ''; await load(appId);
       } else if (t.matches('[data-site]')) {
         rowBusy = `${appId}|site:${t.dataset.site}`;
         await invoke('browser_set_site', { appId, site: t.dataset.site, on: t.checked });
@@ -230,8 +268,12 @@ function bind(view) {
       else if (t.matches('input[data-suggest]')) projects.toggleSuggestion(appId, t.closest('.pj-item').dataset.project, Number(t.dataset.suggest), t.checked);
     } catch (e) { rowBusy = ''; if (t.type === 'checkbox') t.checked = !t.checked; env.ctx.toast(errText(e)); }
   });
-  view.addEventListener('input', (ev) => { if (ev.target.name === 'host' && ev.target.closest('.pl-add')) addText = ev.target.value; });
+  view.addEventListener('input', (ev) => {
+    if (ev.target.name === 'host' && ev.target.closest('.pl-add')) addText = ev.target.value;
+    if (keys.onInput(ev)) env.render();
+  });
   view.addEventListener('submit', async (ev) => {
+    if (ev.target.matches('.ky-form')) { ev.preventDefault(); return keys.submit(shownId); }
     if (!ev.target.matches('.pl-add')) return;
     ev.preventDefault();
     const host = cleanHost(addText);
@@ -247,6 +289,8 @@ export async function act(what, b) {
   if (!appId) return;
   if (what.startsWith('proj-')) { const it = b.closest('.pj-item'); return projects.act(what, appId, it && it.dataset.project); }
   if (what.startsWith('box-')) return box.act(what, appId);
+  if (what.startsWith('key-')) return keys.act(what, appId, b);
+  if (what.startsWith('leak-')) return leaktest.act(what, appId);
   if (what === 'more') { moreOpen = !moreOpen; return env.render(); }
   if (what === 'add-place') { adding = true; return env.render(); }
   if (what === 'add-cancel') { adding = false; addText = ''; return env.render(); }
@@ -257,13 +301,14 @@ export async function act(what, b) {
       rowBusy = '';
       await load(appId);
     }
+    if (what === 'pack-on') { await invoke('set_pack', { appId, pack: b.dataset.pack, on: true }); await load(appId); }
     if (what === 'launcher') { const r = await invoke('app_launcher', { appId, reveal: true }); env.ctx.toast('In Finder: ' + tidy(r.path)); }
     if (what === 'workspace') await invoke('app_open_workspace', { appId });
     if (what === 'remove') { if (confirm('Stop protecting this app? Its files stay where they are.')) { env.ctx.setStatus(await invoke('app_remove', { appId })); env.go('overview'); } }
   } catch (e) { rowBusy = ''; error = errText(e); env.render(); }
 }
 
-export function leave() { shownId = null; box.leave(); }
+export function leave() { shownId = null; box.leave(); keys.leave(); leaktest.leave(); }
 
 export function onEvent({ type, data: ev }) {
   if (!shownId) return;

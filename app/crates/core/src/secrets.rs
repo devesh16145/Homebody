@@ -222,6 +222,19 @@ impl DocIndex {
 }
 
 /// Looks at the content of one request as it passes.
+fn fingerprint_with(salt: &[u8], secret: &[u8]) -> String {
+    let mut h = Sha256::new();
+    h.update(salt);
+    h.update(b"|");
+    h.update(secret);
+    hex::encode(&h.finalize()[..8])
+}
+
+/// The fingerprint a scanner with this salt would give this secret.
+pub fn fingerprint(salt: &str, secret: &[u8]) -> String {
+    fingerprint_with(salt.as_bytes(), secret)
+}
+
 pub struct Scanner {
     salt: Vec<u8>,
     /// The most recent bytes, kept so that a secret arriving in pieces is still seen whole.
@@ -253,11 +266,7 @@ impl Scanner {
     }
 
     fn fingerprint(&self, secret: &[u8]) -> String {
-        let mut h = Sha256::new();
-        h.update(&self.salt);
-        h.update(b"|");
-        h.update(secret);
-        hex::encode(&h.finalize()[..8])
+        fingerprint_with(&self.salt, secret)
     }
 
     fn search(&self, buf: &[u8], at_end: bool) -> Option<Found> {

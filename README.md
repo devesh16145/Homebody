@@ -11,6 +11,7 @@ No account, no telemetry, nothing hosted. Apache-2.0. The engine and command lin
 ## What it does
 
 - **Lets an agent use what it starts.** An agent can open a preview server it started on your computer, and nobody else's.
+- **Covers everything the agent starts.** MCP servers, hooks, language servers, a helper run in the background: whatever a protected agent launches runs as the same private user under the same rules. An agent's own sandbox covers its shell commands and leaves those outside.
 - **Fences each AI app.** A protected app runs as its own macOS user, under a launch-time sandbox profile, behind per-user packet filter rules. Three layers, each checked every 30 seconds; nothing protected starts unless all three hold.
 - **One gate out.** Each protected app can reach the network only through its own local gate. The gate allows names you trust, refuses the rest, resolves names itself, refuses names that point back at your computer or home network, and checks that the name an app greets a server with is the name that was approved.
 - **Asks in plain words.** "Ollama wants to download a model. Allow once, always allow, or block?" Thirty seconds without an answer means no.
@@ -20,6 +21,9 @@ No account, no telemetry, nothing hosted. Apache-2.0. The engine and command lin
 - **Looks inside, if you ask it to.** Off by default. Switched on for an app, Homebody shows which addresses inside a trusted place the app asked for, and stops a trusted name being used as cover for another site. You can then switch off one address inside a place and keep the rest: usage logging off, the conversation on. It records paths and sizes, never content, and changes nothing about which certificates your Mac trusts.
 - **Stops secrets leaving.** While it looks inside, a request carrying something that looks like a private key or an access token is stopped before the secret leaves, and you decide whether that one may go. Web socket messages are read the same way.
 - **Keeps your private folders private.** Mark a folder and, while it looks inside, a request that repeats lines from a file in it is stopped.
+- **Keeps your API keys out of the agent's hands.** Homebody holds the key and hands the agent a stand-in. The real key is put in at the gate, only for the place it is for; a stand-in sent anywhere else is stopped and named in Activity. [docs/keys.md](docs/keys.md)
+- **One switch for what agents usually need.** npm, Python, Rust, Go, Ruby, Java, Homebrew, Docker Hub and GitHub each come as a pack. The package sources are downloads-only: almost nothing may be sent to them, so a registry cannot be used to carry your work out.
+- **Lets you see it hold.** *Test it* on an app's page tries to get out as that app (straight to the internet, around the gate, into your files) and shows what happened to each attempt.
 - **Limits how much can go.** Each trusted place can have an hourly limit on what an app may send there, or be set to downloads only. This works for every app.
 - **Watch mode.** Allow everything for an hour, then see exactly what your AI contacted and choose what to trust.
 - **Report.** An append-only, hash-chained, Ed25519-signed log, with a weekly summary per app. Export it as a folder (the log, a spreadsheet of activity, the rules in force) and anyone can check it with `homebody verify <folder>`. A public time-stamping service can vouch for when it existed; only a fingerprint is sent.
@@ -34,7 +38,7 @@ Newer, and less tried than the list above (each has its own page saying exactly 
 - **For reviewers.** The rules as Cedar policies, the evidence mapped to NIST SP 800-53 and OWASP's list for AI agents ([docs/compliance.md](docs/compliance.md)), an engine that rebuilds to the same file bit for bit, and a pack for an independent review ([docs/audit](docs/audit/README.md)). No independent review has been done yet.
 - **In your editor.** Plugins for VS Code and Cursor ([editors/vscode](editors/vscode/README.md)) and for JetBrains editors ([editors/jetbrains](editors/jetbrains/README.md)).
 
-Protected today: **Claude Code** and **Ollama** (both tested live, including a model download and GPU inference under the fence). Also recognised and run protected (not signed in), each seen to send everything through the gate: **Codex CLI, Gemini CLI, Aider and opencode**. Presets also exist for **llama.cpp, Cursor CLI and OpenClaw**, written from their documentation and not yet run here. Any other command-line program can be added with *Add app*. So can a windowed app, with [lighter protection](#what-it-does-not-do-yet): tested live with one Electron app (Obsidian), whose three start-up contacts came up as questions instead of going out.
+Protected today: **Claude Code** (a real signed-in session, start to finish) and **Ollama** (a model download and GPU inference under the fence). Also recognised and run protected (not signed in), each seen to send everything through the gate: **Codex CLI, Gemini CLI, Aider and opencode**. Presets also exist for **GitHub Copilot CLI, Goose, Amp, Qwen Code, Crush, Kiro CLI, Cline CLI, Droid, llama.cpp, Cursor CLI and OpenClaw**, written from their makers' documentation and not yet run here. Any other command-line program can be added with *Add app*. So can a windowed app, with [lighter protection](#what-it-does-not-do-yet): tested live with one Electron app (Obsidian), whose three start-up contacts came up as questions instead of going out.
 
 ## Try it
 
@@ -57,14 +61,14 @@ There is also a command line, `homebody`, that drives the same core:
 ## Check it yourself
 
 ```bash
-cd app && cargo test -p sai-core
+cd app && cargo test -p homebody-core
 ```
 
 ```bash
 cd app && tests/bypass-corpus.sh
 ```
 
-The second one is every way around the gate or the fence that we know of, as executable checks (81 at the time of writing). It needs the app running and setup done. If you find a way around that is not in it, that is the most valuable contribution you can make: see [SECURITY.md](SECURITY.md).
+The second one is every way around the gate or the fence that we know of, as executable checks (105 at the time of writing). It needs the app running and setup done. If you find a way around that is not in it, that is the most valuable contribution you can make: see [SECURITY.md](SECURITY.md).
 
 ## What it does not do yet
 

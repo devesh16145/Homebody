@@ -153,6 +153,9 @@ function actionsHtml(e) {
     return `<span class="ev-state">Waiting for your answer</span><span data-ask="${esc(ask.id)}" class="row">`
       + btn('block', 'Block') + btn('once', 'Once') + btn('always', 'Always', 'tide') + '</span>' + errHtml;
   }
+  if (e.keyStopped) {
+    return '<span class="ev-state">Stopped: a key Homebody keeps was headed somewhere it is not for. The app only had a stand-in.</span>' + errHtml;
+  }
   if (e.secret) {
     return e.secret.allowed
       ? `<span class="ev-state">You have since let this one through for ${esc(e.appName)}.</span>` + btn('secret-stop', 'Stop it again') + errHtml
@@ -189,7 +192,9 @@ function detailHtml(e) {
           ? `<span class="ev-inside-state">Switched off</span><button class="cap sm" data-do="inside-on" data-path="${esc(r.path)}" data-key="in-${esc(r.path)}">Allow</button>`
           : `<button class="cap sm" data-do="inside-off" data-path="${esc(r.path)}" data-key="in-${esc(r.path)}" title="Refuse requests to this address from now on. Everything else at ${esc(e.label || e.host)} keeps working.">Refuse</button>`) : ''}</li>`).join('')}</ul></div>`
     : e.requests ? '<div class="ev-inside"><span class="ev-inside-h">Looked inside: no requests were made in this connection</span></div>' : '';
-  return `<div class="ev-detail"><p class="sel">${esc(e.explanation)}</p>${inside}
+  const keysUsed = e.keys && e.keys.length
+    ? `<div class="ev-inside"><span class="ev-inside-h">Homebody put in ${e.keys.length === 1 ? 'a key it keeps' : 'keys it keeps'}: <span class="mono">${e.keys.map(esc).join(', ')}</span>. ${esc(e.appName)} only had a stand-in.</span></div>` : '';
+  return `<div class="ev-detail"><p class="sel">${esc(e.explanation)}</p>${inside}${keysUsed}
     <div class="ev-meta">${meta.join('')}</div>
     <div class="ev-actions">${actionsHtml(e)}</div></div>`;
 }

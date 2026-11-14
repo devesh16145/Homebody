@@ -34,6 +34,18 @@ New
 - For organisations: `homebody-fleet`, a server you run yourself. Joined computers take its signed rules and send it their logs. A web console with roles, sign-in through your identity provider, provisioning, evidence bundles, and a management profile for Macs.
 - For reviewers: the rules as Cedar policies (`homebody policy`), a mapping of the evidence to NIST SP 800-53 and OWASP's list for AI agents, and an engine that rebuilds to the same file bit for bit.
 - Editor plugins: VS Code and Cursor, and JetBrains editors. A status indicator, Homebody's questions, an agent opened protected on a copy of the open project. Each has a test that runs it inside the real editor.
+- Keys that stay home: Homebody can keep an API key for an agent. The agent is handed a stand-in; the real key is put into its requests at the gate, only for the place it is for. A stand-in sent anywhere else is stopped and named in Activity. See `docs/keys.md`.
+- Packs: one switch each for npm, Python, Rust, Go, Ruby, Java, Homebrew, Docker Hub and GitHub. Package sources are downloads-only.
+- Test it: on an app's page, Homebody tries to get out as that app and shows what happened to each attempt. `homebody test <app>` does the same.
+- Eight more agents are recognised: GitHub Copilot CLI, Goose, Amp, Qwen Code, Crush, Kiro CLI, Cline CLI and Droid. For each, only what its maker says it cannot work without is trusted, and its usage statistics are switched off.
+- In the Box: Look inside works, and a key Homebody keeps reaches the Box only as a stand-in. The real key never enters the machine.
+- Throw away what an agent did to its copy of a project and start over from your folder, in one click.
+- With looking inside on, a second request can no longer be hidden inside the first (SAI-2026-006).
+- An hourly limit can no longer be exceeded by many connections sending at once, and the first bytes of a connection count (SAI-2026-007).
+- A link planted in an agent's workspace can no longer send a copy of your project somewhere else (SAI-2026-008).
+- `homebody verify` checks a shared proof file as well as an exported log.
+- The app is sealed as a whole when it is built. A download of an unsealed app is shown by macOS as "damaged", with no way to open it; a sealed one gets the ordinary warning for apps without an Apple signature.
+- Every release build is now tried on a second Mac that has never had Homebody: installed from the disk image, set up, attacked with the whole bypass corpus, and removed again.
 - A question you did not see is not lost. When nobody answers in time the place is still blocked, but the question stays on screen with its answers until you deal with it. The question window follows you to whichever desktop and screen you are on, and makes a soft sound (Settings can switch that off).
 - A protected app can no longer put a macOS password or keychain prompt on your screen (SAI-2026-005). Signing in to Claude Code under Homebody no longer stops at "Keychain Not Found".
 - A protected program never outlives its terminal. Closing an agent's terminal in an editor used to leave the agent running unseen until the editor quit; `homebody run` now stays beside the program and ends it.

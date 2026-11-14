@@ -20,6 +20,9 @@ This is a volunteer project with no paid support and no bounty. You will get an 
 - The signed log can be changed, cut or reordered and still pass `homebody verify`.
 - Anything in settings, an app name or a project that ends up running as administrator during setup.
 - With looking inside on: a request that reaches a site other than the approved one, a request the gate passed on without being able to follow it, anything after "?" or any content ending up in the log, the local certificate authority's key being readable by a protected app, any spelling of an address that is switched off reaching the real server, a secret of a recognised shape, sent as it is in the content of a request or of a web socket message, reaching the real server whole or in part, or anything at all reaching the real server on a connection the gate has stopped following.
+- A key Homebody keeps for an app (see [docs/keys.md](docs/keys.md)): the app, or anything it starts, gets to read the real key; the real key is put into a request to a place it was not named for; or the key ends up in the log, the settings or an export.
+- A pack marked downloads-only lets more than its hourly limit be sent to one of its places.
+- *Test it* reports an attempt as stopped that in fact got through.
 - Applying a project's changes writes outside the folder it was brought in from.
 - On Linux or Windows: any of the above for a protected app there. The fences are described in [docs/platforms.md](docs/platforms.md).
 - In the Box: anything inside it reaches the network other than through the gate, sees a folder of the Mac other than the shared one, or leaves something behind that the next start still has.

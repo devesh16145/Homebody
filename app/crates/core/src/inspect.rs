@@ -250,6 +250,9 @@ pub enum Trouble {
     Refused(String),
     /// The content of a request held something that looks like a secret.
     Secret(crate::secrets::Found),
+    /// The request carried the stand-in for a key Homebody keeps where it may not go: to a
+    /// place the key is not for, or not where a credential belongs (see `keys::Misuse`).
+    Key(crate::keys::Misuse),
 }
 
 const HEAD_LIMIT: usize = 64 * 1024;
@@ -297,12 +300,24 @@ pub struct Sniffer {
     waiting: std::collections::VecDeque<(Vec<u8>, bool)>,
     /// How many waiting content bytes the scanner has cleared.
     cleared: usize,
+    /// The keys Homebody keeps for this app (see `keys`): each one's stand-in, and the real key
+    /// when this place is one it may go to. Asked for with every request, so that a key that
+    /// is removed stops being put in at once, even on a connection that is already open.
+    keys: Option<Box<dyn Fn() -> Vec<crate::keys::Swap> + Send>>,
+    /// The names of the keys that were put into requests on this connection.
+    pub keys_used: Vec<String>,
 }
 
 impl Sniffer {
     /// Also look at the content of each request for secrets (see `secrets`).
     pub fn scanning(mut self, scanner: crate::secrets::Scanner) -> Sniffer {
         self.scanner = Some(scanner);
+        self
+    }
+
+    /// Put the real key in wherever a request's headers carry its stand-in (see `keys`).
+    pub fn with_keys(mut self, keys: impl Fn() -> Vec<crate::keys::Swap> + Send + 'static) -> Sniffer {
+        self.keys = Some(Box::new(keys));
         self
     }
 
@@ -365,7 +380,7 @@ impl Sniffer {
 
     /// `allow(method, path)`: the user's switches for addresses inside this place.
     pub fn with_rules(host: &str, allow: impl Fn(&str, &str) -> bool + Send + 'static) -> Sniffer {
-        Sniffer { host: host.to_ascii_lowercase(), state: State::Head, buf: Vec::new(), seen: Vec::new(), requests: 0, allow: Box::new(allow), held: Vec::new(), scanner: None, waiting: Default::default(), cleared: 0 }
+        Sniffer { host: host.to_ascii_lowercase(), state: State::Head, buf: Vec::new(), seen: Vec::new(), requests: 0, allow: Box::new(allow), held: Vec::new(), scanner: None, waiting: Default::default(), cleared: 0, keys: None, keys_used: Vec::new() }
     }
 
     /// Whether the app has asked to switch to a web socket and the server has not answered yet.
@@ -509,6 +524,12 @@ impl Sniffer {
         let mut part: Vec<u8> = self.buf[..at].to_vec();
         let used = at + end.len() - before;
         self.buf.clear();
+        // Lines end in CR LF and in nothing else. Some servers also take a lone LF as the end
+        // of a line; reading it one way here and another way there is how a second request
+        // is hidden inside the first, so a lone CR or LF anywhere is refused.
+        if !proper_lines(&part, matches!(self.state, State::Head)) {
+            return Err(Trouble::NotUnderstood("a line that does not end the ordinary way"));
+        }
         match self.state {
             State::Head => {
                 self.on_head(&part)?;
@@ -520,10 +541,24 @@ impl Sniffer {
                     let kept: Vec<&str> = text.split("\r\n").filter(|line| !line.to_ascii_lowercase().starts_with("sec-websocket-extensions:")).collect();
                     part = kept.join("\r\n").into_bytes();
                 }
+                // Checked as the app wrote it; only now does a key Homebody keeps go in, so
+                // the real key is never in anything that is judged, shown or written down.
+                if let Some(keys) = &self.keys {
+                    let (swapped, used) = crate::keys::swap(&part, &keys()).map_err(Trouble::Key)?;
+                    part = swapped;
+                    for name in used {
+                        if !self.keys_used.contains(&name) {
+                            self.keys_used.push(name);
+                        }
+                    }
+                }
             }
             State::ChunkSize => {
                 let line = std::str::from_utf8(&part).map_err(|_| Trouble::NotUnderstood("a chunk size that is not text"))?;
-                let hex = line.split(';').next().unwrap_or("").trim();
+                let hex = line.split(';').next().unwrap_or("").trim_matches([' ', '\t']);
+                if hex.is_empty() || !hex.bytes().all(|b| b.is_ascii_hexdigit()) {
+                    return Err(Trouble::NotUnderstood("a chunk size that is not a number"));
+                }
                 let size = u64::from_str_radix(hex, 16).map_err(|_| Trouble::NotUnderstood("a chunk size that is not a number"))?;
                 if size == 0 {
                     // The last chunk: the content is complete.
@@ -558,7 +593,8 @@ impl Sniffer {
         let mut headers = [httparse::EMPTY_HEADER; 96];
         let mut req = httparse::Request::new(&mut headers);
         match req.parse(&text) {
-            Ok(httparse::Status::Complete(_)) => {}
+            // All of it: a parser that stopped early saw a shorter request than will be sent.
+            Ok(httparse::Status::Complete(n)) if n == text.len() => {}
             _ => return Err(Trouble::NotUnderstood("a request that is not ordinary HTTP")),
         }
         let method = req.method.unwrap_or("").to_string();
@@ -568,13 +604,17 @@ impl Sniffer {
         }
         let (mut host, mut length, mut chunked, mut upgrade) = (None::<String>, None::<u64>, false, None::<String>);
         for h in req.headers.iter() {
-            let value = std::str::from_utf8(h.value).map_err(|_| Trouble::NotUnderstood("a header that is not text"))?.trim();
+            let value = std::str::from_utf8(h.value).map_err(|_| Trouble::NotUnderstood("a header that is not text"))?.trim_matches([' ', '\t']);
             if h.name.eq_ignore_ascii_case("host") {
                 if host.is_some() {
                     return Err(Trouble::NotUnderstood("two Host headers"));
                 }
                 host = Some(value.to_ascii_lowercase());
             } else if h.name.eq_ignore_ascii_case("content-length") {
+                // Digits only: "+5" is a number to some readers and an error to others.
+                if value.is_empty() || !value.bytes().all(|b| b.is_ascii_digit()) {
+                    return Err(Trouble::NotUnderstood("a length that is not a number"));
+                }
                 let n = value.parse::<u64>().map_err(|_| Trouble::NotUnderstood("a length that is not a number"))?;
                 if length.is_some_and(|l| l != n) {
                     return Err(Trouble::NotUnderstood("two different lengths"));
@@ -586,6 +626,9 @@ impl Sniffer {
                 }
                 chunked = true;
             } else if h.name.eq_ignore_ascii_case("upgrade") {
+                if upgrade.is_some() {
+                    return Err(Trouble::NotUnderstood("two requests to switch"));
+                }
                 upgrade = Some(value.to_ascii_lowercase());
             }
         }
@@ -596,9 +639,11 @@ impl Sniffer {
         if bare != self.host {
             return Err(Trouble::OtherSite(named.chars().filter(|c| !c.is_control()).take(80).collect()));
         }
-        // A full address in the request line must name the same site too.
-        if let Some(rest) = target.strip_prefix("https://").or_else(|| target.strip_prefix("http://")) {
-            let authority = rest.split('/').next().unwrap_or("").to_ascii_lowercase();
+        // Ordinarily the request line holds a path. A full address there must name the same
+        // site too, however its start is spelled; anything else is not something we can follow.
+        if !target.starts_with('/') && !(target == "*" && method.eq_ignore_ascii_case("OPTIONS")) {
+            let Some(rest) = after_scheme(target) else { return Err(Trouble::NotUnderstood("an address that is neither a path nor a web address")) };
+            let authority = rest.split(['/', '?', '#']).next().unwrap_or("").to_ascii_lowercase();
             if authority.strip_suffix(":443").unwrap_or(&authority) != self.host {
                 return Err(Trouble::OtherSite(authority.chars().filter(|c| !c.is_control()).take(80).collect()));
             }
@@ -656,9 +701,27 @@ impl Sniffer {
 
 /// The path of a request as it is shown, matched against rules and written down: no site, and
 /// nothing after "?" or "#", which can carry keys and personal data.
+/// What follows "http://" or "https://" at the start of a full address, however it is spelled.
+fn after_scheme(target: &str) -> Option<&str> {
+    ["https://", "http://"].iter().find(|s| target.len() >= s.len() && target.is_char_boundary(s.len()) && target[..s.len()].eq_ignore_ascii_case(s)).map(|s| &target[s.len()..])
+}
+
+/// Whether these bytes use CR LF, and only CR LF, to end lines. `several`: the start of a
+/// request, which is several lines; otherwise one line, which holds neither character.
+fn proper_lines(part: &[u8], several: bool) -> bool {
+    for (i, b) in part.iter().enumerate() {
+        match b {
+            b'\r' if !several || part.get(i + 1) != Some(&b'\n') => return false,
+            b'\n' if !several || i == 0 || part[i - 1] != b'\r' => return false,
+            _ => {}
+        }
+    }
+    true
+}
+
 pub fn clean_path(target: &str) -> String {
     let path = target.split(['?', '#']).next().unwrap_or("");
-    let path = path.strip_prefix("https://").or_else(|| path.strip_prefix("http://")).map(|r| r.find('/').map(|i| &r[i..]).unwrap_or("/")).unwrap_or(path);
+    let path = after_scheme(path).map(|r| r.find('/').map(|i| &r[i..]).unwrap_or("/")).unwrap_or(path);
     let shown: String = path.chars().filter(|c| c.is_ascii_graphic()).take(120).collect();
     if shown.is_empty() { "/".into() } else { shown }
 }
@@ -670,7 +733,7 @@ pub fn clean_path(target: &str) -> String {
 /// by respelling it. Never shown or written down, and never shortened.
 pub fn rule_path(target: &str) -> String {
     let path = target.split(['?', '#']).next().unwrap_or("");
-    let path = path.strip_prefix("https://").or_else(|| path.strip_prefix("http://")).map(|r| r.find('/').map(|i| &r[i..]).unwrap_or("/")).unwrap_or(path);
+    let path = after_scheme(path).map(|r| r.find('/').map(|i| &r[i..]).unwrap_or("/")).unwrap_or(path);
     // Undo %XX escapes (once, as servers do).
     let bytes = path.as_bytes();
     let mut plain: Vec<u8> = Vec::with_capacity(bytes.len());
@@ -1080,6 +1143,88 @@ GET /v1/models HTTP/1.1\r\nHost: api.example.com\r\n\r\n";
         let mut compressed = frame(1, true, b"hello");
         compressed[0] |= 0x40;
         assert!(matches!(passed(switched(scanning(false)), &compressed, 3).1, Some(Trouble::NotUnderstood(_))));
+    }
+
+    fn kept(real: Option<&str>) -> impl Fn() -> Vec<crate::keys::Swap> + Send + 'static {
+        let fate = match real {
+            Some(r) => crate::keys::Fate::Here(r.as_bytes().to_vec()),
+            None => crate::keys::Fate::Elsewhere,
+        };
+        move || vec![crate::keys::Swap { name: "ANTHROPIC_API_KEY".into(), stand_in: b"sk-ant-STANDIN0000".to_vec(), fate: fate.clone() }]
+    }
+
+    #[test]
+    fn a_kept_key_goes_in_at_the_gate_and_is_never_written_down() {
+        let request = b"POST /v1/messages?key=sk-ant-STANDIN0000 HTTP/1.1\r\nHost: api.anthropic.com\r\nx-api-key: sk-ant-STANDIN0000\r\nContent-Length: 5\r\n\r\nhello";
+        // However the bytes arrive, the real key is what leaves, and the content is untouched.
+        for step in [1, 7, 4096] {
+            let mut s = Sniffer::new("api.anthropic.com").with_keys(kept(Some("sk-ant-REALREAL11")));
+            let mut pass = Vec::new();
+            for piece in request.chunks(step) {
+                s.feed(piece, &mut pass).unwrap();
+            }
+            assert_eq!(pass, b"POST /v1/messages?key=sk-ant-REALREAL11 HTTP/1.1\r\nHost: api.anthropic.com\r\nx-api-key: sk-ant-REALREAL11\r\nContent-Length: 5\r\n\r\nhello".to_vec(), "step {step}");
+            assert_eq!(s.keys_used, vec!["ANTHROPIC_API_KEY"]);
+            assert_eq!(s.summary(), vec![("POST /v1/messages".to_string(), 1)], "neither key is in what is written down");
+        }
+    }
+
+    #[test]
+    fn a_kept_key_does_not_leave_for_the_wrong_place_or_in_the_wrong_part() {
+        // The same stand-in, on a connection to a place the key is not meant for.
+        let request = b"POST /collect HTTP/1.1\r\nHost: api.openai.com\r\nAuthorization: Bearer sk-ant-STANDIN0000\r\nContent-Length: 2\r\n\r\nhi";
+        let mut s = Sniffer::new("api.openai.com").with_keys(kept(None));
+        let mut pass = Vec::new();
+        assert_eq!(s.feed(request, &mut pass), Err(Trouble::Key(crate::keys::Misuse::Elsewhere("ANTHROPIC_API_KEY".into()))));
+        assert!(pass.is_empty(), "nothing of the request left");
+        // To the right place, but in the address, where an error page would quote it back.
+        let mut s = Sniffer::new("api.anthropic.com").with_keys(kept(Some("sk-ant-REALREAL11")));
+        let mut pass = Vec::new();
+        assert_eq!(s.feed(b"GET /v1/sk-ant-STANDIN0000 HTTP/1.1\r\nHost: api.anthropic.com\r\n\r\n", &mut pass), Err(Trouble::Key(crate::keys::Misuse::Misplaced("ANTHROPIC_API_KEY".into()))));
+        assert!(pass.is_empty());
+        // A request that does not carry it is not affected.
+        let mut s = Sniffer::new("api.openai.com").with_keys(kept(None));
+        let mut pass = Vec::new();
+        s.feed(b"GET /v1/models HTTP/1.1\r\nHost: api.openai.com\r\n\r\n", &mut pass).unwrap();
+        assert_eq!(pass, b"GET /v1/models HTTP/1.1\r\nHost: api.openai.com\r\n\r\n".to_vec());
+    }
+
+    #[test]
+    fn a_second_request_cannot_hide_behind_a_lone_line_feed() {
+        // Some servers end a line at a lone LF. Read that way, this is two requests, and the
+        // second names another site and carries the key. Read our way it used to be one.
+        let hidden = b"GET / HTTP/1.1\r\nHost: api.anthropic.com\n\r\nPOST /take HTTP/1.1\r\nHost: other.example\r\nx-api-key: sk-ant-STANDIN0000\r\nContent-Length: 2\n\nhi\r\n\r\n";
+        for step in [1, 5, 4096] {
+            let mut s = Sniffer::new("api.anthropic.com").with_keys(kept(Some("sk-ant-REALREAL11")));
+            let mut pass = Vec::new();
+            let mut verdict = Ok(());
+            for piece in hidden.chunks(step) {
+                verdict = s.feed(piece, &mut pass);
+                if verdict.is_err() {
+                    break;
+                }
+            }
+            assert!(matches!(verdict, Err(Trouble::NotUnderstood(_))), "step {step}: {verdict:?}");
+            assert!(pass.is_empty(), "nothing left, and certainly not the key");
+        }
+        // The same in the parts between pieces of content, and a lone CR.
+        for bad in [&b"POST / HTTP/1.1\r\nHost: h\r\nTransfer-Encoding: chunked\r\n\r\n0;x\n\nGET /2 HTTP/1.1\r\n\r\n"[..], &b"GET / HTTP/1.1\r\nHost: h\rX: y\r\n\r\n"[..], &b"POST / HTTP/1.1\r\nHost: h\r\nTransfer-Encoding: chunked\r\n\r\n0\r\nX: a\nGET /2 HTTP/1.1\r\n\r\n"[..]] {
+            assert!(matches!(feed_all("h", bad, 4096), Err(Trouble::NotUnderstood(_))), "{:?}", String::from_utf8_lossy(bad));
+        }
+    }
+
+    #[test]
+    fn a_full_address_is_checked_however_it_is_spelled_and_numbers_are_numbers() {
+        // "HTTPS://" in capitals used to skip the check that the address names the approved site.
+        assert!(matches!(feed_all("api.anthropic.com", b"GET HTTPS://other.example/x HTTP/1.1\r\nHost: api.anthropic.com\r\n\r\n", 4096), Err(Trouble::OtherSite(_))));
+        assert!(matches!(feed_all("api.anthropic.com", b"GET ftp://api.anthropic.com/x HTTP/1.1\r\nHost: api.anthropic.com\r\n\r\n", 4096), Err(Trouble::NotUnderstood(_))));
+        assert!(feed_all("api.anthropic.com", b"GET HTTPS://API.anthropic.com/x HTTP/1.1\r\nHost: api.anthropic.com\r\n\r\n", 4096).is_ok());
+        assert_eq!(rule_path("HTTPS://api.anthropic.com/api/Event_Logging/v2"), "/api/event_logging/v2");
+        assert_eq!(clean_path("HtTp://h/a/b?x"), "/a/b");
+        // A length or a chunk size with a sign is a number to some readers and not to others.
+        assert!(matches!(feed_all("h", b"POST / HTTP/1.1\r\nHost: h\r\nContent-Length: +5\r\n\r\nhello", 4096), Err(Trouble::NotUnderstood(_))));
+        assert!(matches!(feed_all("h", b"POST / HTTP/1.1\r\nHost: h\r\nTransfer-Encoding: chunked\r\n\r\n+5\r\nhello\r\n0\r\n\r\n", 4096), Err(Trouble::NotUnderstood(_))));
+        assert!(matches!(feed_all("h", b"GET / HTTP/1.1\r\nHost: h\r\nUpgrade: websocket\r\nUpgrade: h2c\r\n\r\n", 4096), Err(Trouble::NotUnderstood(_))));
     }
 
     #[test]

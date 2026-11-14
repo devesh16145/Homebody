@@ -152,6 +152,7 @@ const HELP: &str = "homebody: the Homebody command line
   homebody project add <app> <folder>  bring a folder in: the agent works on a copy
   homebody project changes <app> <name>   what the agent changed in its copy
   homebody project apply <app> <name> [--replace-mine]   put those changes into your folder
+  homebody project restart <app> <name>   throw the copy away and bring your folder in afresh
   homebody project remove <app> <name>    delete the copy (your folder is not touched)
   homebody run <app> -- <command...>   run a command protected, in this terminal
   homebody ci [options] <app> -- <command...>   the same with nobody at the keyboard (homebody ci --help)
@@ -160,6 +161,10 @@ const HELP: &str = "homebody: the Homebody command line
   homebody open [feed|proof|studio|glance]   show a window of the running app
   homebody inspect <app> on|off        look inside an app's connections to trusted places
   homebody secrets <app> on|off        while looking inside, stop requests that carry a secret
+  homebody test <app>                  try to get out as the app, and see what is stopped
+  homebody key <app>                   the keys Homebody keeps for an app (it gets a stand-in)
+  homebody key <app> set <NAME> [--to place,place]   keep a key; the key itself is read from input
+  homebody key <app> remove <NAME>     stop keeping it
   homebody inside [app]                switches for addresses inside trusted places
   homebody ask on|off                  ask about new places, or block them without asking
   homebody limit <app> <place> <MB|off>   megabytes an app may send to a place per hour
@@ -358,6 +363,43 @@ async fn main() {
                 }
             }
         }
+        // A proof file ("Share proof"): a signed statement, checked here without the running app.
+        "verify" if a(1).ends_with(".json") && std::fs::read(a(1)).ok().and_then(|b| serde_json::from_slice::<Value>(&b).ok()).is_some_and(|v| v.get("proof").is_some()) => {
+            let file: Value = std::fs::read(a(1)).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or(Value::Null);
+            // What a proof says is printed with anything that could move the cursor or recolour
+            // the terminal taken out, so a made-up file cannot paint over the lines around it.
+            let plain = |t: &str| t.chars().filter(|c| !c.is_control()).take(600).collect::<String>();
+            let expected = args.iter().position(|x| x == "--key").and_then(|i| args.get(i + 1)).cloned();
+            match homebody_core::ledger::verify_proof(&file) {
+                Ok(p) => {
+                    let key = plain(s(&p, "publicKey"));
+                    println!("signed with key: {key}");
+                    // Whose key that is cannot be told from the file: it names its own key.
+                    let mine = homebody_core::ledger::public_key_of(&homebody_core::paths::ledger_key());
+                    match (&expected, &mine) {
+                        (Some(want), _) if *want != key => {
+                            println!("FAILED: that is not the key you expected ({}).", plain(want));
+                            std::process::exit(2);
+                        }
+                        (Some(_), _) => println!("That is the key you expected."),
+                        (None, Some(m)) if *m == key => println!("That is this computer's own key."),
+                        (None, Some(_)) => println!("That is NOT this computer's key. Anyone can sign a statement with a key of their own: compare it with the key on the Report screen of the computer this is said to come from, or pass it with --key."),
+                        (None, None) => println!("Anyone can sign a statement with a key of their own: compare it with the key on the Report screen of the computer this is said to come from, or pass it with --key."),
+                    }
+                    println!("The statement is exactly as it was signed, on {}:", plain(s(&p, "generatedAt")));
+                    println!("  \"{}\"", plain(s(&p, "statement")));
+                    if p["log"]["verified"].as_bool() == Some(false) {
+                        println!("WARNING: when this was signed, that computer's own log did NOT check out: {}", plain(s(&p["log"], "error")));
+                        std::process::exit(2);
+                    }
+                    println!("The signature shows who said this. The exported log is what shows it to be so.");
+                }
+                Err(e) => {
+                    println!("FAILED: {e}");
+                    std::process::exit(2);
+                }
+            }
+        }
         "verify" if !a(1).is_empty() => {
             // A file exported with "Export": checked here, without the running app. Given the
             // export folder, the log inside it is the thing to check.
@@ -495,6 +537,10 @@ async fn main() {
                     println!("  left alone (you changed it too): {}", path.as_str().unwrap_or(""));
                 }
             }
+            "restart" => {
+                call("project_restart", json!({ "appId": a(2), "name": a(3) })).await;
+                println!("Started over: the copy is your folder as it is now. Your own folder was not touched.");
+            }
             "remove" => {
                 call("project_remove", json!({ "appId": a(2), "name": a(3) })).await;
                 println!("Copy removed. Your own folder was not touched.");
@@ -527,6 +573,66 @@ async fn main() {
                 if s(app, "id") == a(1) {
                     println!("{}: stopping secrets is {}", s(app, "name"), if app["secrets"].as_bool() == Some(true) { "on" } else { "off" });
                 }
+            }
+        }
+        "test" => {
+            let r = call("leak_test", json!({ "appId": a(1) })).await;
+            println!("Trying to get out as {}:", s(&r, "appName"));
+            for c in r["cases"].as_array().into_iter().flatten() {
+                let mark = match s(c, "outcome") {
+                    "stopped" => "\u{2713} stopped:",
+                    "through" => "\u{2717} GOT THROUGH:",
+                    _ => "? could not tell:",
+                };
+                println!("  {mark} {}", s(c, "what"));
+            }
+            if r["through"].as_u64().unwrap_or(0) > 0 {
+                println!("Something got through. Do not rely on protection for this app until this is understood.");
+                std::process::exit(1);
+            }
+            if r["held"].as_bool() != Some(true) {
+                println!("Not every attempt could be judged (it did not finish, or was ended from outside). That is not a pass. Try again with the app closed.");
+                std::process::exit(3);
+            }
+            println!("Everything was stopped.");
+        }
+        "key" => {
+            let app = a(1);
+            let what = a(2);
+            match &what[..] {
+                "set" => {
+                    let name = a(3);
+                    let to: Option<Vec<String>> = args.iter().position(|x| x == "--to").and_then(|i| args.get(i + 1)).map(|v| v.split(',').map(|h| h.trim().to_string()).filter(|h| !h.is_empty()).collect());
+                    if to.as_ref().is_some_and(|t| t.is_empty()) || (args.iter().any(|x| x == "--to") && to.is_none()) {
+                        eprintln!("After --to, name the place the key is for: --to api.example.com");
+                        std::process::exit(1);
+                    }
+                    // The key is never an argument: a command line can be read by every user of
+                    // the computer and ends up in the shell's history.
+                    use std::io::IsTerminal;
+                    if std::io::stdin().is_terminal() {
+                        eprintln!("Paste the key and press Return (it is shown as you paste it; nothing is kept in your shell's history):");
+                    }
+                    let mut value = String::new();
+                    let _ = std::io::stdin().read_line(&mut value);
+                    call("key_set", json!({ "appId": app, "name": name, "value": value.trim(), "hosts": to })).await;
+                }
+                "remove" => {
+                    call("key_remove", json!({ "appId": app, "name": a(3) })).await;
+                }
+                _ => {}
+            }
+            let r = call("get_keys", json!({ "appId": app })).await;
+            let keys: Vec<&Value> = r["keys"].as_array().into_iter().flatten().collect();
+            if keys.is_empty() {
+                println!("Homebody keeps no keys for {app}.");
+                if r["canKeep"].as_bool() == Some(false) {
+                    println!("It cannot: {}", s(&r, "why"));
+                }
+            }
+            for k in keys {
+                let places: Vec<&str> = k["hosts"].as_array().into_iter().flatten().filter_map(Value::as_str).collect();
+                println!("{}  {}  goes only to {}", s(k, "name"), s(k, "hint"), places.join(", "));
             }
         }
         "ask" => print_status(&call("set_ask", json!({ "on": a(1) != "off" })).await),

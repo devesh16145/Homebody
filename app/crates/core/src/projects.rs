@@ -225,6 +225,92 @@ fn clone_tree(from: &Path, to: &Path) -> Result<(), String> {
     }
 }
 
+/// Run a command inside a folder that is held open, so that it works in that very folder
+/// whatever has been done to its name in the meantime.
+#[cfg(unix)]
+fn run_inside<S: AsRef<std::ffi::OsStr>>(dir: &fs::File, program: &str, args: &[S]) -> Result<(), String> {
+    use std::os::fd::AsRawFd;
+    use std::os::unix::process::CommandExt;
+    let fd = dir.as_raw_fd();
+    let mut cmd = std::process::Command::new(program);
+    cmd.args(args).stdin(std::process::Stdio::null());
+    // Safe to call between fork and exec: one system call, no allocation.
+    unsafe {
+        cmd.pre_exec(move || if libc::fchdir(fd) == 0 { Ok(()) } else { Err(std::io::Error::last_os_error()) });
+    }
+    let out = cmd.output().map_err(|e| e.to_string())?;
+    if out.status.success() {
+        Ok(())
+    } else {
+        Err(String::from_utf8_lossy(&out.stderr).lines().last().unwrap_or("it failed").trim().to_string())
+    }
+}
+
+/// Make the agent's copy of a folder: `to`, inside its workspace.
+///
+/// The workspace is the agent's to write in, so a copy made there by name can be led astray: a
+/// link planted under the name being copied to sends your files wherever it points, written
+/// with your permissions. So the copy is made in a new folder that is held open and that the
+/// agent is shut out of while it is filled; only when it is complete is it opened to the agent
+/// and given its name. Giving it the name fails, and follows nothing, if something is in the way.
+#[cfg(unix)]
+fn clone_for_agent(app: &AppConfig, from: &Path, to: &Path) -> Result<(), String> {
+    use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+    let failed = |e: String| format!("The folder could not be copied: {e}");
+    let workspace = to.parent().ok_or("This app has no workspace.")?;
+    let staging = workspace.join(format!(".homebody-incoming-{:032x}", rand::random::<u128>()));
+    fs::create_dir(&staging).map_err(|e| failed(e.to_string()))?;
+    let made = (|| -> Result<fs::File, String> {
+        // The folder itself, not anything put in its place: opened without following a link,
+        // and it must be the empty folder of ours that was just made.
+        let dir = fs::OpenOptions::new().read(true).custom_flags(libc::O_NOFOLLOW | libc::O_DIRECTORY).open(&staging).map_err(|e| e.to_string())?;
+        let meta = dir.metadata().map_err(|e| e.to_string())?;
+        if !meta.is_dir() || meta.uid() != unsafe { libc::getuid() } {
+            return Err("something else was put where the copy was being made".into());
+        }
+        let user = app.os_user.as_str();
+        let (shut, open): (Vec<String>, Vec<String>) = if cfg!(target_os = "macos") {
+            let rule = format!("user:{user} deny list,search,add_file,add_subdirectory,delete_child");
+            (vec!["+a".into(), rule.clone(), ".".into()], vec!["-a".into(), rule, ".".into()])
+        } else {
+            (vec!["-m".into(), format!("u:{user}:---"), ".".into()], vec!["-m".into(), format!("u:{user}:rwx"), ".".into()])
+        };
+        let tool = if cfg!(target_os = "macos") { "/bin/chmod" } else { "setfacl" };
+        run_inside(&dir, tool, &shut)?;
+        // Shut, and still empty: nothing was slipped in before the door closed.
+        if run_inside(&dir, "/bin/sh", &["-c", "[ -z \"$(ls -A)\" ]"]).is_err() {
+            return Err("something was put into the copy before it was made".into());
+        }
+        let mut source = from.as_os_str().to_os_string();
+        source.push("/.");
+        let dot = std::ffi::OsString::from(".");
+        let flags: &[&str] = if cfg!(target_os = "macos") { &["-cR"] } else { &["-R", "-P", "--preserve=mode,timestamps", "--reflink=auto"] };
+        let mut args: Vec<std::ffi::OsString> = flags.iter().map(std::ffi::OsString::from).collect();
+        args.push(source);
+        args.push(dot);
+        let copied = run_inside(&dir, if cfg!(target_os = "macos") { "/bin/cp" } else { "cp" }, &args);
+        let opened = run_inside(&dir, tool, &open);
+        copied?;
+        opened?;
+        Ok(dir)
+    })();
+    match made.and_then(|_dir| fs::rename(&staging, to).map_err(|e| e.to_string())) {
+        Ok(()) => Ok(()),
+        Err(e) => {
+            // Only ever a real folder of this name is removed, never what a link points at.
+            if fs::symlink_metadata(&staging).map(|m| m.is_dir()).unwrap_or(false) {
+                let _ = fs::remove_dir_all(&staging);
+            }
+            Err(failed(e))
+        }
+    }
+}
+
+#[cfg(not(unix))]
+fn clone_for_agent(_app: &AppConfig, from: &Path, to: &Path) -> Result<(), String> {
+    clone_tree(from, to)
+}
+
 /// Bring a folder in: one clone for the agent, one private baseline.
 pub fn import(app: &AppConfig, source: &Path) -> Result<ProjectConfig, String> {
     let workspace = app.workspace.as_ref().map(PathBuf::from).ok_or("This app has no workspace.")?;
@@ -240,9 +326,11 @@ pub fn import(app: &AppConfig, source: &Path) -> Result<ProjectConfig, String> {
         i += 1;
     }
     let (copy, base) = (workspace.join(&name), base_dir(&app.id, &name));
-    clone_tree(source, &copy)?;
-    if let Err(e) = clone_tree(source, &base) {
-        let _ = fs::remove_dir_all(&copy);
+    // The private baseline first: it is out of the agent's reach, and if it cannot be made
+    // nothing has been put in the workspace yet.
+    clone_tree(source, &base)?;
+    if let Err(e) = clone_for_agent(app, source, &copy) {
+        let _ = fs::remove_dir_all(&base);
         return Err(e);
     }
     Ok(ProjectConfig { name, source: source.to_string_lossy().into_owned(), imported_at: crate::now_iso() })

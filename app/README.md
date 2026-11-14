@@ -60,8 +60,15 @@ Status: 11 Nov 2026. Everything in the table runs end to end on this Mac in the 
 | Linux: engine, command line and fence (`../docs/platforms.md`) | 42 of 42 fence cases and 29 of 29 gate cases on a GitHub-hosted Ubuntu machine on every push. No window. Not run on other distributions or with a real agent |
 | Windows: engine, command line and fence (`../docs/platforms.md`) | 22 of 22 cases on a GitHub-hosted Windows machine on every push. No window, no interactive terminal. Not run with a real agent |
 | Fleet server for organisations: `homebody-fleet` (`../docs/fleet.md`), and Settings → Organisation | 12 server tests on macOS and Linux; one scratch engine joined a local server end to end; an independent read of the code found eight problems in it, all fixed. Not run with a real identity provider, a real management system, or more than one computer |
-| The Box: an agent in a Linux machine with no network interface (`../docs/box.md`) | 22 of 22 cases on this Mac (`tests/box.sh`), run against the installed app. Claude Code installed into it through the gate and opened from the app's engine in a Terminal window; not yet signed in or used for work there. Its disk is made without extra software. The card on the agent's page was checked in a preview, not clicked in the real window |
+| The Box: an agent in a Linux machine with no network interface (`../docs/box.md`) | 29 of 29 cases on this Mac (`tests/box.sh`), run against the installed app. Claude Code installed into it through the gate and opened from the app's engine in a Terminal window; not yet signed in or used for work there. Its disk is made without extra software. The card on the agent's page was checked in a preview, not clicked in the real window |
 | Editor plugins: VS Code and Cursor (`../editors/vscode`), JetBrains (`../editors/jetbrains`) | Both run inside real editors against the real engine, with a script answering the pop-ups (`test/in-editor/run.sh` in each). VS Code extension: 33 of 33 in Cursor 3.28, plus 17 tests with a stand-in editor; not run in VS Code itself. JetBrains: 22 of 22 in IntelliJ IDEA 2024.2.4; JetBrains' checker passes it for DataGrip 2026.2, where it was installed and seen to load, its actions not pressed. macOS only |
+| Keys that stay home (`../docs/keys.md`): Homebody keeps an API key, the agent gets a stand-in, the real key is put in at the gate only where a credential belongs and only for the exact place named | Working. Unit tests for each place a key may and may not sit; 19 bypass cases against the installed app; end to end with a made-up key and a public service that repeats requests back (the service received the real value, the app held only the stand-in). No real provider key has been used with it yet |
+| Packs (the app's page → Can reach → Often needed): npm, Python, Rust, Go, Ruby, Java, Homebrew, Docker Hub as downloads-only; GitHub | Working: a pack switched on, a package index reached through the gate, the pack switched off again leaving your own rules as they were. Host lists are from each maintainer's documentation; only the Python one has been exercised |
+| Test it (the app's page, and `homebody test <app>`): seven real attempts to get out, made as the app; each counts as stopped only when its refusal was seen | Working: 7 of 7 seen stopped here; the same attempts made outside the fence succeed. Also run on GitHub's Mac and Linux machines |
+| More presets: GitHub Copilot CLI, Goose, Amp, Qwen Code, Crush, Kiro CLI, Cline CLI, Droid | Rules written from their makers' documentation or source; none has been run here |
+| Start over (Folders → Review → Throw these away): the copy becomes your folder as it is now | Working; a link planted where the copy goes is not followed |
+| Checking a shared proof: `homebody verify <proof.json> [--key <expected>]` | Working: a genuine file checks out, an altered one fails |
+| A release build is tried on a second Mac that has never had Homebody (`tests/clean-mac.sh`, in the release workflow): installed from the disk image, set up, the whole bypass corpus, the rules pulled out and restored, removed again | Passed on a GitHub-hosted Mac (macOS 26.7, Apple silicon). Nobody clicks anything there: the windows are not covered |
 
 ## Run it
 
@@ -96,7 +103,7 @@ Build from source: `cargo build` for the core and CLI, `npx tauri build` for the
 
 ```
 app/
-  crates/core/     sai-core: everything that is not pixels
+  crates/core/     homebody-core: everything that is not pixels
     hostname.rs      what a valid destination name is; how names match rules
     catalog.rs       plain-language labels for destinations; app presets
     config.rs        settings: mode, protected apps, trusted destinations
@@ -126,7 +133,7 @@ Measured on this Mac (Apple silicon, release build, 11 Nov 2026): ready 0.4 seco
 ## Verify it yourself
 
 ```bash
-cargo test -p sai-core
+cargo test -p homebody-core
 ```
 
 ```bash

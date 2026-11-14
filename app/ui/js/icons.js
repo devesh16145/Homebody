@@ -9,6 +9,7 @@ const P = {
   chevron: '<path d="M6 3.5L10.5 8 6 12.5"/>',
   alert: '<path d="M8 2.2l6.2 11H1.8z"/><path d="M8 6.6v3M8 11.6v.1"/>',
   info: '<circle cx="8" cy="8" r="6.2"/><path d="M8 7.4v3.6M8 5v.1"/>',
+  box: '<path d="M2.4 5L8 2.2 13.6 5v6L8 13.8 2.4 11z"/><path d="M2.4 5L8 7.8 13.6 5M8 7.8v6"/>',
   lock: '<rect x="3.4" y="7" width="9.2" height="6.8" rx="1.8"/><path d="M5.4 7V5.2a2.6 2.6 0 015.2 0V7"/>',
   shield: '<path d="M8 1.8l5.2 2v3.9c0 3.1-2.1 5.4-5.2 6.5-3.1-1.1-5.2-3.4-5.2-6.5V3.8z"/>',
   share: '<path d="M8 10V2M5.2 4.6L8 1.8l2.8 2.8"/><path d="M4.6 7.2H3.4v6.6h9.2V7.2h-1.2"/>',

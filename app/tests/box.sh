@@ -46,6 +46,24 @@ R sh -c 'echo from-the-box > /work/box-test.txt; touch /home/agent/stays-in-the-
 check "one shared folder, and what it writes arrives"   "from-the-box" "$(cat "$WS/box-test.txt" 2>&1)"
 check "as your own file"                                "$(id -un)" "$(stat -f %Su "$WS/box-test.txt" 2>&1)"
 
+echo "Looked inside, and keys that stay home"
+# With Look inside on, a program in the Box is told about Homebody's certificate, and a key
+# Homebody keeps reaches the Box only as a stand-in: the real key never enters the machine.
+was_on="$("$HB" status --json | python3 -c "import json,sys; print([a['inspect'] for a in json.load(sys.stdin)['apps'] if a['id']=='$APP'][0])")"
+real="hb-box-REAL-$(date +%s)-$RANDOM-key"
+printf '%s\n' "$real" | "$HB" key "$APP" set HB_BOX_KEY --to api.anthropic.com >/dev/null 2>&1
+check "a program in the Box accepts the certificate"    "401"     "$(R curl -sS -m 20 -o /dev/null -w '%{http_code}' https://api.anthropic.com/v1/models)"
+check "and what it asked for is seen"                   "GET /v1/models" "$(sleep 6; "$HB" call get_feed "{\"appId\":\"$APP\",\"limit\":3}")"
+standin="$(R printenv HB_BOX_KEY | tail -1 | tr -d '\r')"
+check "the Box is handed a stand-in, not the key"       "STAND-IN" "$([ -n "$standin" ] && [ "$standin" != "$real" ] && [ ${#standin} -eq ${#real} ] && echo STAND-IN || echo "GOT: $standin")"
+check "the key is nowhere in the Box"                   "0"       "$(R sh -c 'env; cat /tmp/homebody-* /etc/environment 2>/dev/null' | grep -c "$real")"
+check "sent to the place the key is for, it goes"       "401"     "$(R curl -sS -m 20 -o /dev/null -w '%{http_code}' -H "x-api-key: $standin" https://api.anthropic.com/v1/models)"
+check "and Activity names the key that was put in"      "HB_BOX_KEY" "$(sleep 6; "$HB" call get_feed "{\"appId\":\"$APP\",\"limit\":3}")"
+"$HB" key "$APP" set HB_BOX_KEY --to example.com >/dev/null 2>&1 <<< "$real"
+check "sent anywhere else, it is stopped"               "not meant to go" "$(R curl -sS -m 20 -H "x-api-key: $standin" https://api.anthropic.com/v1/models)"
+"$HB" key "$APP" remove HB_BOX_KEY >/dev/null 2>&1
+[ "$was_on" = "True" ] || "$HB" inspect "$APP" off >/dev/null
+
 echo "Staying connected"
 check "a command that is quiet for a while is not cut off" "still here" "$(R sh -c 'sleep 14; echo still here')"
 

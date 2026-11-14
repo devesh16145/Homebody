@@ -678,6 +678,11 @@ pub fn fenced_env(app: &AppConfig) -> Vec<(String, String)> {
     if app.inspect && !app.windowed && app.kind != "model" {
         // Tell the app about the local certificate, or it would refuse every inspected connection.
         env.extend(crate::inspect::env());
+        // Keys Homebody keeps: the app gets a stand-in, and the gate puts the real key in on
+        // the way out (see `keys`). A stand-in is not a secret, so it can sit here.
+        for k in &app.keys {
+            env.push((k.name.clone(), k.stand_in.clone()));
+        }
     }
     match app.id.as_str() {
         "ollama" => {
@@ -772,6 +777,156 @@ async fn profile_holds_once(wrap: &impl Fn(&str, &[&str]) -> Vec<String>, t: Dur
     let lookup = run_owned(untagged(wrap("/usr/bin/dscacheutil", &["-q", "host", "-a", "name", "example.com"])), t).await?;
     let no_lookup = !lookup.1.contains("ip_address") && !lookup.1.contains("ipv6_address");
     Some(control && refused && no_lookup)
+}
+
+/// What became of one attempt to get out.
+#[derive(serde::Serialize, Clone, Copy, Debug, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum Outcome {
+    /// Seen to be refused.
+    Stopped,
+    /// Seen to succeed.
+    Through,
+    /// Neither was seen: the attempt did not finish, or ended in a way that says nothing.
+    /// Never counted as stopped.
+    Unknown,
+}
+
+/// One real attempt to get out, and what became of it.
+#[derive(serde::Serialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct LeakCase {
+    pub id: &'static str,
+    /// What was tried, in plain words.
+    pub what: &'static str,
+    pub outcome: Outcome,
+}
+
+/// Run a command and keep what it printed apart from what it complained about.
+async fn run_apart(argv: Vec<String>, timeout: Duration) -> Option<(Option<i32>, String, String)> {
+    let mut cmd = Command::new(&argv[0]);
+    cmd.args(&argv[1..]).current_dir("/").stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).kill_on_drop(true);
+    let out = tokio::time::timeout(timeout, cmd.output()).await.ok()?.ok()?;
+    Some((out.status.code(), String::from_utf8_lossy(&out.stdout).into_owned(), String::from_utf8_lossy(&out.stderr).into_owned()))
+}
+
+/// Whether a complaint is the system saying no, as opposed to anything else going wrong.
+fn says_no(complaint: &str) -> bool {
+    let c = complaint.to_lowercase();
+    c.contains("not permitted") || c.contains("permission denied") || (LINUX && (c.contains("refused") || c.contains("unreachable")))
+}
+
+/// Real attempts to get out, made the way the app itself would have to make them: as its
+/// private user, under its launch-time profile, with its environment. This is what "Test it"
+/// shows.
+///
+/// An attempt counts as stopped only when the refusal itself was seen: the system's "not
+/// permitted", the gate's own "no". An attempt that timed out, was ended from outside (a
+/// running agent can end programs that run as its user), or failed for some other reason is
+/// reported as unknown, never as stopped. An attempt that cannot be made at all (the tool for
+/// it is missing) is left out; and if nothing can be run as the app, that is an error.
+///
+/// The attempts that go around the gate are not written down as the app's doing. The one
+/// that goes through the gate is, as any refused address is.
+pub async fn leak_test(app: &AppConfig) -> Result<Vec<LeakCase>, String> {
+    if app.windowed || cfg!(windows) {
+        return Err(format!("This test is for apps with a private user of their own. {} runs as you.", app.name));
+    }
+    let t = Duration::from_secs(8);
+    let attempt = |program: &str, args: &[&str]| untagged(fenced_argv(app, program, &args.iter().map(|s| s.to_string()).collect::<Vec<_>>(), &[], Some("/")));
+    let exists = |p: &str| std::path::Path::new(p).exists();
+    // First, that things run as the app at all: every refusal below is only worth something
+    // if the same program can run there.
+    match run_owned(attempt("/usr/bin/id", &["-un"]), t).await {
+        Some((true, out)) if out.lines().last().map(str::trim) == Some(app.os_user.as_str()) => {}
+        _ => return Err(format!("Nothing could be run as {}, so there is nothing to test. Check protection first.", app.name)),
+    }
+    let home = real_home();
+    let mut cases: Vec<LeakCase> = Vec::new();
+    let mut case = |id: &'static str, what: &'static str, outcome: Outcome| cases.push(LeakCase { id, what, outcome });
+    use Outcome::*;
+
+    // Around the gate: a connection straight to an address on the internet.
+    if exists("/bin/bash") {
+        let r = run_apart(attempt("/bin/bash", &["-c", "exec 3<>/dev/tcp/1.1.1.1/443 && echo HOMEBODY-CONNECTED"]), t).await;
+        case("direct", "Connect straight to the internet, around the gate", match &r {
+            Some((_, out, _)) if out.contains("HOMEBODY-CONNECTED") => Through,
+            Some((_, _, err)) if says_no(err) => Stopped,
+            _ => Unknown,
+        });
+    }
+    // Around the gate: asking the system for a website's address.
+    if LINUX && exists("/usr/bin/getent") {
+        let r = run_apart(attempt("/usr/bin/getent", &["hosts", "example.com"]), t).await;
+        case("lookup", "Look up a website's address by itself", match &r {
+            Some((Some(0), out, _)) if !out.trim().is_empty() => Through,
+            // getent's own answer for "no such name": it ran to the end and found nothing.
+            Some((Some(2), out, _)) if out.trim().is_empty() => Stopped,
+            _ => Unknown,
+        });
+    } else if exists("/usr/bin/dscacheutil") {
+        let r = run_apart(attempt("/usr/bin/dscacheutil", &["-q", "host", "-a", "name", "example.com"]), t).await;
+        case("lookup", "Look up a website's address by itself", match &r {
+            Some((_, out, _)) if out.contains("ip_address") || out.contains("ipv6_address") => Through,
+            // It ran to the end and found nothing.
+            Some((Some(0), out, _)) if out.trim().is_empty() => Stopped,
+            _ => Unknown,
+        });
+    }
+    // Through the gate, but to a bare address instead of a name you could have approved.
+    // -q: no settings file of the app's own choosing is read.
+    if exists("/usr/bin/curl") {
+        let r = run_apart(attempt("/usr/bin/curl", &["-q", "-sS", "-m", "6", "-o", "/dev/null", "-w", "%{http_code}", "https://1.1.1.1/"]), t).await;
+        case("address", "Reach a bare internet address through the gate", match &r {
+            Some((_, out, _)) if out.trim().starts_with('2') || out.trim().starts_with('3') => Through,
+            // The gate's own "no" to the request to connect, as curl reports it.
+            Some((_, out, err)) if out.trim() == "000" && err.contains("response 403") => Stopped,
+            _ => Unknown,
+        });
+    }
+    // Your files: listing, reading by exact name, writing.
+    let listing = |r: &Option<(Option<i32>, String, String)>| match r {
+        Some((Some(0), _, _)) => Through,
+        Some((_, _, err)) if says_no(err) => Stopped,
+        _ => Unknown,
+    };
+    let r = run_apart(attempt("/bin/ls", &[&home]), t).await;
+    case("home", "List your home folder", listing(&r));
+    let ssh = format!("{home}/.ssh");
+    if exists(&ssh) {
+        let r = run_apart(attempt("/bin/ls", &[&ssh]), t).await;
+        case("ssh", "Look at your SSH keys", listing(&r));
+    }
+    // A file of yours that anyone on this computer may read, asked for by its exact name.
+    let marker = format!("homebody-test-{:016x}", rand::random::<u64>());
+    let mine = format!("{home}/.{marker}");
+    if std::fs::write(&mine, &marker).is_ok() {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(&mine, std::fs::Permissions::from_mode(0o644));
+        }
+        let r = run_apart(attempt("/bin/cat", &[&mine]), t).await;
+        let _ = std::fs::remove_file(&mine);
+        case("read", "Read a file in your home folder by its exact name", match &r {
+            Some((_, out, _)) if out.contains(&marker) => Through,
+            Some((_, _, err)) if says_no(err) => Stopped,
+            _ => Unknown,
+        });
+    }
+    let probe = format!("{home}/.homebody-test-{:016x}", rand::random::<u64>());
+    let r = run_apart(attempt("/usr/bin/touch", &[&probe]), t).await;
+    let wrote = exists(&probe);
+    if wrote {
+        let _ = std::fs::remove_file(&probe);
+    }
+    case("write", "Create a file in your home folder", match &r {
+        _ if wrote => Through,
+        Some((Some(0), _, _)) => Through,
+        Some((_, _, err)) if says_no(err) => Stopped,
+        _ => Unknown,
+    });
+    Ok(cases)
 }
 
 /// As above, trying once more when a command ran out of time. Still not confirmed after that

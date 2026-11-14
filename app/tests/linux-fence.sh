@@ -137,6 +137,13 @@ if [ -z "$seen" ]; then
 fi
 
 "$HB" ask on >/dev/null 2>&1
+echo "The app's own test"
+# What "Test it" shows in the window: every attempt has to be seen to be stopped, and none
+# may be passed over as "could not tell".
+out="$("$HB" test "$APP" 2>&1)"
+check "every attempt is seen to be stopped"              "Everything was stopped." "$out"
+echo "$out" | grep -q "Everything was stopped." || echo "$out" | sed 's/^/      /'
+
 echo "Its terminal"
 term="$(python3 "$HERE/terminal.py" "$HB" "$APP" 2>&1)"
 check "a protected program never outlives its terminal (tests/terminal.py)" ", 0 failed" "$(echo "$term" | tail -1)"

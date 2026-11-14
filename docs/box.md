@@ -57,8 +57,18 @@ The rest uses what macOS ships: `curl`, `shasum`, `tar`, `ssh-keygen`, `hdiutil`
 
 ## What has been run
 
-`app/tests/box.sh`, 22 cases, on one Apple M4 Mac: no interface but loopback, direct connections (IPv4, IPv6, UDP) have nowhere to go, no name lookup, the host answers on the gate's channel only, trusted places reached and untrusted ones refused and shown in Activity, none of the Mac's folders visible, files written to the shared folder arrive as yours, a command that stays quiet for a while is not cut off, and a new start does not have the last run's files. Run again, 22 of 22, on a disk made the new way (no Homebrew), through the installed app.
+`app/tests/box.sh`, 29 cases, on one Apple M4 Mac (the last seven added with Look inside and kept keys, see below): no interface but loopback, direct connections (IPv4, IPv6, UDP) have nowhere to go, no name lookup, the host answers on the gate's channel only, trusted places reached and untrusted ones refused and shown in Activity, none of the Mac's folders visible, files written to the shared folder arrive as yours, a command that stays quiet for a while is not cut off, and a new start does not have the last run's files. Run again, 22 of 22, on a disk made the new way (no Homebrew), through the installed app.
 
 The app's path was run against the installed app's engine with the same calls the card makes: set-up in the background (8 seconds with Debian already downloaded; the download itself was not repeated), Claude Code put in through its gate (two minutes, version 2.1.322), then "Open in the Box", which started the Box and opened a Terminal window with `claude` running inside it. The kernel's start-up line inside carried every setting. Claude Code was not signed in or used for work there. The card itself was checked in a browser preview against simulated data, in every state, in light and dark and at a narrow width; it was not clicked inside the real app's window. Codex CLI and Gemini CLI have recipes but have not been put in. The disk preparation has unit tests against a synthetic image and was run on Debian's real image; it has been run on one Debian image (12, kernel 6.1.0-54), on one Mac.
 
 An earlier experiment on the same Mac saw the Linux guest crash under heavy memory pressure (17 GB of swap in use). It has been stable in every run since, but it has not been run for hours at a time.
+
+## Looking inside, and keys that stay out of the Box
+
+When Look inside is on for an agent, a program started in the Box (from the app, or with `homebody box run`) is told about Homebody's certificate the same way a protected program on the Mac is, so its connections to trusted places can be looked inside: single addresses switched off, secrets stopped, and so on.
+
+A key Homebody keeps for the agent ([keys.md](keys.md)) reaches the Box only as a stand-in. The real key is put in at the gate, on the Mac. It is never in the machine: not in its environment, not on its disk.
+
+While an agent is being put in the Box, its package tools fetch through the gate without being looked inside; they are not told about the certificate.
+
+Checked in `app/tests/box.sh`: a program in the Box accepts the certificate and what it asked for shows in Activity; the Box holds a stand-in and the key is nowhere in it; a request with the stand-in goes to the place the key is for and is stopped anywhere else.

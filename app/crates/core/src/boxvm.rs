@@ -437,7 +437,27 @@ pub async fn stop() {
 
 /// The command line that runs something in the running Box, as the agent, in /work, with a
 /// terminal when there is one.
-pub fn argv(program: &str, args: &[String], interactive: bool) -> Result<Vec<String>, String> {
+/// What a program in the Box is told on top of where its gate is.
+#[derive(Default, Clone)]
+pub struct Extras {
+    /// Homebody's own certificate, when the app's connections are looked inside: the program
+    /// must be told about it or it would refuse every one of them. A certificate is public.
+    pub ca_pem: Option<String>,
+    /// Further settings for the program: the stand-ins for keys Homebody keeps (never a key).
+    pub env: Vec<(String, String)>,
+}
+
+/// The id of the app the Box is running for, if it is running.
+pub fn running_app() -> Option<String> {
+    RUNNING.lock().unwrap().as_ref().map(|r| r.app_id.clone())
+}
+
+/// Whether the Box is in the middle of putting this app in (fetching packages through its gate).
+pub fn installing(app_id: &str) -> bool {
+    BUSY.lock().unwrap().as_ref().is_some_and(|b| b.what == "install" && b.app_id.as_deref() == Some(app_id))
+}
+
+pub fn argv(program: &str, args: &[String], interactive: bool, extras: &Extras) -> Result<Vec<String>, String> {
     if RUNNING.lock().unwrap().is_none() {
         return Err("The Box is not running.".into());
     }
@@ -447,7 +467,21 @@ pub fn argv(program: &str, args: &[String], interactive: bool) -> Result<Vec<Str
         // (before the options above; ssh takes flags in any order)
     }
     let command = std::iter::once(program.to_string()).chain(args.iter().cloned()).map(|a| sh_quote(&a)).collect::<Vec<_>>().join(" ");
-    v.push(format!("cd /work 2>/dev/null; . /etc/profile.d/homebody-proxy.sh; exec {command}"));
+    let mut told = String::new();
+    if let Some(pem) = &extras.ca_pem {
+        // The same five settings a protected program on the Mac is given (inspect::env), with
+        // the Box's own list of trusted certificates and ours after it.
+        told.push_str(&format!(
+            "printf '%s\\n' {} > /tmp/homebody-ca.pem; cat /etc/ssl/certs/ca-certificates.crt /tmp/homebody-ca.pem > /tmp/homebody-bundle.pem 2>/dev/null; export NODE_EXTRA_CA_CERTS=/tmp/homebody-ca.pem SSL_CERT_FILE=/tmp/homebody-bundle.pem REQUESTS_CA_BUNDLE=/tmp/homebody-bundle.pem CURL_CA_BUNDLE=/tmp/homebody-bundle.pem GIT_SSL_CAINFO=/tmp/homebody-bundle.pem; ",
+            sh_quote(pem.trim())
+        ));
+    }
+    for (k, val) in &extras.env {
+        if !k.is_empty() && k.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+            told.push_str(&format!("export {k}={}; ", sh_quote(val)));
+        }
+    }
+    v.push(format!("cd /work 2>/dev/null; . /etc/profile.d/homebody-proxy.sh; {told}exec {command}"));
     Ok(v)
 }
 
@@ -463,12 +497,12 @@ pub fn terminal_script(name: &str, share: &str, argv: &[String]) -> String {
 }
 
 /// Open a Terminal window in the running Box, running the agent.
-pub async fn open_terminal(app: &AppConfig, program: &str) -> Result<(), String> {
+pub async fn open_terminal(app: &AppConfig, program: &str, extras: &Extras) -> Result<(), String> {
     let share = RUNNING.lock().unwrap().as_ref().map(|r| r.share.clone()).ok_or("The Box is not running.")?;
     let run_dir = crate::paths::data_dir().join("run");
     std::fs::create_dir_all(&run_dir).map_err(|e| e.to_string())?;
     let script = run_dir.join(format!("box-{}.command", app.id));
-    std::fs::write(&script, terminal_script(&app.name, &share, &argv(program, &[], true)?)).map_err(|e| e.to_string())?;
+    std::fs::write(&script, terminal_script(&app.name, &share, &argv(program, &[], true, extras)?)).map_err(|e| e.to_string())?;
     {
         use std::os::unix::fs::PermissionsExt;
         let _ = std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o700));
@@ -488,7 +522,7 @@ mod tests {
     #[test]
     fn a_command_for_the_box_is_quoted_so_it_arrives_as_typed() {
         *RUNNING.lock().unwrap() = None;
-        assert!(argv("true", &[], false).is_err(), "nothing runs in a Box that is not running");
+        assert!(argv("true", &[], false, &Extras::default()).is_err(), "nothing runs in a Box that is not running");
         assert_eq!(sh_quote("it's"), "'it'\\''s'");
         let base = ssh_base("agent");
         assert!(base.contains(&"agent@127.0.0.1".to_string()) && base.contains(&COMMAND_PORT.to_string()));

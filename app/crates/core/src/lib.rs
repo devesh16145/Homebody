@@ -39,6 +39,7 @@ pub mod fence_linux;
 pub mod fence_windows;
 pub mod hostname;
 pub mod inspect;
+pub mod keys;
 pub mod ledger;
 pub mod model;
 pub mod paths;

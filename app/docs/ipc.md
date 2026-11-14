@@ -62,6 +62,7 @@ interface AppStatus {
   problem: string | null;       // installed, but where a protected app cannot reach it (inside the home folder). A sentence for the user
   inspect: boolean;             // looking inside is switched on
   canInspect: boolean;          // false for windowed apps and model servers: they take trusted certificates from the Mac
+  keys: KeyInfo[];              // keys Homebody keeps for this app: { name, maker, hint, hosts, added }. Never a key
   secrets: boolean;             // requests carrying a secret are stopped (acts only while inspect is on)
 }
 
@@ -103,6 +104,8 @@ interface FeedEvent {
                                 // most frequent first; `label` in plain words when known ("Conversation");
                                 // `allowed` is the current switch for that path. Never anything after "?"
   secret?: { kind: string; fingerprint: string; allowed: boolean } | null;
+  keys?: string[];              // names of kept keys that were put into requests on this connection
+  keyStopped?: string;          // set when this row is a request stopped for carrying a kept key's stand-in somewhere the key is not for: the key's name
                                 // present when this row is a request stopped for what its content carried. `kind` reads
                                 // "a GitHub token" or "text from a folder you marked private"; the content itself is never stored,
                                 // only this fingerprint
@@ -121,6 +124,7 @@ interface Ask {
 }
 
 interface TrustEntry {
+  pack?: string;                // the pack that brought this place, when one did (source "pack"): its id
   appId: string;
   host: string;                 // exact name or "*.example.com"
   label: string; purpose: string;
@@ -254,6 +258,12 @@ interface PrivateFolders {
 | `remove_inside_rule` | `{ appId, host, path, method? }` | `InsideEntry[]` | only switches with source "you" |
 | `app_set_secrets` | `{ appId, on }` | `Status` | while looking inside, stop requests whose content holds something that looks like a private key or access token. On by default |
 | `allow_secret` | `{ appId, fingerprint, allowed }` | `null` | let one particular secret through for this app from now on, or stop doing so. `fingerprint` comes from `FeedEvent.secret` |
+| `get_keys` | `{ appId }` | `{ keys: KeyInfo[], known: { name, maker, hosts }[], canKeep, why }` | the keys Homebody keeps for an app (never the keys themselves), the key names it knows with their usual place, and whether a key can be kept for this app at all |
+| `key_set` | `{ appId, name, value, hosts? }` | `Status` | keep a key: the app is handed a stand-in under `name`, and the real key is put into its requests at the gate, only for `hosts` (default: the usual place for a known name). Switches Look inside on. `value` is taken once and never returned |
+| `key_remove` | `{ appId, name }` | `Status` | stop keeping it |
+| `get_packs` | `{ appId }` | `{ id, name, what, hosts, downloadsOnly, on }[]` | the packs an agent can have switched on: the places a package manager fetches from, as one switch. Empty for anything that is not an agent |
+| `set_pack` | `{ appId, pack, on }` | `TrustEntry[]` | switch a pack on or off. On: each of its places becomes a rule with source `pack` (and, for a downloads-only pack, an hourly limit of 2 MB on what may be sent there). Off: only what the pack brought is taken away |
+| `leak_test` | `{ appId }` | `{ appId, appName, at, held, through, unknown, cases: { id, what, outcome }[] }` | try to get out as the app (straight to the internet, a name lookup, a bare address through the gate, listing your home folder and your SSH keys, reading a file of yours by name, writing to your home) and say what became of each attempt. `outcome` is `"stopped"` only when the refusal itself was seen, `"through"` when the attempt succeeded, and `"unknown"` otherwise (it did not finish, or was ended from outside); `held` is true only when every attempt was seen to be stopped. The attempts that go around the gate are not written down as the app's; the one through the gate is, as any refused address is |
 | `app_set_inspect` | `{ appId, on }` | `Status` | look inside this app's connections to trusted places (see "Looking inside" in the README). Switching on creates this computer's certificate authority if needed and puts its certificate where protected apps can read it. Rejects apps that cannot support it with a sentence for the user |
 | `app_set_protected` | `{ appId, protected }` | `Status` | |
 | `app_start` | `{ appId }` | `Status` | model apps: start the protected instance |
@@ -264,6 +274,7 @@ interface PrivateFolders {
 | `project_changes` | `{ appId, name }` | `ChangeSet` | what differs between the agent's copy and the baseline; `.git` is never compared |
 | `project_apply` | `{ appId, name, overwrite?: boolean }` | `ApplyResult` | writes the changes into the original folder as the user. Conflicts are skipped unless `overwrite` |
 | `project_remove` | `{ appId, name }` | `null` | deletes the copy and baseline; the original is not touched |
+| `project_restart` | `{ appId, name }` | `ProjectInfo` | throw the copy away, with whatever the agent did to it, and bring the original in again as it is now. The original is not touched |
 | `pick_folder` | — | `string \| null` | shell only: the system folder chooser; null when cancelled |
 | `app_open_workspace` | `{ appId }` | `null` | reveal the workspace folder |
 | `open_main` | `{ tab?: "feed" \| "proof" \| "studio" }` | `null` | show and focus the main window |

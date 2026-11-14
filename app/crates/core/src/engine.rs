@@ -5,7 +5,7 @@
 //! across another lock or an await.
 
 use crate::catalog;
-use crate::config::{AppConfig, Config, TrustRule};
+use crate::config::{AppConfig, Config, KeyConfig, TrustRule};
 use crate::feed::{FeedIndex, Row};
 use crate::fence::{self, Health};
 use crate::fields;
@@ -71,6 +71,8 @@ struct Inner {
     asks: Mutex<HashMap<String, Pending>>,
     /// Questions that ran out of time, kept so they can still be answered (see `Status::missed`).
     missed: Mutex<Vec<Ask>>,
+    /// The real keys Homebody keeps for apps (see `keys`).
+    vault: Mutex<crate::keys::Vault>,
     grants: Mutex<HashMap<String, Instant>>,
     quiet: Mutex<HashMap<String, (Instant, Reason)>>,
     recent_denies: Mutex<HashMap<String, (Instant, u64)>>,
@@ -143,6 +145,7 @@ impl Engine {
             feed: Mutex::new(feed),
             asks: Mutex::new(HashMap::new()),
             missed: Mutex::new(Vec::new()),
+            vault: Mutex::new(crate::keys::Vault::open(&paths::keys_file())),
             grants: Mutex::new(HashMap::new()),
             quiet: Mutex::new(HashMap::new()),
             recent_denies: Mutex::new(HashMap::new()),
@@ -544,12 +547,22 @@ impl Engine {
         q.iter().map(|(_, n)| n).sum()
     }
 
-    /// Count bytes an app has just sent somewhere. Returns true when that takes it over the
-    /// hourly limit the user set for the place, in which case the connection is to be ended.
-    pub(crate) fn note_sent(&self, app_id: &str, host: &str, bytes: u64) -> bool {
-        let Some((rule, limit)) = self.limit_for(app_id, host) else { return false };
-        self.0.sent.lock().unwrap().entry((app_id.to_string(), rule.clone())).or_default().push_back((Instant::now(), bytes));
-        self.sent_last_hour(app_id, &rule) > limit
+    /// Whether an app may send this many more bytes to a place now. When it may, they are
+    /// counted at once, before they are sent, so that many connections sending at the same
+    /// moment cannot each slip in under the limit. When it may not, nothing is counted and
+    /// nothing is to be sent.
+    pub(crate) fn may_send(&self, app_id: &str, host: &str, bytes: u64) -> bool {
+        let Some((rule, limit)) = self.limit_for(app_id, host) else { return true };
+        let mut sent = self.0.sent.lock().unwrap();
+        let q = sent.entry((app_id.to_string(), rule)).or_default();
+        while q.front().map(|(t, _)| t.elapsed() > Duration::from_secs(3600)).unwrap_or(false) {
+            q.pop_front();
+        }
+        if q.iter().map(|(_, n)| n).sum::<u64>() + bytes > limit {
+            return false;
+        }
+        q.push_back((Instant::now(), bytes));
+        true
     }
 
     fn over_limit(&self, app_id: &str, host: &str) -> bool {
@@ -641,7 +654,24 @@ impl Engine {
     /// Whether this app's connections are to be looked inside, and with what.
     pub(crate) fn inspector_for(&self, app_id: &str) -> Option<Arc<crate::inspect::Inspector>> {
         let on = self.0.cfg.lock().unwrap().app(app_id).map(|a| a.inspect && Self::cannot_inspect(a).is_none()).unwrap_or(false);
+        // While an app is being put in the Box, the Box's package tools fetch through this
+        // gate, and they are not told about our certificate. Those minutes are not looked inside.
+        #[cfg(unix)]
+        if on && crate::boxvm::installing(app_id) {
+            return None;
+        }
         if on { self.inspector().ok() } else { None }
+    }
+
+    /// What a program started in the Box for this app is told: our certificate when the app's
+    /// connections are looked inside, and the stand-ins for its kept keys.
+    #[cfg(unix)]
+    fn box_extras(&self, app_id: &str) -> crate::boxvm::Extras {
+        let Some(app) = self.0.cfg.lock().unwrap().app(app_id).cloned() else { return Default::default() };
+        if !app.inspect || Self::cannot_inspect(&app).is_some() {
+            return Default::default();
+        }
+        crate::boxvm::Extras { ca_pem: self.inspector().ok().map(|i| i.ca_pem().to_string()), env: app.keys.iter().map(|k| (k.name.clone(), k.stand_in.clone())).collect() }
     }
 
     /// Why this app's connections cannot be looked inside, if they cannot. Looking inside
@@ -671,6 +701,9 @@ impl Engine {
             let inspector = self.inspector()?;
             crate::inspect::publish(inspector.ca_pem(), &fence::system_roots_pem())?;
         }
+        if !on && !app.keys.is_empty() {
+            return Err(format!("Homebody keeps {} for {}, and can only put a key into a connection it looks inside. Remove the key first.", if app.keys.len() == 1 { "a key" } else { "keys" }, app.name));
+        }
         if app.inspect != on {
             if let Some(a) = self.0.cfg.lock().unwrap().app_mut(app_id) {
                 a.inspect = on;
@@ -694,11 +727,112 @@ impl Engine {
         // Fingerprints are particular to this computer: salted with its own log key.
         let salt = self.0.ledger.lock().unwrap().public_key_b64();
         let (engine, app_id) = (self.clone(), app_id.to_string());
-        let scanner = crate::secrets::Scanner::new(&salt, move |fp| engine.0.cfg.lock().unwrap().app(&app_id).map(|a| a.allowed_secrets.iter().any(|f| f == fp)).unwrap_or(false));
+        // A stand-in for a key Homebody keeps has the shape of a key and is not one: an app
+        // that repeats its stand-in in what it sends has given nothing away.
+        let stand_ins: Vec<String> = self.0.cfg.lock().unwrap().app(&app_id).map(|a| a.keys.iter().map(|k| crate::secrets::fingerprint(&salt, k.stand_in.as_bytes())).collect()).unwrap_or_default();
+        let scanner = crate::secrets::Scanner::new(&salt, move |fp| stand_ins.iter().any(|f| f == fp) || engine.0.cfg.lock().unwrap().app(&app_id).map(|a| a.allowed_secrets.iter().any(|f| f == fp)).unwrap_or(false));
         Some(match self.private_docs() {
             Some(docs) => scanner.with_docs(docs),
             None => scanner,
         })
+    }
+
+    /// What the gate needs to put this app's kept keys into a connection to `host`: every
+    /// stand-in, and the real key only for those that may go to this place.
+    pub(crate) fn key_swaps(&self, app_id: &str, host: &str) -> Vec<crate::keys::Swap> {
+        let keys = match self.0.cfg.lock().unwrap().app(app_id) {
+            Some(a) if !a.keys.is_empty() => a.keys.clone(),
+            _ => return Vec::new(),
+        };
+        let vault = self.0.vault.lock().unwrap();
+        keys.iter()
+            .map(|k| crate::keys::Swap {
+                name: k.name.clone(),
+                stand_in: k.stand_in.as_bytes().to_vec(),
+                fate: match (k.goes_to(host), vault.get(app_id, &k.name)) {
+                    (false, _) => crate::keys::Fate::Elsewhere,
+                    (true, Some(v)) => crate::keys::Fate::Here(v.as_bytes().to_vec()),
+                    (true, None) => crate::keys::Fate::Lost,
+                },
+            })
+            .collect()
+    }
+
+    /// Keep a key for an app: from now on the app is handed a stand-in, and the real key is put
+    /// into its requests at the gate, for the named places only.
+    fn set_key(&self, app_id: &str, name: &str, value: &str, hosts: Option<Vec<String>>) -> Result<(), String> {
+        let app = self.0.cfg.lock().unwrap().app(app_id).cloned().ok_or("Unknown app.")?;
+        if !crate::keys::valid_name(name) {
+            return Err("A key is known by the name the app reads it from, in capitals: ANTHROPIC_API_KEY, for example.".into());
+        }
+        // Checked against everything Homebody sets with Look inside on, which is how the app
+        // will be run once it has a key.
+        if fence::fenced_env(&AppConfig { keys: Vec::new(), inspect: true, ..app.clone() }).iter().any(|(k, _)| k.eq_ignore_ascii_case(name)) {
+            return Err(format!("\"{name}\" is a name Homebody itself sets for a protected program."));
+        }
+        let value = value.trim();
+        crate::keys::valid_value(value)?;
+        if let Some(why) = Self::cannot_inspect(&app) {
+            return Err(format!("Homebody can only keep a key for an app whose connections it can look inside. {why}"));
+        }
+        let mut places: Vec<String> = Vec::new();
+        for h in hosts.unwrap_or_else(|| crate::keys::usual_places(name)) {
+            let h = hostname::normalize_pattern(h.trim());
+            if h.is_empty() {
+                continue;
+            }
+            // One exact place, never a family of them: "every name under example.com" can
+            // include names that belong to someone else.
+            if h.contains('*') || hostname::canonical(&h).as_deref() != Some(h.as_str()) {
+                return Err(format!("Name the exact place the key is for, like api.example.com. \"{h}\" is not one."));
+            }
+            if !places.contains(&h) {
+                places.push(h);
+            }
+        }
+        if places.is_empty() {
+            return Err("Say which place this key is for (api.example.com). It will be sent there and nowhere else.".into());
+        }
+        let existing = app.keys.iter().find(|k| k.name == name).cloned();
+        // An open session holds the stand-in it was started with: keep it when the new key has
+        // the same shape, so replacing a key does not cut a session off.
+        let stand_in = match &existing {
+            Some(k) if self.0.vault.lock().unwrap().get(app_id, name).is_some_and(|old| crate::keys::stand_in_fits(&k.stand_in, old, value)) => k.stand_in.clone(),
+            _ => crate::keys::stand_in(value),
+        };
+        // Look inside first: if that cannot be switched on, no key is left behind unused.
+        self.set_inspect(app_id, true)?;
+        self.0.vault.lock().unwrap().set(app_id, name, value)?;
+        {
+            let mut cfg = self.0.cfg.lock().unwrap();
+            let a = cfg.app_mut(app_id).ok_or("Unknown app.")?;
+            a.keys.retain(|k| k.name != name);
+            a.keys.push(KeyConfig { name: name.to_string(), stand_in, hosts: places.clone(), hint: crate::keys::hint(value), added: now_iso() });
+            a.keys.sort_by(|x, y| x.name.cmp(&y.name));
+        }
+        self.save_cfg();
+        // The name and the places are written down. The key, and its last characters, are not.
+        self.append("app", fields! { "action" => if existing.is_some() { "key_replaced" } else { "key_kept" }, "app" => app_id, "key" => name, "hosts" => places });
+        Ok(())
+    }
+
+    fn remove_key(&self, app_id: &str, name: &str) -> Result<(), String> {
+        {
+            let mut cfg = self.0.cfg.lock().unwrap();
+            let a = cfg.app_mut(app_id).ok_or("Unknown app.")?;
+            if !a.keys.iter().any(|k| k.name == name) {
+                return Err("Homebody is not keeping a key of that name for this app.".into());
+            }
+            a.keys.retain(|k| k.name != name);
+        }
+        self.0.vault.lock().unwrap().remove(app_id, name)?;
+        self.save_cfg();
+        self.append("app", fields! { "action" => "key_removed", "app" => app_id, "key" => name });
+        Ok(())
+    }
+
+    fn key_infos(app: &AppConfig) -> Vec<KeyInfo> {
+        app.keys.iter().map(|k| KeyInfo { name: k.name.clone(), maker: crate::keys::maker(&k.name).unwrap_or("").to_string(), hint: k.hint.clone(), hosts: k.hosts.clone(), added: k.added.clone() }).collect()
     }
 
     /// Let one particular secret through for an app from now on, or stop doing so.
@@ -765,9 +899,14 @@ impl Engine {
     }
 
     /// The end of a connection that was looked inside: what was asked for in it.
-    pub fn record_end_inspected(&self, conn: u64, bytes_out: u64, bytes_in: u64, ms: u64, requests: &[(String, u64)]) {
+    pub fn record_end_inspected(&self, conn: u64, bytes_out: u64, bytes_in: u64, ms: u64, requests: &[(String, u64)], keys: &[String]) {
         let paths: Vec<Value> = requests.iter().map(|(what, n)| json!([what, n])).collect();
-        self.append("end", fields! { "conn" => conn, "out" => bytes_out, "in" => bytes_in, "ms" => ms, "paths" => paths });
+        let mut f = fields! { "conn" => conn, "out" => bytes_out, "in" => bytes_in, "ms" => ms, "paths" => paths };
+        if !keys.is_empty() {
+            // Which kept keys were put in, by name. Never a key.
+            f.insert("keys".into(), json!(keys));
+        }
+        self.append("end", f);
     }
 
     pub fn record_end(&self, conn: u64, bytes_out: u64, bytes_in: u64, ms: u64, unreachable: bool) {
@@ -991,7 +1130,8 @@ impl Engine {
                     purpose = "Updates, statistics, advertising or crash reports: not needed to use an AI site".to_string();
                 }
                 let sent_mb = r.limit_mb.map(|_| (self.sent_last_hour(&a.id, &r.host) as f64 / 1_048_576.0 * 10.0).round() / 10.0);
-                out.push(TrustEntry { app_id: a.id.clone(), host: r.host.clone(), label, purpose, enabled: r.enabled, source: r.source.clone(), recommended: r.recommended, limit_mb: r.limit_mb, sent_mb });
+                let pack = (r.source == "pack").then(|| catalog::pack_for(&r.host, &a.packs).map(|p| p.id.to_string())).flatten();
+                out.push(TrustEntry { app_id: a.id.clone(), pack, host: r.host.clone(), label, purpose, enabled: r.enabled, source: r.source.clone(), recommended: r.recommended, limit_mb: r.limit_mb, sent_mb });
             }
         }
         out
@@ -1176,6 +1316,15 @@ impl Engine {
                 let kind = row.other.split('|').next().unwrap_or("a secret");
                 format!("{app_name} was about to send what looks like {kind} to {label}. Homebody stopped the request before it left.")
             }
+            Reason::NotTrusted if row.detail == "key" => {
+                let whose = crate::keys::maker(&row.other).map(|m| format!("your {m} key")).unwrap_or_else(|| format!("your key {}", row.other));
+                format!("{app_name} tried to send {whose} to {label}, which is not a place that key is for. Homebody keeps that key, so {app_name} only ever had a stand-in, and the request was stopped before even that left.")
+            }
+            Reason::NotTrusted if row.detail == "key_misplaced" => {
+                let whose = crate::keys::maker(&row.other).map(|m| format!("your {m} key")).unwrap_or_else(|| format!("your key {}", row.other));
+                format!("{app_name} sent the stand-in for {whose} to {label}, but not as a credential: it was in the address or in another part of the request, where a server may repeat it back. Putting the real key there would hand it to {app_name}, so the request was stopped and nothing of it was sent.")
+            }
+            Reason::NotTrusted if row.detail == "key_lost" => format!("{app_name} used a key that Homebody is meant to keep ({}), but Homebody no longer has it. Add it again on {app_name}'s page. Nothing was sent.", row.other),
             Reason::NotTrusted if row.detail == "path" => {
                 let (what, _) = catalog::describe_inside(&row.host, &row.other);
                 let named = if what.is_empty() { row.other.clone() } else { format!("{what} ({})", row.other) };
@@ -1273,6 +1422,8 @@ impl Engine {
                 let (kind, fingerprint) = row.other.split_once('|').unwrap_or((row.other.as_str(), ""));
                 SecretSeen { kind: kind.to_string(), fingerprint: fingerprint.to_string(), allowed: app.map(|a| a.allowed_secrets.iter().any(|f| f == fingerprint)).unwrap_or(false) }
             }),
+            keys: row.keys.clone(),
+            key_stopped: (row.reason == Reason::NotTrusted && row.detail.starts_with("key")).then(|| row.other.clone()),
             requests: row.requests.as_ref().map(|r| {
                 r.iter()
                     .map(|(what, times)| {
@@ -1382,6 +1533,7 @@ impl Engine {
                 inspect: a.inspect && Self::cannot_inspect(a).is_none(),
                 can_inspect: Self::cannot_inspect(a).is_none(),
                 secrets: a.secrets,
+                keys: Self::key_infos(a),
                 problem,
             });
         }
@@ -2255,6 +2407,25 @@ impl Engine {
                 st["addedId"] = json!(id);
                 Ok(st)
             }
+            // Packs: the places a package manager fetches from, as one switch (see catalog::PACKS).
+            "get_packs" => {
+                let id = req("appId")?;
+                let app = self.0.cfg.lock().unwrap().app(&id).cloned().ok_or("Unknown app.")?;
+                let list: Vec<Value> = if app.kind == "agent" {
+                    catalog::PACKS.iter().map(|p| json!({ "id": p.id, "name": p.name, "what": p.what, "hosts": p.hosts, "downloadsOnly": p.downloads_only, "on": app.packs.iter().any(|x| x == p.id) })).collect()
+                } else {
+                    Vec::new()
+                };
+                ok(&list)
+            }
+            "set_pack" => {
+                let (app, pack, on) = (req("appId")?, req("pack")?, b("on")?);
+                self.0.cfg.lock().unwrap().set_pack(&app, &pack, on)?;
+                self.save_cfg();
+                self.append("trust", fields! { "app" => app.as_str(), "pack" => pack.as_str(), "enabled" => on, "via" => "pack" });
+                self.touch();
+                ok(&self.trust_list(Some(&app)))
+            }
             "browser_set_site" => {
                 let (app, site, on) = (req("appId")?, req("site")?, b("on")?);
                 self.0.cfg.lock().unwrap().set_site(&app, &site, on)?;
@@ -2337,7 +2508,7 @@ impl Engine {
                         self.dispatch_box_start(&app, s("project")).await?;
                     }
                 }
-                crate::boxvm::open_terminal(&app, recipe.program).await?;
+                crate::boxvm::open_terminal(&app, recipe.program, &self.box_extras(&app.id)).await?;
                 Ok(self.box_status(Some(&app.id)))
             }
             #[cfg(unix)]
@@ -2363,7 +2534,8 @@ impl Engine {
             #[cfg(unix)]
             "box_argv" => {
                 let rest: Vec<String> = args.get("args").and_then(Value::as_array).map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect()).unwrap_or_default();
-                ok(&crate::boxvm::argv(&req("program")?, &rest, args.get("interactive").and_then(Value::as_bool).unwrap_or(false))?)
+                let extras = crate::boxvm::running_app().map(|id| self.box_extras(&id)).unwrap_or_default();
+                ok(&crate::boxvm::argv(&req("program")?, &rest, args.get("interactive").and_then(Value::as_bool).unwrap_or(false), &extras)?)
             }
             "get_install" => Ok(self.install_info()),
             // Each protected app's own icon, from its maker's Mac app when installed: { appId: dataUrl }.
@@ -2416,6 +2588,7 @@ impl Engine {
                 }
                 let app = self.0.cfg.lock().unwrap().app(&id).cloned().ok_or("Unknown app.")?;
                 self.0.cfg.lock().unwrap().remove_custom(&id)?;
+                let _ = self.0.vault.lock().unwrap().remove_app(&id);
                 self.save_cfg();
                 fence::remove_launcher(&app);
                 self.0.health.lock().unwrap().remove(&id);
@@ -2505,6 +2678,21 @@ impl Engine {
                 self.allow_secret(&req("appId")?, &req("fingerprint")?, b("allowed")?)?;
                 Ok(Value::Null)
             }
+            "get_keys" => {
+                let id = req("appId")?;
+                let app = self.0.cfg.lock().unwrap().app(&id).cloned().ok_or("Unknown app.")?;
+                let known: Vec<Value> = crate::keys::known_names().into_iter().map(|n| json!({ "name": n, "maker": crate::keys::maker(n).unwrap_or(""), "hosts": crate::keys::usual_places(n) })).collect();
+                ok(&json!({ "keys": Self::key_infos(&app), "known": known, "canKeep": Self::cannot_inspect(&app).is_none(), "why": Self::cannot_inspect(&app) }))
+            }
+            "key_set" => {
+                let hosts = args.get("hosts").and_then(Value::as_array).map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect::<Vec<_>>()).filter(|h| !h.is_empty());
+                self.set_key(&req("appId")?, &req("name")?, &req("value")?, hosts)?;
+                ok(&self.status())
+            }
+            "key_remove" => {
+                self.remove_key(&req("appId")?, &req("name")?)?;
+                ok(&self.status())
+            }
             "app_set_inspect" => {
                 self.set_inspect(&req("appId")?, b("on")?)?;
                 ok(&self.status())
@@ -2587,7 +2775,17 @@ impl Engine {
                 out["suggested"] = json!(suggested);
                 Ok(out)
             }
-            "project_changes" | "project_apply" | "project_remove" => {
+            // Real attempts to get out, made as the app, and what came of each (see fence::leak_test).
+            "leak_test" => {
+                let app = self.app_if_ready(&req("appId")?)?;
+                let cases = fence::leak_test(&app).await?;
+                let count = |o: fence::Outcome| cases.iter().filter(|c| c.outcome == o).count();
+                let (stopped, through, unknown) = (count(fence::Outcome::Stopped), count(fence::Outcome::Through), count(fence::Outcome::Unknown));
+                self.append("app", fields! { "action" => "tested", "app" => app.id.as_str(), "stopped" => stopped, "through" => through, "unknown" => unknown });
+                // "held": every attempt was seen to be stopped. Not true while any is unknown.
+                ok(&json!({ "appId": app.id, "appName": app.name, "at": now_iso(), "held": through == 0 && unknown == 0 && stopped > 0, "through": through, "unknown": unknown, "cases": cases }))
+            }
+            "project_changes" | "project_apply" | "project_remove" | "project_restart" => {
                 let app = self.0.cfg.lock().unwrap().app(&req("appId")?).cloned().ok_or("Unknown app.")?;
                 let name = req("name")?;
                 let project = app.projects.iter().find(|p| p.name == name).cloned().ok_or("Unknown project.")?;
@@ -2603,6 +2801,49 @@ impl Engine {
                         let result = tokio::task::spawn_blocking(move || projects::apply(&copy, &base, &source, overwrite)).await.map_err(|e| e.to_string())??;
                         self.append("project", fields! { "app" => app.id, "action" => "applied", "name" => name, "files" => result.applied, "left" => result.skipped.len() });
                         ok(&result)
+                    }
+                    // Start over: throw the copy away, with whatever the agent did to it, and
+                    // bring your folder in again as it is now. Your own folder is not touched.
+                    "project_restart" => {
+                        if !source.is_dir() {
+                            return Err(format!("Your folder {} is not there any more, so there is nothing to start over from.", project.source));
+                        }
+                        // The copy keeps its name: an open terminal, and the editor plugins, know
+                        // it by that. So the name must be free again by the time it is brought in.
+                        let (mut a, n, src) = (app.clone(), name.clone(), source.clone());
+                        a.projects.retain(|p| p.name != name);
+                        let fresh = tokio::task::spawn_blocking(move || {
+                            projects::remove(&a, &n)?;
+                            projects::import(&a, &src)
+                        })
+                        .await
+                        .map_err(|e| e.to_string())?;
+                        let fresh = match fresh {
+                            Ok(f) => f,
+                            Err(e) => {
+                                // The copy is gone and no new one could be made: say so, and do
+                                // not go on listing a project that is not there.
+                                if !projects::copy_dir(&app, &name).is_some_and(|c| c.exists()) {
+                                    if let Some(a) = self.0.cfg.lock().unwrap().app_mut(&app.id) {
+                                        a.projects.retain(|p| p.name != name);
+                                    }
+                                    self.save_cfg();
+                                    self.append("project", fields! { "app" => app.id.as_str(), "action" => "removed", "name" => name.as_str() });
+                                    return Err(format!("The copy was thrown away, but your folder could not be brought in again: {e} Bring it in again when that is sorted out; your own folder was not touched."));
+                                }
+                                return Err(e);
+                            }
+                        };
+                        {
+                            let mut cfg = self.0.cfg.lock().unwrap();
+                            let a = cfg.app_mut(&app.id).ok_or("Unknown app.")?;
+                            a.projects.retain(|p| p.name != name);
+                            a.projects.push(fresh.clone());
+                        }
+                        self.save_cfg();
+                        self.append("project", fields! { "app" => app.id.as_str(), "action" => "started_over", "name" => fresh.name.as_str() });
+                        let cfg = self.0.cfg.lock().unwrap();
+                        ok(&projects::info(cfg.app(&app.id).ok_or("Unknown app.")?, &fresh))
                     }
                     _ => {
                         let a = app.clone();

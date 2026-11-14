@@ -64,6 +64,10 @@ check "the app, the command and the Box helper are in it" "all" "$([ -z "$parts"
 /usr/bin/ditto "$MNT/Homebody.app" "$APP" 2>/dev/null || /usr/bin/sudo /usr/bin/ditto "$MNT/Homebody.app" "$APP"
 /usr/bin/hdiutil detach -quiet "$MNT" 2>/dev/null
 check "it copies into Applications and the command runs" "the Homebody command line" "$("$HB" --help 2>&1 | sed -n 1p)"
+# An app whose parts are signed but which is not sealed as a whole is shown to people who
+# download it as "damaged", with no way to open it. Sealed, it gets the ordinary warning.
+check "the app is sealed as a whole"                    "sealed" "$(/usr/bin/codesign --verify --deep --strict "$APP" 2>&1 && echo sealed)"
+check "the Box helper may still run virtual machines"   "virtualization" "$(/usr/bin/codesign -d --entitlements - "$APP/Contents/MacOS/homebody-box" 2>&1 | grep -o 'virtualization' | head -1)"
 echo "  For information, what macOS makes of the copy (a build without an Apple signature is refused here):"
 /usr/bin/codesign -dv "$APP" 2>&1 | grep -E 'Signature|Authority|TeamIdentifier' | sed 's/^/      /'
 /usr/sbin/spctl -a -vv "$APP" 2>&1 | sed 's/^/      /'
@@ -104,6 +108,8 @@ for _ in $(seq 1 20); do [ "$(field app.fence)" = up ] && break; sleep 1; "$HB" 
 check "the agent's protection is up"                    "up"    "$(field app.fence)"
 check "and nothing more is asked of you"                "False" "$(field setupNeeded) $(field setupReasons)"
 check "a protected program runs as its private user"    "_hbagent" "$("$HB" run claude-code --cwd / -- /usr/bin/id -un 2>&1 | tail -1)"
+
+check "the app's own escape test finds everything stopped" "Everything was stopped." "$("$HB" test claude-code 2>&1 | tail -1)"
 
 echo
 echo "Every way out we know of"

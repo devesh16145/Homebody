@@ -307,6 +307,15 @@ async fn handle(engine: Engine, app_id: String, mut client: TcpStream) -> std::i
     let conn = engine.record_conn(&app_id, &host, &addr.ip().to_string(), req.port, &decision);
     let (out, inn) = (Arc::new(AtomicU64::new(0)), Arc::new(AtomicU64::new(0)));
     if !first.is_empty() {
+        // The first bytes count towards an hourly limit like any others: for a plain web
+        // request they are the whole request.
+        if !engine.may_send(&app_id, &host, first.len() as u64) {
+            engine.record_refusal(&app_id, &host, req.port, Reason::NotTrusted, "limit", "");
+            if let Some(conn) = conn {
+                engine.record_end(conn, 0, 0, started.elapsed().as_millis() as u64, false);
+            }
+            return Ok(());
+        }
         upstream.write_all(&first).await?;
         out.fetch_add(first.len() as u64, Ordering::Relaxed);
     }
@@ -388,6 +397,10 @@ async fn inspected(engine: &Engine, app_id: &str, host: &str, decision: &Decisio
     if let Some(scanner) = engine.secret_scanner(app_id, host) {
         reader = reader.scanning(scanner);
     }
+    {
+        let (engine, app_id, host) = (engine.clone(), app_id.to_string(), host.to_string());
+        reader = reader.with_keys(move || engine.key_swaps(&app_id, &host));
+    }
     let sniffer = std::sync::Mutex::new(reader);
     let trouble: std::sync::Mutex<Option<crate::inspect::Trouble>> = std::sync::Mutex::new(None);
     let (mut cr, cw) = tokio::io::split(client);
@@ -420,19 +433,23 @@ async fn inspected(engine: &Engine, app_id: &str, host: &str, decision: &Decisio
                         },
                     };
                     if !pass.is_empty() {
+                        // Counted before it is sent: what would go over an hourly limit does not go.
+                        if !engine.may_send(app_id, host, pass.len() as u64) {
+                            *trouble.lock().unwrap() = Some(crate::inspect::Trouble::NotUnderstood("over its hourly limit"));
+                            return true;
+                        }
                         if uw.write_all(&pass).await.is_err() {
                             break;
                         }
                         out.fetch_add(pass.len() as u64, Ordering::Relaxed);
-                        if engine.note_sent(app_id, host, pass.len() as u64) {
-                            *trouble.lock().unwrap() = Some(crate::inspect::Trouble::NotUnderstood("over its hourly limit"));
-                            return true;
-                        }
                     }
                     if let Err(t) = verdict {
                         let said = match &t {
                             crate::inspect::Trouble::Refused(_) => Some("Blocked by Homebody: this address is switched off.".to_string()),
                             crate::inspect::Trouble::Secret(found) => Some(format!("Blocked by Homebody: this request contained what looks like {}. It was not sent.", found.kind)),
+                            crate::inspect::Trouble::Key(crate::keys::Misuse::Elsewhere(name)) => Some(format!("Blocked by Homebody: the key {name} is not meant to go to this place. Nothing was sent.")),
+                            crate::inspect::Trouble::Key(crate::keys::Misuse::Misplaced(name)) => Some(format!("Blocked by Homebody: the key {name} may only be sent as a credential (x-api-key, Authorization, or ?key=), never in another part of a request. Nothing was sent.")),
+                            crate::inspect::Trouble::Key(crate::keys::Misuse::Lost(name)) => Some(format!("Blocked by Homebody: Homebody no longer has the key {name}. Add it again in Homebody. Nothing was sent.")),
                             _ => None,
                         };
                         if let Some(body) = said {
@@ -487,8 +504,11 @@ async fn inspected(engine: &Engine, app_id: &str, host: &str, decision: &Decisio
         _ = cut.changed() => {}
     }
     if let Some(conn) = conn {
-        let summary = sniffer.lock().unwrap().summary();
-        engine.record_end_inspected(conn, out.load(Ordering::Relaxed), inn.load(Ordering::Relaxed), started.elapsed().as_millis() as u64, &summary);
+        let (summary, keys) = {
+            let s = sniffer.lock().unwrap();
+            (s.summary(), s.keys_used.clone())
+        };
+        engine.record_end_inspected(conn, out.load(Ordering::Relaxed), inn.load(Ordering::Relaxed), started.elapsed().as_millis() as u64, &summary, &keys);
     }
     let found = trouble.lock().unwrap().take();
     match found {
@@ -497,6 +517,9 @@ async fn inspected(engine: &Engine, app_id: &str, host: &str, decision: &Decisio
         Some(crate::inspect::Trouble::NotUnderstood(what)) => engine.record_refusal(app_id, host, 443, Reason::Malformed, "not_followed", what),
         Some(crate::inspect::Trouble::Refused(path)) => engine.record_refusal(app_id, host, 443, Reason::NotTrusted, "path", &path),
         Some(crate::inspect::Trouble::Secret(found)) => engine.record_refusal(app_id, host, 443, Reason::NotTrusted, "secret", &format!("{}|{}", found.kind, found.fingerprint)),
+        Some(crate::inspect::Trouble::Key(crate::keys::Misuse::Elsewhere(name))) => engine.record_refusal(app_id, host, 443, Reason::NotTrusted, "key", &name),
+        Some(crate::inspect::Trouble::Key(crate::keys::Misuse::Misplaced(name))) => engine.record_refusal(app_id, host, 443, Reason::NotTrusted, "key_misplaced", &name),
+        Some(crate::inspect::Trouble::Key(crate::keys::Misuse::Lost(name))) => engine.record_refusal(app_id, host, 443, Reason::NotTrusted, "key_lost", &name),
         None => {}
     }
 }
@@ -537,14 +560,15 @@ async fn relay(engine: &Engine, app_id: &str, host: &str, client: TcpStream, ups
             match cr.read(&mut buf).await {
                 Ok(0) | Err(_) => break,
                 Ok(n) => {
+                    // Counted before it is sent: what would go over an hourly limit does not go.
+                    if !engine.may_send(app_id, host, n as u64) {
+                        over.store(true, Ordering::Relaxed);
+                        break;
+                    }
                     if uw.write_all(&buf[..n]).await.is_err() {
                         break;
                     }
                     out.fetch_add(n as u64, Ordering::Relaxed);
-                    if engine.note_sent(app_id, host, n as u64) {
-                        over.store(true, Ordering::Relaxed);
-                        break;
-                    }
                 }
             }
         }

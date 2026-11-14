@@ -89,6 +89,14 @@ fence() {
   check "another app's gate"                            "000"    "$(R /usr/bin/curl -sS -m 6 -x http://127.0.0.1:47111 -o /dev/null -w '%{http_code}' https://ollama.com/ | tail -1)"
   check "another service on this computer (port 22)"    "refused" "$(R /usr/bin/nc -v -z -G 3 127.0.0.1 22 2>&1 | grep -q succeeded && echo REACHED || echo refused)"
 
+  echo "Fence: what the app starts"
+  # Vendor sandboxes cover the agent's shell commands and leave what it starts on the side (MCP
+  # servers, hooks, language servers) outside. Here the fence is the user and the profile, so
+  # everything the app starts is inside it, however it is started.
+  check "a helper it starts (an MCP server, a hook)"    "not permitted" "$(R /usr/bin/python3 -c "import subprocess; print(subprocess.run(['/usr/bin/nc','-v','-z','-G','3','1.1.1.1','443'],capture_output=True,text=True).stderr)")"
+  check "a helper cut loose from it (new session, in the background)" "not permitted" "$(R /bin/sh -c '/usr/bin/python3 -c "import os,subprocess; os.setsid(); subprocess.Popen([\"/bin/sh\",\"-c\",\"/usr/bin/nc -v -z -G 3 1.1.1.1 443 > /tmp/hb-corpus-loose.txt 2>&1\"])"; sleep 2; cat /tmp/hb-corpus-loose.txt; rm -f /tmp/hb-corpus-loose.txt')"
+  check "a helper told to forget the gate"              "000"    "$(R /usr/bin/env -u HTTPS_PROXY -u https_proxy -u ALL_PROXY /usr/bin/curl -sS -m 6 -o /dev/null -w '%{http_code}' https://api.anthropic.com/ | tail -1)"
+
   echo "Fence: servers on this computer"
   # A listener of yours, one of the agent's own, and a port that changes hands between the two.
   /usr/bin/nc -l 127.0.0.1 47981 >/dev/null 2>&1 & mine=$!
@@ -176,6 +184,37 @@ inside() {
   "$SAI" secrets "$APP" off >/dev/null
   check "with the check switched off it goes"            "401" "$(code -d "{\"content\":\"$tok\"}" https://api.anthropic.com/v1/messages)"
   "$SAI" secrets "$APP" on >/dev/null
+
+  echo "Inside: keys that stay home"
+  # Homebody keeps a key (made up here) for one place. The app must only ever hold a stand-in,
+  # and the stand-in must not be accepted anywhere the key is not for.
+  DATA="${HOMEBODY_DATA_DIR:-$HOME/Library/Application Support/Homebody}"
+  real="hb-corpus-REAL-$(date +%s)-$RANDOM-key"
+  printf '%s\n' "$real" | "$SAI" key "$APP" set HB_CORPUS_KEY --to api.anthropic.com >/dev/null 2>&1
+  standin="$(R /usr/bin/printenv HB_CORPUS_KEY | tail -1)"
+  check "the app is handed a stand-in, not the key"      "STAND-IN" "$([ -n "$standin" ] && [ "$standin" != "$real" ] && [ ${#standin} -eq ${#real} ] && echo STAND-IN || echo "GOT: $standin")"
+  check "the key is nowhere in its environment"          "0"   "$(R /usr/bin/env | grep -c "$real")"
+  check "it cannot read where the keys are kept"         "denied" "$(R /bin/cat "$DATA/keys.json" 2>&1 | grep -qiE 'not permitted|denied' && echo denied || echo READ)"
+  check "sent to the place the key is for, it goes"      "401" "$(R /usr/bin/curl -sS -m 12 -o /dev/null -w '%{http_code}' -H "x-api-key: $standin" https://api.anthropic.com/v1/models | tail -1)"
+  # To the right place, but not as a credential. A server that quotes the address or a header
+  # back in its answer (an error page does) would hand the real key to the app.
+  check "in the address, even of its own place, it is refused" "only be sent as a credential" "$(R /usr/bin/curl -sS -m 12 "https://api.anthropic.com/v1/$standin" | tail -1)"
+  check "as some other parameter in the address"         "only be sent as a credential" "$(R /usr/bin/curl -sS -m 12 "https://api.anthropic.com/v1/models?$standin=1" | tail -1)"
+  check "in a header that is not for credentials"        "only be sent as a credential" "$(R /usr/bin/curl -sS -m 12 -H "Origin: https://$standin" https://api.anthropic.com/v1/models | tail -1)"
+  check "glued to something else in a credential header" "only be sent as a credential" "$(R /usr/bin/curl -sS -m 12 -H "x-api-key: x$standin" https://api.anthropic.com/v1/models | tail -1)"
+  check "with a method that asks for the request back"   "only be sent as a credential" "$(R /usr/bin/curl -sS -m 12 -X TRACE -H "x-api-key: $standin" https://api.anthropic.com/v1/models | tail -1)"
+  check "a place for a key must be one exact place"      "exact place" "$("$SAI" key "$APP" set HB_CORPUS_KEY --to '*.example.com' 2>&1 <<< "$real")"
+  "$SAI" key "$APP" set HB_CORPUS_KEY --to example.com >/dev/null 2>&1 <<< "$real"
+  check "sent to another trusted place, it is stopped"   "not meant to go" "$(R /usr/bin/curl -sS -m 12 -H "x-api-key: $standin" https://api.anthropic.com/v1/models | tail -1)"
+  check "the same, as a bearer token"                    "not meant to go" "$(R /usr/bin/curl -sS -m 12 -H "Authorization: Bearer $standin" https://api.anthropic.com/v1/models | tail -1)"
+  check "the same, wrapped in a name-and-password header" "not meant to go" "$(R /usr/bin/curl -sS -m 12 -u "x:$standin" https://api.anthropic.com/v1/models | tail -1)"
+  check "the same, in the address"                       "not meant to go" "$(R /usr/bin/curl -sS -m 12 "https://api.anthropic.com/v1/models?key=$standin" | tail -1)"
+  check "a request without it still goes"                "401" "$(R /usr/bin/curl -sS -m 12 -o /dev/null -w '%{http_code}' https://api.anthropic.com/v1/models | tail -1)"
+  check "Look inside cannot be switched off under a kept key" "Remove the key first" "$("$SAI" inspect "$APP" off 2>&1)"
+  check "the key is not in the log or the settings"      "0 0" "$(grep -c "$real" "$DATA/ledger.jsonl") $(grep -c "$real" "$DATA/settings.json")"
+  "$SAI" key "$APP" remove HB_CORPUS_KEY >/dev/null 2>&1
+  check "removed, it is gone from where keys are kept"   "0"   "$(grep -c "$real" "$DATA/keys.json" 2>/dev/null || echo 0)"
+  check "and the app is no longer handed anything"       "none" "$(R /bin/sh -c 'echo ${HB_CORPUS_KEY:-none}' | tail -1)"
   [ "$was_on" = "True" ] || "$SAI" inspect "$APP" off >/dev/null
 }
 

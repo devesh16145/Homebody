@@ -24,6 +24,11 @@ webpki-roots = "1"
 httparse = "1"
 time = "0.3"
 
+[target.'cfg(unix)'.dependencies]
+# One call (fchdir) so that a copy into an agent's workspace is made inside a folder held open,
+# not found again by name (see projects.rs).
+libc = "0.2"
+
 [target.'cfg(windows)'.dependencies]
 # The Windows fence (app containers) is a handful of system calls; these are only their declarations.
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_Security_Authorization", "Win32_Security_Isolation", "Win32_System_Console", "Win32_System_Threading"] }

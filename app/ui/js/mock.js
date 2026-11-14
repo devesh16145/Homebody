@@ -115,6 +115,7 @@ export function createMock(scenarioName) {
         canStart: a.installed && a.protected && f === 'up' && !a.problem, workspace: a.workspace,
         custom: !!a.custom, problem: a.problem || null,
         inspect: !!a.inspect, canInspect: a.kind === 'agent', secrets: a.secrets !== false,
+        keys: (a.keys || []).map((k) => ({ ...k })),
         today: counters(todays.filter((e) => e.appId === a.id)),
       })),
       pending,
@@ -267,6 +268,14 @@ export function createMock(scenarioName) {
   function retag(appId) {
     s.events.forEach((e) => { if (e.appId === appId) { const t = findTrust(appId, e.host); e.trusted = !!(t && t.enabled); } });
   }
+  const PACKS = [
+    { id: 'npm', name: 'npm packages', what: 'Installing JavaScript packages (npm, pnpm, Yarn)', hosts: ['registry.npmjs.org', 'registry.yarnpkg.com'], downloadsOnly: true },
+    { id: 'python', name: 'Python packages', what: 'Installing Python packages (pip, uv, Poetry)', hosts: ['pypi.org', 'files.pythonhosted.org'], downloadsOnly: true },
+    { id: 'rust', name: 'Rust crates', what: 'Installing Rust crates (cargo)', hosts: ['crates.io', 'index.crates.io', 'static.crates.io'], downloadsOnly: true },
+    { id: 'go', name: 'Go modules', what: 'Fetching Go modules', hosts: ['proxy.golang.org', 'sum.golang.org'], downloadsOnly: true },
+    { id: 'homebrew', name: 'Homebrew', what: 'Installing tools with Homebrew', hosts: ['formulae.brew.sh', 'ghcr.io'], downloadsOnly: true },
+    { id: 'github', name: 'GitHub', what: 'Fetching and pushing code, and files and releases hosted there', hosts: ['github.com', 'api.github.com', 'codeload.github.com'], downloadsOnly: false },
+  ];
   const trustList = (appId) => s.trust.filter((t) => !appId || t.appId === appId);
   function needApp(appId) {
     const a = s.apps.find((x) => x.id === appId);
@@ -317,6 +326,22 @@ export function createMock(scenarioName) {
       return null;
     },
     async get_trust({ appId } = {}) { return trustList(appId); },
+    // Packs: the places a package manager fetches from, as one switch.
+    async get_packs({ appId } = {}) {
+      const a = needApp(appId);
+      return a.kind === 'agent' ? PACKS.map((p) => ({ ...p, on: (a.packs || []).includes(p.id) })) : [];
+    },
+    async set_pack({ appId, pack, on } = {}) {
+      const a = needApp(appId), p = PACKS.find((x) => x.id === pack);
+      if (!p) throw 'Unknown pack.';
+      a.packs = (a.packs || []).filter((x) => x !== pack);
+      if (on) {
+        a.packs.push(pack);
+        p.hosts.forEach((h) => { if (!s.trust.some((t) => t.appId === appId && t.host === h)) s.trust.push({ ...trustEntry(appId, h, true), pack, limitMb: p.downloadsOnly ? 2 : null }); });
+      } else s.trust = s.trust.filter((t) => !(t.appId === appId && t.pack === pack));
+      retag(appId);
+      return trustList(appId);
+    },
     async set_trust({ appId, host: h, enabled } = {}) {
       needApp(appId);
       if (!h) throw 'A destination name is needed.';
@@ -377,6 +402,19 @@ export function createMock(scenarioName) {
       return { total: items.length, conflicts: 1, items, truncated: false };
     },
     async project_apply({ name, overwrite }) { const first = !mockApplied.has(name); mockApplied.add(name); return { applied: (first ? 4 : 0) + (overwrite ? 1 : 0), skipped: overwrite ? [] : ['README.md'] }; },
+    async project_restart({ name }) { await wait(600); mockApplied.add(name); return mockProjects.find((p) => p.name === name) || null; },
+    async leak_test({ appId } = {}) {
+      await wait(1400);
+      const a = needApp(appId);
+      const cases = [['direct', 'Connect straight to the internet, around the gate'], ['lookup', 'Look up a website’s address by itself'], ['address', 'Reach a bare internet address through the gate'],
+        ['home', 'List your home folder'], ['ssh', 'Look at your SSH keys'], ['read', 'Read a file in your home folder by its exact name'], ['write', 'Create a file in your home folder']].map(([id, what]) => ({ id, what, outcome: 'stopped' }));
+      // ?leak=unsure and ?leak=through show the other two verdicts.
+      const want = new URLSearchParams(location.search).get('leak');
+      if (want === 'unsure') cases[1].outcome = 'unknown';
+      if (want === 'through') cases[4].outcome = 'through';
+      const n = (o) => cases.filter((c) => c.outcome === o).length;
+      return { appId, appName: a.name, at: new Date().toISOString(), held: !n('through') && !n('unknown'), through: n('through'), unknown: n('unknown'), cases };
+    },
     async project_remove({ name }) { const i = mockProjects.findIndex((p) => p.name === name); if (i >= 0) mockProjects.splice(i, 1); return null; },
     async get_setup_script() { return '#!/bin/bash\n# Homebody one-time setup (mock).\n# The real app shows the exact script here.\n'; },
     async run_setup() {
@@ -551,6 +589,25 @@ export function createMock(scenarioName) {
     async timestamp_log() { await wait(900); return { records: s.seq || 1240, time: 'Nov 11 09:14:02 2026 GMT', service: 'http://timestamp.digicert.com', file: '~/Library/…/record-1240.tsr' }; },
     async check_update() { await wait(700); host('note', { text: 'Asked where Homebody is published' }); return { current: '0.1.0', latest: null, newer: false, url: null, message: 'No version has been published yet.' }; },
     async app_set_secrets({ appId, on } = {}) { needApp(appId).secrets = !!on; queueStatus(); return status(); },
+    // Keys Homebody keeps. The stand-in engine remembers only what the real one would show.
+    async get_keys({ appId } = {}) {
+      const a = needApp(appId);
+      return { keys: (a.keys || []).map((k) => ({ ...k })), canKeep: a.kind === 'agent', why: a.kind === 'agent' ? null : 'It takes its trusted certificates from the Mac itself.',
+        known: [['ANTHROPIC_API_KEY', 'Anthropic', 'api.anthropic.com'], ['OPENAI_API_KEY', 'OpenAI', 'api.openai.com'], ['GEMINI_API_KEY', 'Google Gemini', 'generativelanguage.googleapis.com'], ['GITHUB_TOKEN', 'GitHub', 'api.github.com']].map(([name, maker, h]) => ({ name, maker, hosts: [h] })) };
+    },
+    async key_set({ appId, name, value, hosts } = {}) {
+      await wait(400);
+      const a = needApp(appId);
+      if (!/^[A-Z_][A-Z0-9_]*$/.test(String(name || ''))) throw 'A key is known by the name the app reads it from, in capitals: ANTHROPIC_API_KEY, for example.';
+      if (String(value || '').length < 8) throw 'That is too short to be a key.';
+      if (/\s/.test(value)) throw 'A key is one run of letters, digits and signs, with no spaces or line breaks.';
+      if (!hosts || !hosts.length) throw 'Say which place this key is for (api.example.com). It will be sent there and nowhere else.';
+      const maker = { ANTHROPIC_API_KEY: 'Anthropic', OPENAI_API_KEY: 'OpenAI', GEMINI_API_KEY: 'Google Gemini', GITHUB_TOKEN: 'GitHub' }[name] || '';
+      a.keys = (a.keys || []).filter((k) => k.name !== name).concat([{ name, maker, hint: '…' + value.slice(-4), hosts, added: new Date().toISOString() }]);
+      a.inspect = true;
+      queueStatus(); return status();
+    },
+    async key_remove({ appId, name } = {}) { const a = needApp(appId); a.keys = (a.keys || []).filter((k) => k.name !== name); queueStatus(); return status(); },
     async allow_secret({ appId, fingerprint, allowed } = {}) {
       s.events.forEach((e) => { if (e.secret && e.appId === appId && e.secret.fingerprint === fingerprint) e.secret.allowed = !!allowed; });
       return null;

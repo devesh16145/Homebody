@@ -114,6 +114,33 @@ pub struct AppConfig {
     pub trust: Vec<TrustRule>,
     #[serde(default)]
     pub inside: Vec<InsideRule>,
+    /// Keys Homebody keeps for this app (see `keys`). The real values are not here.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub keys: Vec<KeyConfig>,
+    /// The packs switched on (see `catalog::PACKS`), by id. Each brings its places as rules
+    /// with source "pack".
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub packs: Vec<String>,
+}
+
+/// A key Homebody keeps for an app: everything about it except the key.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct KeyConfig {
+    /// The environment variable the app reads it from.
+    pub name: String,
+    /// What the app is handed in its place.
+    pub stand_in: String,
+    /// The places the real key may go to.
+    pub hosts: Vec<String>,
+    /// The last few characters of the real key, to tell keys apart.
+    pub hint: String,
+    pub added: String,
+}
+
+impl KeyConfig {
+    pub fn goes_to(&self, host: &str) -> bool {
+        self.hosts.iter().any(|h| crate::hostname::matches(h, host))
+    }
 }
 
 impl AppConfig {
@@ -243,6 +270,11 @@ impl Config {
     pub fn merge_presets(&mut self) -> bool {
         let mut changed = false;
         for p in catalog::APPS {
+            // A newly recognised app is not added over something of yours that already has its
+            // gate port or private user.
+            if self.app(p.id).is_none() && self.apps.iter().any(|a| a.proxy_port == p.proxy_port || a.os_user == p.os_user) {
+                continue;
+            }
             let app = match self.apps.iter_mut().find(|a| a.id == p.id) {
                 Some(a) => a,
                 None => {
@@ -268,6 +300,8 @@ impl Config {
                         projects: vec![],
                         trust: vec![],
                         inside: vec![],
+                        keys: vec![],
+                        packs: vec![],
                     });
                     changed = true;
                     self.apps.last_mut().unwrap()
@@ -366,6 +400,13 @@ impl Config {
                 a.inspect = false;
             }
             a.allowed_secrets.retain(|f| f.len() == 16 && f.chars().all(|c| c.is_ascii_hexdigit()));
+            // A stand-in is searched for in requests and replaced by a real key: a short or
+            // odd one from a hand-edited file would be found where it should not be.
+            a.keys.retain(|k| crate::keys::valid_name(&k.name) && crate::keys::valid_value(&k.stand_in).is_ok() && !k.hosts.is_empty() && k.hosts.iter().all(|h| !h.contains('*') && hostname::canonical(h).as_deref() == Some(h.as_str())));
+            if a.windowed || a.kind == "model" {
+                a.keys.clear();
+            }
+            a.packs.retain(|p| catalog::pack(p).is_some());
             a.inside.retain(|r| hostname::canonical(&r.host).as_deref() == Some(r.host.as_str()) && valid_inside_path(&r.path) && r.method.as_deref().map(valid_method).unwrap_or(true));
             a.trust.retain(|r| hostname::valid_pattern(&r.host));
             for r in &mut a.trust {
@@ -437,6 +478,8 @@ impl Config {
             projects: vec![],
             trust: vec![],
             inside: vec![],
+                        keys: vec![],
+                        packs: vec![],
         });
         self.reapply_org();
         Ok(id)
@@ -489,6 +532,8 @@ impl Config {
             projects: vec![],
             trust: vec![],
             inside: vec![],
+                        keys: vec![],
+                        packs: vec![],
         });
         let app = self.apps.last_mut().unwrap();
         for host in catalog::BROWSER_BACKGROUND {
@@ -518,6 +563,30 @@ impl Config {
         } else {
             let still: Vec<&str> = app.sites.iter().filter_map(|s| catalog::ai_site(s)).flat_map(|s| s.hosts.iter().map(|(h, _)| *h)).collect();
             app.trust.retain(|r| r.source != "site" || still.contains(&r.host.as_str()) || !site.hosts.iter().any(|(h, _)| *h == r.host));
+        }
+        Ok(())
+    }
+
+    /// Switch a pack on or off for an app: the places a package manager fetches from, as one.
+    /// Switching it on adds a rule for each of its places that has none. A place that already
+    /// has a rule, yours or a built-in one, keeps it exactly as it is: one you blocked stays
+    /// blocked, one you trusted keeps whatever limit you gave it. Switching the pack off takes
+    /// away only the rules it added.
+    pub fn set_pack(&mut self, app_id: &str, pack_id: &str, on: bool) -> Result<(), String> {
+        let pack = catalog::pack(pack_id).ok_or("Unknown pack.")?;
+        let app = self.app_mut(app_id).filter(|a| a.kind == "agent").ok_or("Packs are for agents.")?;
+        app.packs.retain(|p| p != pack_id);
+        let limit = pack.downloads_only.then_some(catalog::DOWNLOADS_ONLY_MB);
+        if on {
+            app.packs.push(pack_id.to_string());
+            for host in pack.hosts {
+                if !app.trust.iter().any(|r| r.host == *host && r.source != "org") {
+                    app.trust.push(TrustRule { host: host.to_string(), enabled: true, source: "pack".into(), recommended: false, limit_mb: limit });
+                }
+            }
+        } else {
+            let still: Vec<&str> = app.packs.iter().filter_map(|p| catalog::pack(p)).flat_map(|p| p.hosts.iter().copied()).collect();
+            app.trust.retain(|r| r.source != "pack" || still.contains(&r.host.as_str()) || !pack.hosts.contains(&r.host.as_str()));
         }
         Ok(())
     }
@@ -594,6 +663,69 @@ impl Config {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_pack_brings_its_places_and_takes_only_those_away() {
+        let mut c = Config::fresh();
+        // Your own rules: one place of the Python pack already trusted, one of npm blocked.
+        {
+            let a = c.app_mut("claude-code").unwrap();
+            a.trust.push(TrustRule { host: "pypi.org".into(), enabled: true, source: "you".into(), recommended: false, limit_mb: None });
+            a.trust.push(TrustRule { host: "registry.npmjs.org".into(), enabled: false, source: "you".into(), recommended: false, limit_mb: None });
+        }
+        c.set_pack("claude-code", "python", true).unwrap();
+        c.set_pack("claude-code", "npm", true).unwrap();
+        let rule = |c: &Config, h: &str| c.app("claude-code").unwrap().trust.iter().find(|r| r.host == h).cloned();
+        assert_eq!(rule(&c, "files.pythonhosted.org").map(|r| (r.enabled, r.source, r.limit_mb)), Some((true, "pack".into(), Some(catalog::DOWNLOADS_ONLY_MB))));
+        assert_eq!(rule(&c, "pypi.org").map(|r| (r.source, r.limit_mb)), Some(("you".into(), None)), "your own rule is left as it is");
+        assert_eq!(rule(&c, "registry.npmjs.org").map(|r| (r.enabled, r.source)), Some((false, "you".into())), "a place you blocked stays blocked");
+        assert_eq!(rule(&c, "registry.yarnpkg.com").map(|r| (r.enabled, r.limit_mb)), Some((true, Some(catalog::DOWNLOADS_ONLY_MB))));
+        assert_eq!(c.app("claude-code").unwrap().packs, vec!["python", "npm"]);
+        c.set_pack("claude-code", "python", false).unwrap();
+        assert!(rule(&c, "files.pythonhosted.org").is_none());
+        assert!(rule(&c, "pypi.org").is_some(), "what you trusted yourself stays");
+        assert!(rule(&c, "registry.yarnpkg.com").is_some(), "the other pack is untouched");
+        c.set_pack("claude-code", "npm", false).unwrap();
+        assert_eq!(rule(&c, "registry.npmjs.org").map(|r| (r.enabled, r.source)), Some((false, "you".into())), "and your block is still there after the pack has gone");
+        assert!(rule(&c, "registry.yarnpkg.com").is_none());
+        assert!(c.set_pack("claude-code", "nonsense", true).is_err());
+        assert!(c.set_pack("ollama", "npm", true).is_err(), "a model server installs no packages");
+        // GitHub is somewhere work is pushed to, so it has no limit.
+        c.set_pack("claude-code", "github", true).unwrap();
+        assert_eq!(rule(&c, "codeload.github.com").map(|r| r.limit_mb), Some(None));
+    }
+
+    #[test]
+    fn newly_recognised_apps_arrive_without_disturbing_yours() {
+        let mut c = Config::fresh();
+        assert!(c.app("copilot").is_some() && c.app("droid").is_some());
+        // Every gate port and private user is used once.
+        let mut ports: Vec<u16> = c.apps.iter().map(|a| a.proxy_port).collect();
+        ports.sort();
+        ports.dedup();
+        assert_eq!(ports.len(), c.apps.len());
+        assert!(c.apps.iter().all(|a| catalog::GATE_PORTS.contains(&a.proxy_port)));
+        // An app of yours sitting on a port a new preset wants keeps it; the preset stays out.
+        let mut old = Config::fresh();
+        old.apps.retain(|a| a.id != "goose");
+        let port = catalog::app_preset("goose").unwrap().proxy_port;
+        old.apps.iter_mut().find(|a| a.id == "aider").unwrap().proxy_port = port;
+        old.apps.retain(|a| a.id != "aider" || true);
+        let before = old.apps.len();
+        // (aider is a preset and would be put back on its own port, so use a custom app.)
+        old.apps.iter_mut().find(|a| a.id == "aider").unwrap().proxy_port = catalog::app_preset("aider").unwrap().proxy_port;
+        let mut mine = old.app("aider").unwrap().clone();
+        mine.id = "my-tool".into();
+        mine.name = "My tool".into();
+        mine.custom = true;
+        mine.os_user = "_hbapp1".into();
+        mine.proxy_port = port;
+        old.apps.push(mine);
+        old.merge_presets();
+        assert_eq!(old.apps.len(), before + 1);
+        assert!(old.app("goose").is_none());
+        assert_eq!(old.app("my-tool").unwrap().proxy_port, port);
+    }
 
     fn app_with(rules: &[(&str, bool)]) -> AppConfig {
         let mut c = Config::fresh();

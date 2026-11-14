@@ -135,6 +135,22 @@ body.hm { display: block; background: var(--ground); background-image: var(--gro
 .hm-set b { display: block; font-weight: 500; }
 .hm-set small { display: block; color: var(--ink-2); font-size: var(--fs-small); }
 /* The Box: one card with the next step, and a bar under the text while a long step runs. */
+.ky-form { display: grid; gap: 12px; padding: 16px; border-radius: var(--r-card); background: var(--surface); box-shadow: 0 0 0 1px var(--line); }
+.ky-form label { display: grid; gap: 5px; font-size: var(--fs-small); color: var(--ink-2); }
+.ky-form input, .ky-form select { height: 32px; padding: 0 10px; border: 1px solid var(--line-2); border-radius: 9px; background: var(--surface-2); color: var(--ink); font-size: var(--fs-body); max-width: 420px; }
+.ky-form .hm-sub { margin: 0; }
+.ky-ic { display: grid; place-items: center; flex: none; width: 28px; height: 28px; border-radius: 8px; background: var(--still-soft); color: var(--tide); }
+.ky-ic svg { width: 15px; height: 15px; }
+.ky-hint { color: var(--ink-2); font-weight: 400; margin-left: 4px; }
+.hm-block > .hm-list + .hm-set, .hm-block > .hm-list + .ky-form { margin-top: 10px; }
+.lt { margin-top: 10px; }
+.lt-ic { display: grid; place-items: center; flex: none; width: 22px; height: 22px; border-radius: 50%; background: var(--tide-soft); color: var(--tide-text); }
+.lt-ic svg { width: 12px; height: 12px; }
+.lt-state { flex: none; font-size: var(--fs-cap); color: var(--ink-2); }
+.lt-out .lt-ic { background: var(--red-bg); color: var(--red-text); }
+.lt-unsure .lt-ic { background: var(--ask-soft); color: var(--ask-text); }
+.lt-unsure .lt-state { color: var(--ask-text); font-weight: 600; }
+.lt-out .lt-state { color: var(--red-text); font-weight: 600; }
 .bx { align-items: flex-start; }
 .bx-act { display: flex; flex: none; gap: 8px; align-items: center; align-self: center; }
 .bx-bar { position: relative; height: 4px; margin-top: 10px; border-radius: 2px; background: var(--still-soft); overflow: hidden; }
@@ -186,6 +202,10 @@ body.hm { display: block; background: var(--ground); background-image: var(--gro
 .pl-add input { flex: 1; max-width: 300px; }
 .pl-foot { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .pl-foot .muted { font-size: var(--fs-cap); }
+.pk { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 10px; }
+.pk .muted { font-size: var(--fs-cap); margin-right: 2px; }
+.pk .chip { display: inline-flex; align-items: center; gap: 4px; }
+.pk .chip .ic { width: 12px; height: 12px; }
 .hm-empty { padding: 18px; border-radius: var(--r-card); background: var(--surface); box-shadow: 0 0 0 1px var(--line); color: var(--ink-2); font-size: var(--fs-small); }
 
 @media (max-width: 860px) {
