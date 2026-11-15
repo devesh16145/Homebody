@@ -76,7 +76,9 @@ button { cursor: default; margin: 0; }
 
 /* ---------- switch ---------- */
 .switch { position: relative; display: inline-flex; flex: none; }
-.switch input { position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; opacity: 0; cursor: default; }
+/* The input is what takes the click, so it sits above the knob: a knob that has slid across is
+   drawn in a layer of its own, and without this a click on it never reached the switch. */
+.switch input { position: absolute; inset: 0; z-index: 1; width: 100%; height: 100%; margin: 0; opacity: 0; cursor: default; }
 .switch i {
   display: block; width: 36px; height: 21px; border-radius: 11px; background: var(--track);
   transition: background var(--t-med);
