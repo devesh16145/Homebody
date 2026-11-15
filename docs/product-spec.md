@@ -1,6 +1,6 @@
 # Product spec and MVP scope: Homebody (working name)
 
-Status: draft v0.3, 2026-11-08. Derived from the market research in `reports/Local AI egress sandbox market.md`; section references point there for evidence. v0.2 changes: delivered as a fast, lightweight desktop app (macOS first, then Windows and Linux); audience widened from developers to everyday local-AI users; two enforcement modes (Fence for native apps, Box for agents). v0.3 change: the whole product is open source with no paid tiers; pricing removed. The one-line feature list lives in `docs/feature-spec.md`; how those features are surfaced without making the app heavy or complex is in `docs/design-principles.md`.
+Status: draft v0.3, 2026-11-08. Derived from market research that is not part of this repository; section references point there. v0.2 changes: delivered as a fast, lightweight desktop app (macOS first, then Windows and Linux); audience widened from developers to everyday local-AI users; two enforcement modes (Fence for native apps, Box for agents). v0.3 change: the whole product is open source with no paid tiers; pricing removed. The one-line feature list lives in `docs/feature-spec.md`; how those features are surfaced without making the app heavy or complex is in `docs/design-principles.md`.
 
 ## 0. Delivery model
 

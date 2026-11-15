@@ -42,7 +42,9 @@ Protected today: **Claude Code** (a real signed-in session, start to finish) and
 
 ## Try it
 
-You need a Mac (built and tested on Apple silicon), Rust, Node and the Xcode Command Line Tools. Full Xcode is not needed.
+**Download it.** Get the disk image from the [latest release](https://github.com/devesh16145/Homebody/releases/latest) (Apple silicon Macs), open it and drag Homebody to Applications. The app is not signed by Apple yet, so the first time you open it macOS says it cannot check who made it: allow it once in System Settings → Privacy & Security → Open Anyway. [More on that below](#what-it-does-not-do-yet).
+
+**Or build it yourself.** You need a Mac (built and tested on Apple silicon), Rust, Node and the Xcode Command Line Tools. Full Xcode is not needed.
 
 ```bash
 cd app && npm install && scripts/make-dmg.sh
@@ -89,7 +91,6 @@ The second one is every way around the gate or the fence that we know of, as exe
 |---|---|
 | `app/` | The product: Rust core (`crates/core`), the `homebody` command line (`crates/cli`), the Tauri shell (`src-tauri`) and the UI (`ui`, plain HTML/CSS/JS, no build step). Start with `app/README.md`; `app/docs/ipc.md` is the contract between core and UI. |
 | `docs/` | Product spec, one-line feature spec, design principles. |
-| `reports/`, `research_notes/` | The market research behind the product, with sources. |
 | `spike/` | Earlier experiments that de-risked the design: the packet-filter fence, a Network Extension fence, the virtual-machine Box, a UI prototype. Superseded by `app/`, except the Box. |
 
 ## Contributing

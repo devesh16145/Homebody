@@ -1,10 +1,10 @@
 # Changes
 
-No version has been released yet. This file starts with the first release; until then the git history is the record, and [docs/advisories](docs/advisories/README.md) lists every way around that was found and fixed.
+Each release lists, in this order: what is new, what changed in the built-in rules (the same notes the app shows after an update), and what was fixed, with security fixes named and linked to their advisory. [docs/advisories](docs/advisories/README.md) lists every way around that was found and fixed.
 
-Each release will list, in this order: what is new, what changed in the built-in rules (the same notes the app shows after an update), and what was fixed, with security fixes named and linked to their advisory.
+## 0.1.0, 15 November 2026
 
-## Not released yet
+The first release, and an early preview. It is not signed by Apple yet, and so far it has run on the Mac it was built on and on GitHub's test Macs only. The README lists [what it does not do yet](README.md#what-it-does-not-do-yet).
 
 New
 
